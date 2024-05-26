@@ -38,6 +38,9 @@ The following Technologies and Features are planned to be supported
 - [ ] Adaptive Voice Cloning
   - [ ] Basic Overlays (TTS + VC)
   - [ ] Embedding Vector Matching (Convenience Feature)
+- [ ] Automatic Speech Recognition & Language Detection
+  - [ ] Whisper
+  - [ ] Distil-Whisper
 
 
 ---
