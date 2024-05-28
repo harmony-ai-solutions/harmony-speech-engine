@@ -12,6 +12,9 @@ The goal of this engine is to provide a reliable and easy-to-maintain service wh
 AI Speech technologies. Each of these Technologies have different setup requirements and pre-conditions, so the goal of
 this project is to unify these requirements in a way that these technologies can work together seamlessly.
 
+The rough Idea for this project is to become something like [vLLM](https://github.com/vllm-project/vllm) / [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine)
+for AI Speech Inference. Support and Ideas for Improving this Project are very welcome.
+
 Aside from providing a runtime for these technologies behind a unified service API, the Harmony Speech Engine also
 allows for recombining different technologies on-the-fly, to reduce processing duration and latency. For example, you
 can generate Speech using a TTS integration, and then apply additional filtering using voice conversion.
@@ -36,7 +39,7 @@ The following Technologies and Features are planned to be supported
 - [ ] Generic Multispeaker TTS
   - [ ] EmotiVoice (English / Chinese + basic emotions for a wide range of speakers)
 - [ ] Adaptive Voice Cloning
-  - [ ] Basic Overlays (TTS + VC)
+  - [ ] Basic Overlays (TTS + Voice Conversion)
   - [ ] Embedding Vector Matching (Convenience Feature)
 - [ ] Automatic Speech Recognition & Language Detection
   - [ ] Whisper
@@ -62,13 +65,8 @@ Therefore, for all our current and future software offerings, we'll perform a co
 we can safely open source them in parts or even completely, as long as this appears to be non-harmful towards achieving
 the project's main goal.
 
-Also, we're distributing the Harmony Speech Engine under the Apache 2 License, because we're constantly striving to keep our software offerings as accessible as possible.
-Everyone can use this software as part of their own projects without any restrictions from our side.
-As long as this project exists, we'll be trying our utmost to provide free tiers for personal and public research use of our software and APIs.
-
-However, at the same time we'll also ensure everyone who supports us or actively joins forces with us on our journey, gets
-something proper back in turn. Therefore we're also maintaining a Patreon Page with different supporter tiers, as we are
-open towards collaboration with other businesses.
+Harmony Speech Engine is being distributed under the AGPLv3 License, because A lot of the code in the module `harmonyspeech` has been borrowed from [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine).
+Everyone can use this software as part of their own projects without any restrictions from our side, except from restrictions derived from the nature of the licensing.
 
 ### How to reach out to us
 
