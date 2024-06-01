@@ -1,3 +1,8 @@
 flash-attn
 pydantic
 fastapi
+uvicorn
+loguru
+prometheus_client
+torch == 2.3.0
+ray
