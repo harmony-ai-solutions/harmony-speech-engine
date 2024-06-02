@@ -1,6 +1,8 @@
 import asyncio
+import os
 import time
-from typing import Type, Optional, Dict, Union, Callable, Tuple, List, Set, AsyncIterator
+from functools import partial
+from typing import Type, Optional, Dict, Union, Callable, Tuple, List, Set, AsyncIterator, Iterable
 from loguru import logger
 
 from harmonyspeech import HarmonySpeechEngine
@@ -8,6 +10,9 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
     TextToSpeechRequest
+from harmonyspeech.engine.args_tools import AsyncEngineArgs
+
+ENGINE_ITERATION_TIMEOUT_S = int(os.environ.get("HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S", "120"))
 
 
 class AsyncEngineDeadError(RuntimeError):
@@ -255,18 +260,36 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
 
 
 class AsyncHarmonySpeech:
+    """
+    An asynchronous wrapper for HarmonySpeechEngine.
 
+    This class is used to wrap the HarmonySpeechEngine class to make it
+    asynchronous. It uses asyncio to create a background loop that keeps
+    processing incoming requests. The HarmonySpeechEngine is kicked by the
+    generate method when there are requests in the waiting queue.
+    The generate method yields the outputs from the HarmonySpeechEngine
+    to the caller.
+
+    NOTE: For the comprehensive list of arguments, see `HarmonySpeechEngine`.
+
+    Args:
+
+    """
 
     _engine_class: Type[_AsyncHarmonySpeech] = _AsyncHarmonySpeech
 
     def __init__(
         self,
+        worker_use_ray: bool,
+        engine_use_ray: bool,
         *args,
         log_requests: bool = True,
         max_log_len: int = 0,
         start_engine_loop: bool = True,
         **kwargs
     ) -> None:
+        self.worker_use_ray = worker_use_ray
+        self.engine_use_ray = engine_use_ray
         self.log_requests = log_requests
         self.max_log_len = max_log_len
         self.engine = self._init_engine(*args, **kwargs)
@@ -279,6 +302,164 @@ class AsyncHarmonySpeech:
         self.start_engine_loop = start_engine_loop
         self._request_tracker: Optional[RequestTracker] = None
         self._errored_with: Optional[BaseException] = None
+
+    @classmethod
+    def from_engine_args(cls,
+                         engine_args: AsyncEngineArgs,
+                         start_engine_loop: bool = True) -> "AsyncHarmonySpeech":
+        """Creates an async LLM engine from the engine arguments."""
+        # Create the engine configs.
+        engine_config = engine_args.create_engine_config()
+
+        if engine_config.device_config.device_type == "neuron":
+            raise NotImplementedError("Neuron is not supported for async engine yet.")
+        elif engine_config.device_config.device_type == "cpu":
+            from harmonyspeech.executor.cpu_executor import CPUExecutor
+            executor_class = CPUExecutor
+        elif engine_config.parallel_config.worker_use_ray:
+            initialize_ray_cluster(engine_config.parallel_config)
+            from harmonyspeech.executor.ray_gpu_executor import RayGPUExecutorAsync
+            executor_class = RayGPUExecutorAsync
+        else:
+            assert engine_config.parallel_config.world_size == 1, ("Ray is required if parallel_config.world_size > 1.")
+            from harmonyspeech.executor.gpu_executor import GPUExecutorAsync
+            executor_class = GPUExecutorAsync
+        # Create the async LLM engine.
+        engine = cls(engine_config.parallel_config.worker_use_ray,
+                     engine_args.engine_use_ray,
+                     **engine_config.to_dict(),
+                     executor_class=executor_class,
+                     log_requests=not engine_args.disable_log_requests,
+                     log_stats=not engine_args.disable_log_stats,
+                     max_log_len=engine_args.max_log_len,
+                     start_engine_loop=start_engine_loop)
+        return engine
+
+    @property
+    def is_running(self) -> bool:
+        return (self.background_loop is not None
+                and not self._background_loop_unshielded.done())
+
+    @property
+    def is_stopped(self) -> bool:
+        return self.errored or (self.background_loop is not None
+                                and self._background_loop_unshielded.done())
+
+    @property
+    def errored(self) -> bool:
+        return self._errored_with is not None
+
+    def set_errored(self, exc: Exception) -> None:
+        self._errored_with = exc
+
+    def _error_callback(self, exc: Exception) -> None:
+        self.set_errored(exc)
+        self._request_tracker.propagate_exception(exc)
+
+    def start_background_loop(self) -> None:
+        """Start the background loop."""
+        if self.errored:
+            raise AsyncEngineDeadError(
+                "Background loop has errored already.") from self._errored_with
+        if self.is_running:
+            raise RuntimeError("Background loop is already running.")
+        # Initialize the RequestTracker here so it uses the right event loop.
+        self._request_tracker = RequestTracker()
+
+        self._background_loop_unshielded = asyncio.get_event_loop(
+        ).create_task(self.run_engine_loop())
+        self._background_loop_unshielded.add_done_callback(
+            partial(_raise_exception_on_finish,
+                    error_callback=self._error_callback))
+        self.background_loop = asyncio.shield(self._background_loop_unshielded)
+
+    def _init_engine(self, *args,
+                     **kwargs) -> Union[_AsyncHarmonySpeech, "ray.ObjectRef"]:
+        if not self.engine_use_ray:
+            engine_class = self._engine_class
+        elif self.worker_use_ray:
+            engine_class = ray.remote(num_cpus=0)(self._engine_class).remote
+        else:
+            # FIXME: This is a bit hacky. Be careful when changing the
+            # order of the arguments.
+            cache_config = kwargs["cache_config"]
+            parallel_config = kwargs["parallel_config"]
+            if parallel_config.tensor_parallel_size == 1:
+                num_gpus = cache_config.gpu_memory_utilization
+            else:
+                num_gpus = 1
+            engine_class = ray.remote(num_gpus=num_gpus)(
+                self._engine_class).remote
+        return engine_class(*args, **kwargs)
+
+    async def engine_step(self) -> bool:
+        """Kick the engine to process the waiting requests.
+
+        Returns True if there are in-progress requests."""
+
+        new_requests, finished_requests = (
+            self._request_tracker.get_new_and_finished_requests())
+
+        for new_request in new_requests:
+            # Add the request into the HarmonySpeech engine's waiting queue.
+            # TODO: Maybe add add_request_batch to reduce Ray overhead
+            try:
+                if self.engine_use_ray:
+                    await self.engine.add_request.remote(**new_request)
+                else:
+                    await self.engine.add_request_async(**new_request)
+            except ValueError as e:
+                # TODO: use an HarmonySpeech specific error for failed validation
+                self._request_tracker.process_exception(
+                    new_request["request_id"],
+                    e,
+                    verbose=self.log_requests,
+                )
+
+        if finished_requests:
+            await self._engine_abort(finished_requests)
+
+        if self.engine_use_ray:
+            request_outputs = await self.engine.step.remote()
+        else:
+            request_outputs = await self.engine.step_async()
+
+        # Put the outputs into the corresponding streams.
+        for request_output in request_outputs:
+            self._request_tracker.process_request_output(
+                request_output, verbose=self.log_requests)
+
+        return len(request_outputs) > 0
+
+    async def _engine_abort(self, request_ids: Iterable[str]):
+        if self.engine_use_ray:
+            await self.engine.abort_request.remote(request_ids)
+        else:
+            self.engine.abort_request(request_ids)
+
+    async def run_engine_loop(self):
+        has_requests_in_progress = False
+        try:
+            while True:
+                if not has_requests_in_progress:
+                    logger.debug("Waiting for new requests...")
+                    await self._request_tracker.wait_for_new_requests()
+                    logger.debug("Got new requests!")
+
+                # Abort if iteration takes too long due to unrecoverable errors
+                # (eg. NCCL timeouts).
+                try:
+                    has_requests_in_progress = await asyncio.wait_for(
+                        self.engine_step(), ENGINE_ITERATION_TIMEOUT_S)
+                except asyncio.TimeoutError as exc:
+                    logger.error(
+                        "Engine iteration timed out. This should never happen!"
+                    )
+                    self.set_errored(exc)
+                    raise
+                await asyncio.sleep(0)
+        except KeyboardInterrupt:
+            logger.info("Engine loop interrupted. Exiting gracefully.")
 
     async def add_text_to_speech_request(
         self,

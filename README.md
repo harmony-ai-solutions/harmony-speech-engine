@@ -12,14 +12,21 @@ The goal of this engine is to provide a reliable and easy-to-maintain service wh
 AI Speech technologies. Each of these Technologies have different setup requirements and pre-conditions, so the goal of
 this project is to unify these requirements in a way that these technologies can work together seamlessly.
 
-The rough Idea for this project is to become something like [vLLM](https://github.com/vllm-project/vllm) / [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine)
-for AI Speech Inference. Support and Ideas for Improving this Project are very welcome.
-
 Aside from providing a runtime for these technologies behind a unified service API, the Harmony Speech Engine also
 allows for recombining different technologies on-the-fly, to reduce processing duration and latency. For example, you
 can generate Speech using a TTS integration, and then apply additional filtering using voice conversion.
 
-### Integrations
+The rough Idea for this project is to become something like [vLLM](https://github.com/vllm-project/vllm) / [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine)
+for AI Speech Inference. Significant parts of the codebase have been forked from Aphrodite engine, with a couple
+modifications to allow for the intended use case.
+Support and Ideas for Improving this Project are very welcome.
+
+### Differences from forked [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine)
+- Per-Request processing, instead of token sequence batching
+- Support for loading and executing multiple models in parallel
+- No general quantization; if quantization is supportet, this will be part of the individual model config.
+
+### Planned and availiable Integrations
 The following Technologies and Features are planned to be supported
 
 - [ ] Zero-Shot Voice Conversion
