@@ -229,22 +229,11 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         self,
         request_id: str,
         request_data: Optional[str],
-        sampling_params: SamplingParams,
-        prompt_token_ids: Optional[List[int]] = None,
         arrival_time: Optional[float] = None,
-        lora_request: Optional[LoRARequest] = None,
-        multi_modal_data: Optional[MultiModalData] = None,
     ) -> None:
-        if lora_request is not None and not self.lora_config:
-            raise ValueError(f"Got lora_request {lora_request} but LoRA is "
-                             "not enabled!")
+
         if arrival_time is None:
             arrival_time = time.time()
-        prompt_token_ids = await self.encode_request_async(
-            request_id=request_id,
-            prompt=prompt,
-            prompt_token_ids=prompt_token_ids,
-            lora_request=lora_request)
 
         return self.add_request(
             request_id,
@@ -256,7 +245,8 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
                                 multi_modal_data=multi_modal_data)
 
     async def check_health_async(self) -> None:
-        self.model_executor.check_health()
+        for model_executor in self.model_executors:
+            model_executor.check_health()
 
 
 class AsyncHarmonySpeech:
@@ -473,7 +463,7 @@ class AsyncHarmonySpeech:
                 if shortened_input is not None:
                     shortened_input = shortened_input[:self.max_log_len]
             logger.info(
-                f"Received request {request_id}: "
+                f"Received text-to-speech request {request_id}: "
                 f"input: {shortened_input!r}."
             )
 
@@ -565,12 +555,12 @@ class AsyncHarmonySpeech:
         """
         self._request_tracker.abort_request(request_id, verbose=self.log_requests)
 
-    async def get_model_config(self) -> ModelConfig:
+    async def get_model_configs(self) -> List[ModelConfig]:
         """Get the model configuration of the HarmonySpeech engine."""
         if self.engine_use_ray:
-            return await self.engine.get_model_config.remote()
+            return await self.engine.get_model_configs.remote()
         else:
-            return self.engine.get_model_config()
+            return self.engine.get_model_configs()
 
     async def do_log_stats(self) -> None:
         if self.engine_use_ray:

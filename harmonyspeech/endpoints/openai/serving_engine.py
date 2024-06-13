@@ -34,7 +34,7 @@ class OpenAIServing:
             asyncio.run(self._post_init())
 
     async def _post_init(self):
-        engine_model_config = await self.engine.get_model_config()
+        engine_model_config = await self.engine.get_model_configs()
 
     async def show_available_models(self) -> ModelList:
         model_cards = [ModelCard(id=x, root=x) for x in self.available_models]

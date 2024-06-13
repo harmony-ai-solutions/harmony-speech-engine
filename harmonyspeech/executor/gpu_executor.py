@@ -19,12 +19,9 @@ class GPUExecutor(ExecutorBase):
         If speculative decoding is enabled, we instead create the speculative
         worker.
         """
-        if self.speculative_config is None:
-            self._init_non_spec_worker()
-        else:
-            self._init_spec_worker()
+        self._init_worker()
 
-    def _init_non_spec_worker(self):
+    def _init_worker(self):
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
         from harmonyspeech.task_handler.worker import Worker
@@ -37,77 +34,14 @@ class GPUExecutor(ExecutorBase):
         self.driver_worker = Worker(
             model_config=self.model_config,
             parallel_config=self.parallel_config,
-            scheduler_config=self.scheduler_config,
             device_config=self.device_config,
-            cache_config=self.cache_config,
             local_rank=0,
             rank=0,
             distributed_init_method=distributed_init_method,
-            lora_config=self.lora_config,
-            vision_language_config=self.vision_language_config,
             is_driver_worker=True,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()
-
-    def _init_spec_worker(self):
-        """Initialize a SpecDecodeWorker, using a draft model for proposals.
-        """
-        assert self.speculative_config is not None
-
-        from aphrodite.spec_decode.spec_decode_worker import SpecDecodeWorker
-        from aphrodite.task_handler.worker import Worker
-
-        distributed_init_method = get_distributed_init_method(
-            get_ip(), get_open_port())
-
-        target_worker = Worker(
-            model_config=self.model_config,
-            parallel_config=self.parallel_config,
-            scheduler_config=self.scheduler_config,
-            device_config=self.device_config,
-            cache_config=self.cache_config,
-            local_rank=0,
-            rank=0,
-            distributed_init_method=distributed_init_method,
-            lora_config=self.lora_config,
-            vision_language_config=self.vision_language_config,
-            is_driver_worker=True,
-        )
-
-        spec_decode_worker = SpecDecodeWorker.create_worker(
-            scorer_worker=target_worker,
-            speculative_config=self.speculative_config,
-        )
-
-        assert self.parallel_config.world_size == 1, (
-            "GPUExecutor only supports single GPU.")
-
-        self.driver_worker = spec_decode_worker
-
-        # Load model handled in spec decode worker.
-        self.driver_worker.init_device()
-
-    def determine_num_available_blocks(self) -> tuple[int, int]:
-        """Determine the number of available KV blocks by invoking the
-        underlying worker.
-        """
-        return self.driver_worker.determine_num_available_blocks()
-
-    def initialize_cache(self, num_gpu_blocks: int, num_cpu_blocks) -> None:
-        """Initialize the KV cache by invoking the underlying worker.
-        """
-        # NOTE: This is logged in the executor because there can be >1 worker
-        # with other executors. We could log in the engine level, but work
-        # remains to abstract away the device for non-GPU configurations.
-        logger.info(f"# GPU blocks: {num_gpu_blocks}, "
-                    f"# CPU blocks: {num_cpu_blocks}")
-
-        logger.info(
-            f"Minimum concurrency: {num_gpu_blocks * self.cache_config.block_size / self.scheduler_config.max_model_len:.2f}x"  # noqa: E501
-        )
-
-        self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
 
     def execute_model(
         self,

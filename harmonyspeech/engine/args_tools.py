@@ -10,7 +10,6 @@ class EngineArgs:
     models: List[str]
 
 
-
 @dataclass
 class AsyncEngineArgs(EngineArgs):
     """Arguments for asynchronous Aphrodite engine."""

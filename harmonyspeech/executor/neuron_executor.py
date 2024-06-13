@@ -7,11 +7,6 @@ from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
 class NeuronExecutor(ExecutorBase):
 
     def _init_executor(self) -> None:
-        assert (self.lora_config is
-                None), "LoRA is not supported for Neuron backend."
-        assert (not self.speculative_config
-                ), "Speculative decoding not yet supported for Neuron backend."
-
         # Instantiate the worker and load the model to the device.
         self._init_worker()
 
@@ -21,24 +16,10 @@ class NeuronExecutor(ExecutorBase):
         self.driver_worker = NeuronWorker(
             self.model_config,
             self.parallel_config,
-            self.scheduler_config,
             self.device_config,
-            self.cache_config,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()
-
-    def determine_num_available_blocks(self) -> tuple[int, int]:
-        """Determine the number of available KV blocks by invoking the
-        underlying worker.
-        """
-        return self.driver_worker.determine_num_available_blocks()
-
-    def initialize_cache(self, num_gpu_blocks: int,
-                         num_cpu_blocks: int) -> None:
-        """Initialize the KV cache by invoking the underlying worker.
-        """
-        self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
 
     def execute_model(self,
                       seq_group_metadata_list: List[SequenceGroupMetadata],
