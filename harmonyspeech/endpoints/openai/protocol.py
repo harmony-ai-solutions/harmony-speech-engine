@@ -52,13 +52,16 @@ class AudioOutputOptions(BaseModel):
     stream: Optional[bool] = False
 
 
-class VoiceConversionRequest(BaseModel):
+class BaseRequest(BaseModel):
+    model: str = Field(default="", description="the name of the model")
+
+
+class VoiceConversionRequest(BaseRequest):
     """
     VoiceConversionRequest
     Used to convert the tone or nature of a voice in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
-    model: str = Field(default="", description="the name of the model")
     source_audio: Optional[bytes] = Field(default=None, description="Binary audio data to be processed")
     target_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
     target_embedding: Optional[bytes] = Field(default=None, description="Binary embedding of the reference speaker for converting the source - Faster than providing a target audio file")
@@ -66,14 +69,13 @@ class VoiceConversionRequest(BaseModel):
     output_options: Optional[AudioOutputOptions] = Field(default=None, description="Options for returning the generated audio, see documentation for possible values")
 
 
-class TextToSpeechRequest(BaseModel):
+class TextToSpeechRequest(BaseRequest):
     """
     TextToSpeechRequest
     Used to trigger a speech generation for the provided text input using the specified model.
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI TTS API; extended for Harmony Specch Engine features.
     """
-    model: str = Field(default="", description="the name of the model")
     input: str = Field(default="", description="the text to synthesize")
     voice: Optional[str] = Field(default=None, description="ID of the voice to synthesize - only if the target model supports voice IDs")
     target_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
@@ -83,14 +85,13 @@ class TextToSpeechRequest(BaseModel):
     post_generation_filters: Optional[List[VoiceConversionRequest]] = Field(default_factory=list, description="List of Post-Generation filters to apply to the generated audio.")
 
 
-class AudioDataResponse(BaseModel):
+class AudioDataResponse(BaseRequest):
     """
     AudioDataResponse
     Result Audio Data
     """
     created: int = Field(default_factory=lambda: int(time.time()))
     data: bytes = Field(default=None, description="Audio Bytes in requested format of the initial request")
-    model: str = Field(default="", description="the name of the model")
 
 
 class TextToSpeechResponse(AudioDataResponse):
@@ -109,14 +110,13 @@ class VoiceConversionResponse(AudioDataResponse):
     id: str = Field(default_factory=lambda: f"vc-{random_uuid()}")
 
 
-class SpeechTranscribeRequest(BaseModel):
+class SpeechTranscribeRequest(BaseRequest):
     """
     SpeechTranscribeRequest
     Used to apply ASR on a provided audio file
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
-    model: str = Field(default="", description="the name of the model")
     file: bytes = Field(default=None, description="Binary audio data to be processed")
     get_language: Optional[bool] = Field(default=False, description="whether to return the source language tag. Check model description if supported.")
     get_timestamps: Optional[bool] = Field(default=False, description="whether to return the word timestamps. Check model description if supported.")

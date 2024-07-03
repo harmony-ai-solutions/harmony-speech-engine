@@ -1,6 +1,6 @@
 import os
 import time
-from typing import List, Optional, Type
+from typing import List, Optional, Type, Union, Iterable
 
 from loguru import logger
 
@@ -8,6 +8,7 @@ import harmonyspeech
 from harmonyspeech.common.config import EngineConfig, ModelConfig, ParallelConfig, DeviceConfig
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import RequestOutput
+from harmonyspeech.common.sequence import EngineRequest
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
     TextToSpeechRequest
 from harmonyspeech.engine.args_tools import EngineArgs
@@ -54,7 +55,7 @@ class HarmonySpeechEngine:
         For each provided model config we will create a separate executor.
         Models may replicate across devices based on ParallelConfig and DeviceConfig.        
         """
-        self.model_executors = []
+        self.model_executors = {}
         self.init_custom_executors(executor_class)
 
     def init_custom_executors(self, executor_class: Type[ExecutorBase]) -> None:
@@ -68,11 +69,11 @@ class HarmonySpeechEngine:
                 parallel_config=self.parallel_config,
                 device_config=self.device_config,
             )
-            # Append the created executor to the list of model executors
-            self.model_executors.append(executor)
+            # Append the created executor to the dict of model executors
+            self.model_executors[model_cfg.model] = executor
 
     @classmethod
-    def from_engine_args(cls, engine_args: EngineArgs) -> "AphroditeEngine":
+    def from_engine_args(cls, engine_args: EngineArgs) -> "HarmonySpeechEngine":
         """Creates an LLM engine from the engine arguments."""
         # Create the engine configs.
         engine_config = engine_args.create_engine_config()
@@ -136,7 +137,7 @@ class HarmonySpeechEngine:
             arrival_time = time.monotonic()
 
         # Add the sequence group to the scheduler.
-        self.scheduler.add_seq_group(seq_group)
+        self.scheduler.add_request(request_data)
 
     def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
         """Aborts a request(s) with the given ID.
@@ -155,7 +156,7 @@ class HarmonySpeechEngine:
             >>> # abort the request
             >>> engine.abort_request(request_id)
         """
-        self.scheduler.abort_seq_group(request_id)
+        self.scheduler.abort_request(request_id)
 
     def get_model_configs(self) -> List[ModelConfig]:
         """Gets the model configuration."""
@@ -163,16 +164,16 @@ class HarmonySpeechEngine:
 
     def get_num_unfinished_requests(self) -> int:
         """Gets the number of unfinished requests."""
-        return self.scheduler.get_num_unfinished_seq_groups()
+        return self.scheduler.get_num_unfinished_requests()
 
     def has_unfinished_requests(self) -> bool:
         """Returns True if there are unfinished requests."""
-        return self.scheduler.has_unfinished_seqs()
+        return self.scheduler.has_unfinished_requests()
 
     def _process_model_outputs(
         self, output: List[SamplerOutput],
-        scheduled_seq_groups: List[SequenceGroup],
-        ignored_seq_groups: List[SequenceGroup]) -> List[RequestOutput]:
+        scheduled_seq_groups: List[EngineRequest],
+        ignored_seq_groups: List[EngineRequest]) -> List[RequestOutput]:
         """Apply the model output to the sequences in the scheduled seq groups.
 
         Returns RequestOutputs that can be returned to the client.
@@ -196,7 +197,7 @@ class HarmonySpeechEngine:
                 self.output_processor.process_outputs(seq_group, outputs)
 
         # Free the finished sequence groups.
-        self.scheduler.free_finished_seq_groups()
+        self.scheduler.free_finished_requests()
 
         # Create the outputs.
         request_outputs: List[RequestOutput] = []

@@ -39,8 +39,10 @@ class ModelConfig:
     def __init__(
         self,
         model: str,
+        max_batch_size: int
     ) -> None:
         self.model = model
+        self.max_batch_size = max_batch_size
 
 
 class DeviceConfig:

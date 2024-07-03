@@ -2,32 +2,33 @@ import enum
 from dataclasses import dataclass
 from typing import Union, Optional
 
+from harmonyspeech.endpoints.openai.protocol import BaseRequest
 
-class SequenceStatus(enum.Enum):
+
+class RequestStatus(enum.Enum):
     """Status of a sequence."""
 
     WAITING = enum.auto()
     RUNNING = enum.auto()
-    SWAPPED = enum.auto()
     FINISHED_STOPPED = enum.auto()
     FINISHED_ABORTED = enum.auto()
     FINISHED_IGNORED = enum.auto()
 
     @staticmethod
-    def is_finished(status: "SequenceStatus") -> bool:
+    def is_finished(status: "RequestStatus") -> bool:
         return status in [
-            SequenceStatus.FINISHED_STOPPED,
-            SequenceStatus.FINISHED_ABORTED,
-            SequenceStatus.FINISHED_IGNORED,
+            RequestStatus.FINISHED_STOPPED,
+            RequestStatus.FINISHED_ABORTED,
+            RequestStatus.FINISHED_IGNORED,
         ]
 
     @staticmethod
-    def get_finished_reason(status: "SequenceStatus") -> Union[str, None]:
-        if status == SequenceStatus.FINISHED_STOPPED:
+    def get_finished_reason(status: "RequestStatus") -> Union[str, None]:
+        if status == RequestStatus.FINISHED_STOPPED:
             finish_reason = "stop"
-        elif status == SequenceStatus.FINISHED_ABORTED:
+        elif status == RequestStatus.FINISHED_ABORTED:
             finish_reason = "abort"
-        elif status == SequenceStatus.FINISHED_IGNORED:
+        elif status == RequestStatus.FINISHED_IGNORED:
             # The ignored sequences are the sequences whose prompt lengths
             # are longer than the model's length cap. Therefore, the stop
             # reason should also be "length" as in OpenAI API.
@@ -35,11 +36,6 @@ class SequenceStatus(enum.Enum):
         else:
             finish_reason = None
         return finish_reason
-
-
-class SequenceStage(enum.Enum):
-    PREFILL = enum.auto()
-    DECODE = enum.auto()
 
 
 @dataclass
@@ -62,3 +58,23 @@ class RequestMetrics:
     time_in_queue: Optional[float]
     finished_time: Optional[float] = None
 
+
+class EngineRequest:
+
+    def __init__(
+        self,
+        request_id: str,
+        request_data: BaseRequest,
+        arrival_time: float,
+    ) -> None:
+        self.request_id = request_id
+        self.request_data = request_data,
+        self.metrics = RequestMetrics(
+            arrival_time=arrival_time,
+            first_scheduled_time=None,
+            time_in_queue=None,
+        )
+        self.status = RequestStatus.WAITING
+
+    def is_finished(self) -> bool:
+        return RequestStatus.is_finished(self.status)

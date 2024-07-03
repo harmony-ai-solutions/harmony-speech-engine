@@ -225,24 +225,21 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
 
         return request_outputs
 
-    async def add_request_async(
+    async def add_text_to_speech_request_async(
         self,
         request_id: str,
-        request_data: Optional[str],
+        request_data: TextToSpeechRequest,
         arrival_time: Optional[float] = None,
     ) -> None:
 
         if arrival_time is None:
             arrival_time = time.time()
 
-        return self.add_request(
+        return self.add_text_to_speech_request(
             request_id,
-                                prompt=prompt,
-                                prompt_token_ids=prompt_token_ids,
-                                sampling_params=sampling_params,
-                                arrival_time=arrival_time,
-                                lora_request=lora_request,
-                                multi_modal_data=multi_modal_data)
+            request_data=request_data,
+            arrival_time=arrival_time
+        )
 
     async def check_health_async(self) -> None:
         for model_executor in self.model_executors:
