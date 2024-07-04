@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from harmonyspeech.common.config import (DeviceConfig, ModelConfig, ParallelConfig)
 from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
+from harmonyspeech.processing.scheduler import ScheduledEngineRequest
 
 
 class ExecutorBase(ABC):
@@ -31,11 +32,7 @@ class ExecutorBase(ABC):
     @abstractmethod
     def execute_model(
         self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
-        blocks_to_swap_in: Dict[int, int],
-        blocks_to_swap_out: Dict[int, int],
-        blocks_to_copy: Dict[int, List[int]],
-        num_lookahead_slots: int,
+        requests_to_batch: List[ScheduledEngineRequest],
     ) -> List[SamplerOutput]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
@@ -52,11 +49,7 @@ class ExecutorAsyncBase(ExecutorBase):
     @abstractmethod
     async def execute_model_async(
         self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
-        blocks_to_swap_in: Dict[int, int],
-        blocks_to_swap_out: Dict[int, int],
-        blocks_to_copy: Dict[int, List[int]],
-        num_lookahead_slots: int,
+        requests_to_batch: List[ScheduledEngineRequest],
     ) -> SamplerOutput:
         """Executes one model step on the given sequences."""
         raise NotImplementedError

@@ -23,6 +23,9 @@ class SchedulingBudget:
         current_requests = 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
         return current_requests + num_requests <= self.request_per_model_budget[model]
 
+    def current_num_requests(self, model: str):
+        return 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
+
     def remaining_request_budget(self, model: str):
         return self.request_per_model_budget[model] - self.num_per_model_requests[model]
 
@@ -49,28 +52,14 @@ class ScheduledEngineRequest:
 @dataclass
 class SchedulerOutputs:
     """The scheduling decision made from a scheduler."""
-    # Scheduled sequence groups.
-    scheduled_requests: Iterable[ScheduledEngineRequest]
+    # Scheduled requests per model.
+    scheduled_requests_per_model: Dict[str, List[ScheduledEngineRequest]]
     # Sequence groups that are going to be ignored.
     ignored_requests: List[EngineRequest]
 
     def is_empty(self) -> bool:
         # NOTE: We do not consider the ignored sequence groups.
-        return not self.scheduled_requests
-
-
-@dataclass
-class SchedulerRunningOutputs:
-    """The requests that are scheduled from a running queue.
-    """
-    # Selected sequences that are running
-    requests: List[EngineRequest]
-
-    @classmethod
-    def create_empty(cls) -> "SchedulerRunningOutputs":
-        return SchedulerRunningOutputs(
-            requests=[],
-        )
+        return not self.scheduled_requests_per_model
 
 
 @dataclass
@@ -181,23 +170,31 @@ class Scheduler:
         # Copy the queue so that the input queue is not modified.
         waiting_queue = deque([s for s in waiting_queue])
 
-        leftover_waiting_sequences = deque()
+        new_scheduled_for_models = []
+        leftover_waiting_requests = deque()
         while waiting_queue:
+            # Get Request and model name
             request = waiting_queue[0]
+            model_name = request.request_data.model
+            # Remove from queue
+            waiting_queue.popleft()
 
-            # Abort if budget is exceeded
-            if budget.remaining_request_budget(request.request_data.model) <= 0:
-                break
+            # Do not schedule if there are already running requests for that model currently
+            if budget.current_num_requests(model_name) > 0 and model_name not in new_scheduled_for_models:
+                leftover_waiting_requests.append(request)
+                continue
+            # Ignore if budget for this model is exceeded
+            if budget.remaining_request_budget(model_name) <= 0:
+                leftover_waiting_requests.append(request)
+                continue
 
             # Can schedule this request.
-            waiting_queue.popleft()
             requests.append(request)
             budget.add_num_requests(request.request_data.model, 1)
-
-        # Queue requests that couldn't be scheduled.
-        waiting_queue.extendleft(leftover_waiting_sequences)
-        # if len(requests) > 0:
-        #     self.prev_prompt = True
+            # Keep track of model name in the new scheduled list
+            # This way we know it's safe to add new requests for this model
+            if model_name not in new_scheduled_for_models:
+                new_scheduled_for_models.append(model_name)
 
         return waiting_queue, SchedulerWaitingOutputs(
             requests=requests,
@@ -217,13 +214,7 @@ class Scheduler:
         )
 
     def _schedule_default(self) -> SchedulerOutputs:
-        """Schedule queued requests.
-        
-        The current policy is designed to opimimize the throughput. First,
-        it batches as many prefill requests as possible. And it schedules
-        decodes. If there's a pressure on GPU memory, decode requests can
-        be swapped or preempted.
-        """
+        """Schedule queued requests."""
         # Calculate the overall scheduling budget
         budget = self.get_scheduling_budget()
         # Include running requests to the budget.
@@ -231,15 +222,28 @@ class Scheduler:
             budget.add_num_requests(request.request_data.model, 1)
 
         # Schedule waiting requests if there is capacity
+        # Only requests for models not currently processing a batch will be scheduled
         remaining_waiting, ready = self._schedule_waiting_requests(self.waiting, budget)
 
         # Update waiting requests.
         self.waiting = remaining_waiting
+
+        # Build mapping of ready requests on a per model dictionary
+        per_model_scheduled = {}
+        for r in ready.requests:
+            # Set State to running
+            r.status = RequestStatus.RUNNING
+            # Fill into dict
+            if r.request_data.model not in per_model_scheduled.keys():
+                per_model_scheduled[r.request_data.model] = [ScheduledEngineRequest(request=r)]
+            else:
+                per_model_scheduled[r.request_data.model].append(ScheduledEngineRequest(request=r))
+
         # Update running requests.
-        self.running.extend([r for r in ready.requests])
+        self.running.extend(ready.requests)
 
         return SchedulerOutputs(
-            scheduled_requests=[ScheduledEngineRequest(request=r) for r in self.running],
+            scheduled_requests_per_model=per_model_scheduled,
             ignored_requests=[]
         )
 

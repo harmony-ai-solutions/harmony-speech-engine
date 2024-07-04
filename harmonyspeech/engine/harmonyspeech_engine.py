@@ -1,5 +1,6 @@
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Type, Union, Iterable
 
 from loguru import logger
@@ -13,7 +14,7 @@ from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutp
     TextToSpeechRequest
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.executor.executor_base import ExecutorBase
-
+from harmonyspeech.processing.scheduler import Scheduler
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
 
@@ -57,6 +58,9 @@ class HarmonySpeechEngine:
         """
         self.model_executors = {}
         self.init_custom_executors(executor_class)
+
+        # Initialize Scheduler for requests across models
+        self.scheduler = Scheduler(model_configs=model_configs)
 
     def init_custom_executors(self, executor_class: Type[ExecutorBase]) -> None:
         """
@@ -137,7 +141,11 @@ class HarmonySpeechEngine:
             arrival_time = time.monotonic()
 
         # Add the sequence group to the scheduler.
-        self.scheduler.add_request(request_data)
+        self.scheduler.add_request(EngineRequest(
+            request_id=request_id,
+            request_data=request_data,
+            arrival_time=arrival_time
+        ))
 
     def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
         """Aborts a request(s) with the given ID.
@@ -263,26 +271,26 @@ class HarmonySpeechEngine:
             >>>     if not (engine.has_unfinished_requests() or example_inputs):
             >>>         break
         """
-        seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
+        scheduler_outputs = self.scheduler.schedule()
 
+        output = []
         if not scheduler_outputs.is_empty():
-            output = self.model_executor.execute_model(
-                seq_group_metadata_list=seq_group_metadata_list,
-                blocks_to_swap_in=scheduler_outputs.blocks_to_swap_in,
-                blocks_to_swap_out=scheduler_outputs.blocks_to_swap_out,
-                blocks_to_copy=scheduler_outputs.blocks_to_copy,
-                num_lookahead_slots=scheduler_outputs.num_lookahead_slots)
-        else:
-            output = []
+            # Process per executor, in parallel (TODO: Verify if that works or GIL makes problems here)
+            with ThreadPoolExecutor(len(scheduler_outputs.scheduled_requests_per_model.keys())) as ex:
+                futures = []
+                for model_name, requests in scheduler_outputs.scheduled_requests_per_model.items():
+                    futures.append(ex.submit(self.model_executors[model_name].execute_model, requests))
 
-        request_outputs = self._process_model_outputs(
-            output, scheduler_outputs.scheduled_seq_groups,
-            scheduler_outputs.ignored_seq_groups)
+                for future in futures:
+                    model_results = future.result()
+                    output.extend(model_results)
+
+        request_outputs = self._process_model_outputs(output, scheduler_outputs.scheduled_requests_per_model)
 
         # Log stats.
-        if self.log_stats:
-            self.stat_logger.log(
-                self._get_stats(scheduler_outputs, model_output=output))
+        # if self.log_stats:
+        #     self.stat_logger.log(
+        #         self._get_stats(scheduler_outputs, model_output=output))
 
         return request_outputs
 
