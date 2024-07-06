@@ -2,8 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
 
 from harmonyspeech.common.config import (DeviceConfig, ModelConfig, ParallelConfig)
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
-from harmonyspeech.processing.scheduler import ScheduledEngineRequest
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 
 
 class ExecutorBase(ABC):
@@ -16,12 +15,9 @@ class ExecutorBase(ABC):
     def __init__(
         self,
         model_config: ModelConfig,
-        parallel_config: ParallelConfig,
-        device_config: DeviceConfig,
     ) -> None:
         self.model_config = model_config
-        self.parallel_config = parallel_config
-        self.device_config = device_config
+        self.device_config = model_config.device_config
 
         self._init_executor()
 
@@ -32,8 +28,8 @@ class ExecutorBase(ABC):
     @abstractmethod
     def execute_model(
         self,
-        requests_to_batch: List[ScheduledEngineRequest],
-    ) -> List[SamplerOutput]:
+        requests_to_batch: List[EngineRequest],
+    ) -> List[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 
@@ -49,8 +45,8 @@ class ExecutorAsyncBase(ExecutorBase):
     @abstractmethod
     async def execute_model_async(
         self,
-        requests_to_batch: List[ScheduledEngineRequest],
-    ) -> SamplerOutput:
+        requests_to_batch: List[EngineRequest],
+    ) -> List[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 

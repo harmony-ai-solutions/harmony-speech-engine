@@ -7,14 +7,8 @@ import torch.distributed
 from harmonyspeech.common.config import (
     DeviceConfig,
     ModelConfig,
-    ParallelConfig,
 )
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
-from harmonyspeech.distributed import (
-    broadcast_tensor_dict,
-    ensure_model_parallel_initialized,
-    init_distributed_environment,
-)
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling import set_random_seed
 from harmonyspeech.task_handler.cpu_model_runner import CPUModelRunner
 from harmonyspeech.task_handler.worker_base import WorkerBase
@@ -31,7 +25,6 @@ class CPUWorker(WorkerBase):
     def __init__(
         self,
         model_config: ModelConfig,
-        parallel_config: ParallelConfig,
         device_config: DeviceConfig,
         local_rank: int,
         rank: int,
@@ -39,7 +32,6 @@ class CPUWorker(WorkerBase):
         is_driver_worker: bool = False,
     ) -> None:
         self.model_config = model_config
-        self.parallel_config = parallel_config
         self.device_config = device_config
         self.local_rank = local_rank
         self.rank = rank
@@ -49,7 +41,6 @@ class CPUWorker(WorkerBase):
             assert self.rank == 0, "The driver worker must have rank 0."
 
         self.model_runner = CPUModelRunner(model_config,
-                                           parallel_config,
                                            device_config,
                                            is_driver_worker=is_driver_worker)
         # Uninitialized cache engine. Will be initialized by
@@ -68,12 +59,8 @@ class CPUWorker(WorkerBase):
     @torch.inference_mode()
     def execute_model(
         self,
-        seq_group_metadata_list: Optional[List[SequenceGroupMetadata]] = None,
-        blocks_to_swap_in: Optional[Dict[int, int]] = None,
-        blocks_to_swap_out: Optional[Dict[int, int]] = None,
-        blocks_to_copy: Optional[Dict[int, List[int]]] = None,
-        num_lookahead_slots: Optional[int] = None,
-    ) -> List[SamplerOutput]:
+        requests_to_batch: List[EngineRequest]
+    ) -> List[ExecutorResult]:
         if self.is_driver_worker:
             assert seq_group_metadata_list is not None
             num_seq_groups = len(seq_group_metadata_list)
@@ -103,23 +90,3 @@ class CPUWorker(WorkerBase):
         # CPU worker only supports single-step execution.
         return [output]
 
-    def init_distributed_environment(self) -> None:
-        """Initialize the distributed environment."""
-
-        parallel_config = self.parallel_config
-        rank = self.rank
-        distributed_init_method = self.distributed_init_method
-
-        init_distributed_environment(
-            world_size=parallel_config.world_size,
-            rank=rank,
-            distributed_init_method=distributed_init_method,
-            backend="gloo",
-        )
-
-        # A small all_reduce for warmup.
-        torch.distributed.all_reduce(torch.zeros(1).cpu())
-
-        ensure_model_parallel_initialized(
-            parallel_config.tensor_parallel_size,
-            parallel_config.pipeline_parallel_size)

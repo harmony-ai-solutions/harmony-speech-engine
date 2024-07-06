@@ -4,7 +4,8 @@ from typing import List, Union, AsyncGenerator, AsyncIterator
 from fastapi import Request
 from loguru import logger
 
-from harmonyspeech.common.outputs import TextToSpeechRequestOutput
+from harmonyspeech.common.inputs import TextToSpeechRequestInput
+from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.common.utils import random_uuid
 from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, TextToSpeechRequest
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
@@ -31,9 +32,12 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         request_id = f"tts-{random_uuid()}"
 
-        result_generator = self.engine.generate_text_to_speech(
+        result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=request,
+            request_input=TextToSpeechRequestInput.from_openai(
+                request_id=request_id,
+                request=request
+            ),
         )
 
         if request.output_options.stream:
@@ -51,12 +55,12 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
     async def text_to_speech_full_generator(
         self, request: TextToSpeechRequest, raw_request: Request,
-        result_generator: AsyncIterator[TextToSpeechRequestOutput],
+        result_generator: AsyncIterator[RequestOutput],
         request_id: str) -> Union[ErrorResponse, TextToSpeechResponse]:
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: TextToSpeechRequestOutput = None
+        final_res: RequestOutput = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():
@@ -64,13 +68,16 @@ class OpenAIServingTextToSpeech(OpenAIServing):
                 await self.engine.abort(request_id)
                 return self.create_error_response("Client disconnected")
             final_res = res
+
+        # Ensure we're receiving a proper TTS Output here
         assert final_res is not None
+        assert isinstance(final_res, TextToSpeechRequestOutput)
 
         response = TextToSpeechResponse(
             id=request_id,
             created=created_time,
             model=model_name,
-            data=final_res.output
+            data=final_res.output.data
         )
 
         return response

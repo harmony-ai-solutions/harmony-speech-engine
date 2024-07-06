@@ -7,9 +7,8 @@ import torch.distributed
 from harmonyspeech.common.config import (
     DeviceConfig,
     ModelConfig,
-    ParallelConfig,
 )
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling import set_random_seed
 from harmonyspeech.task_handler.neuron_model_runner import NeuronModelRunner
 from harmonyspeech.task_handler.worker_base import WorkerBase
@@ -21,14 +20,12 @@ class NeuronWorker(WorkerBase):
     def __init__(
         self,
         model_config: ModelConfig,
-        parallel_config: ParallelConfig,
         device_config: DeviceConfig,
     ) -> None:
         self.model_config = model_config
-        self.parallel_config = parallel_config
         self.device_config = device_config
 
-        self.model_runner = NeuronModelRunner(model_config, parallel_config, device_config)
+        self.model_runner = NeuronModelRunner(model_config, device_config)
 
     def init_device(self) -> None:
         # Set random seed.
@@ -40,8 +37,8 @@ class NeuronWorker(WorkerBase):
     @torch.inference_mode()
     def execute_model(
         self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
-    ) -> List[SamplerOutput]:
+        requests_to_batch: List[EngineRequest]
+    ) -> List[ExecutorResult]:
         num_seq_groups = len(seq_group_metadata_list)
 
         # If there is no input, we don't need to execute the model.

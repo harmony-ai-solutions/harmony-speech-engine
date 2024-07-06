@@ -24,7 +24,8 @@ Support and Ideas for Improving this Project are very welcome.
 ### Differences from forked [Aphrodite Engine](https://github.com/PygmalionAI/Aphrodite-engine)
 - Per-Request processing, instead of token sequence batching
 - Support for loading and executing multiple models in parallel
-- No general quantization; if quantization is supportet, this will be part of the individual model config.
+- No *distributed* execution of single models (i.e. sharding); mainly to reduce complexity
+- No general quantization; if quantization is supported, this will be part of the individual model config.
 
 ### Planned and availiable Integrations
 The following Technologies and Features are planned to be supported

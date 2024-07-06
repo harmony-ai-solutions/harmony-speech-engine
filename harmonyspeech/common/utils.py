@@ -225,3 +225,26 @@ def get_nvcc_cuda_version() -> Optional[Version]:
     release_idx = output.index("release") + 1
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
     return nvcc_cuda_version
+
+class CudaMemoryProfiler:
+
+    def __init__(self, device=None):
+        self.device = device
+
+    def current_memory_usage(self) -> float:
+        # Return the memory usage in bytes.
+        torch.cuda.reset_peak_memory_stats(self.device)
+        mem = torch.cuda.max_memory_allocated(self.device)
+        return mem
+
+    def __enter__(self):
+        self.initial_memory = self.current_memory_usage()
+        # This allows us to call methods of the context manager if needed
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.final_memory = self.current_memory_usage()
+        self.consumed_memory = self.final_memory - self.initial_memory
+
+        # Force garbage collection
+        gc.collect()

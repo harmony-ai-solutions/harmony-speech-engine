@@ -1,4 +1,4 @@
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Union
 from loguru import logger
 
 import torch
@@ -27,24 +27,6 @@ class EngineConfig:
             self.device_ids = ["cpu"]
 
 
-class ModelConfig:
-    """
-    Configuration for a model
-
-    Args:
-
-
-    """
-
-    def __init__(
-        self,
-        model: str,
-        max_batch_size: int
-    ) -> None:
-        self.model = model
-        self.max_batch_size = max_batch_size
-
-
 class DeviceConfig:
 
     def __init__(self, device: str = "auto") -> None:
@@ -70,62 +52,35 @@ class DeviceConfig:
             self.device = torch.device(self.device_type)
 
 
-class ParallelConfig:
-    """Configuration for the distributed execution.
+class ModelConfig:
+    """
+    Configuration for a model
 
     Args:
-        pipeline_parallel_size: Number of pipeline parallel groups.
-        tensor_parallel_size: Number of tensor parallel groups.
-        worker_use_ray: Whether to use Ray for model workers. Will be set to
-            True if either pipeline_parallel_size or tensor_parallel_size is
-            greater than 1.
-        max_parallel_loading_workers: Maximum number of multiple batches
-            when load model sequentially. To avoid RAM OOM when using tensor
-            parallel and large models.
-        disable_custom_all_reduce: Disable the custom all-reduce kernel and
-            fall back to NCCL.
-        ray_workers_use_nsight: Whether to profile Ray workers with nsight, see
-            https://docs.ray.io/en/latest/ray-observability/user-guides/profiling.html#profiling-nsight-profiler.
+        model: model name
+        max_batch_size: max batch size per processing step
+        device_config: device config for this model's executor and worker
+        dtype: Data type for model weights and activations. The "auto" option
+            will use FP16 precision for FP32 and FP16 models, and BF16 precision
+            for BF16 models.
+        seed: Random seed for reproducibility.
+        enforce_eager: Whether to enforce eager execution. If True, we will
+            disable CUDA graph and always execute the model in eager mode.
+            If False, we will use CUDA graph and eager execution in hybrid.
     """
 
     def __init__(
         self,
-        pipeline_parallel_size: int,
-        tensor_parallel_size: int,
-        worker_use_ray: bool,
-        max_parallel_loading_workers: Optional[int] = None,
-        disable_custom_all_reduce: bool = False,
-        ray_workers_use_nsight: bool = False,
-        placement_group: Optional["PlacementGroup"] = None,
+        model: str,
+        max_batch_size: int,
+        device_config: DeviceConfig,
+        dtype: Union[str, torch.dtype],
+        seed: int,
+        enforce_eager: bool = True,
     ) -> None:
-        self.pipeline_parallel_size = pipeline_parallel_size
-        self.tensor_parallel_size = tensor_parallel_size
-        self.worker_use_ray = worker_use_ray
-        self.max_parallel_loading_workers = max_parallel_loading_workers
-        self.disable_custom_all_reduce = disable_custom_all_reduce
-        self.ray_workers_use_nsight = ray_workers_use_nsight
-        self.placement_group = placement_group
-
-        self.world_size = pipeline_parallel_size * self.tensor_parallel_size
-        if self.world_size > 1:
-            self.worker_use_ray = True
-        self._verify_args()
-
-    def _verify_args(self) -> None:
-        if self.pipeline_parallel_size > 1:
-            raise NotImplementedError(
-                "Pipeline parallelism is not supported yet.")
-        if not self.disable_custom_all_reduce and self.world_size > 1:
-            if is_hip():
-                self.disable_custom_all_reduce = True
-                logger.info(
-                    "Disabled the custom all-reduce kernel because it is not "
-                    "supported on AMD GPUs.")
-            elif self.pipeline_parallel_size > 1:
-                self.disable_custom_all_reduce = True
-                logger.info(
-                    "Disabled the custom all-reduce kernel because it is not "
-                    "supported with pipeline parallelism.")
-        if self.ray_workers_use_nsight and not self.worker_use_ray:
-            raise ValueError("Unable to use nsight profiling unless workers "
-                             "run with Ray.")
+        self.model = model
+        self.max_batch_size = max_batch_size
+        self.device_config = device_config
+        self.dtype = dtype  # Remark: in Aphrodite this is: _get_and_verify_dtype(self.hf_text_config, dtype)
+        self.seed = seed
+        self.enforce_eager = enforce_eager

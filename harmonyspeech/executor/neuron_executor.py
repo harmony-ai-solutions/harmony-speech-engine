@@ -1,7 +1,7 @@
 from typing import Dict, List, Set
 
 from harmonyspeech.executor.executor_base import ExecutorBase
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
+from harmonyspeech.common.request import SamplerOutput, SequenceGroupMetadata
 
 
 class NeuronExecutor(ExecutorBase):

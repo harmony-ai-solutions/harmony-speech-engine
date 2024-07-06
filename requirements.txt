@@ -5,7 +5,6 @@ uvicorn
 loguru
 prometheus_client
 torch
-ray
 psutil
 packaging
 numpy

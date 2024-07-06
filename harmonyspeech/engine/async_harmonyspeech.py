@@ -3,10 +3,13 @@ import os
 import time
 from functools import partial
 from typing import Type, Optional, Dict, Union, Callable, Tuple, List, Set, AsyncIterator, Iterable
+
+import ray
 from loguru import logger
 
 from harmonyspeech import HarmonySpeechEngine
 from harmonyspeech.common.config import ModelConfig
+from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
     TextToSpeechRequest
@@ -112,7 +115,7 @@ class RequestTracker:
         request_id = request_output.request_id
 
         self._request_streams[request_id].put(request_output)
-        if request_output.finished:
+        if request_output.finished():
             if verbose:
                 logger.info(f"Finished request {request_id}.")
             self.abort_request(request_id)
@@ -205,37 +208,35 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         """
         seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
 
+        outputs = []
         if not scheduler_outputs.is_empty():
-            # Execute the model.
-            output = await self.model_executor.execute_model_async(
-                seq_group_metadata_list, scheduler_outputs.blocks_to_swap_in,
-                scheduler_outputs.blocks_to_swap_out,
-                scheduler_outputs.blocks_to_copy,
-                scheduler_outputs.num_lookahead_slots)
-        else:
-            output = []
+            for model_name, model_requests in scheduler_outputs.scheduled_requests_per_model.items():
+                # Execute the model.
+                model_results = await self.model_executors[model_name].execute_model_async(model_requests)
+                outputs.extend(model_results)
 
         request_outputs = self._process_model_outputs(
-            output, scheduler_outputs.scheduled_seq_groups,
-            scheduler_outputs.ignored_seq_groups)
+            outputs=outputs,
+            ignored_requests=scheduler_outputs.ignored_requests
+        )
 
         # Log stats.
-        if self.log_stats:
-            self.stat_logger.log(self._get_stats(scheduler_outputs))
+        # if self.log_stats:
+        #     self.stat_logger.log(self._get_stats(scheduler_outputs))
 
         return request_outputs
 
-    async def add_text_to_speech_request_async(
+    async def add_request_async(
         self,
         request_id: str,
-        request_data: TextToSpeechRequest,
+        request_data: RequestInput,
         arrival_time: Optional[float] = None,
     ) -> None:
 
         if arrival_time is None:
             arrival_time = time.time()
 
-        return self.add_text_to_speech_request(
+        return self.add_request(
             request_id,
             request_data=request_data,
             arrival_time=arrival_time
@@ -267,16 +268,12 @@ class AsyncHarmonySpeech:
 
     def __init__(
         self,
-        worker_use_ray: bool,
-        engine_use_ray: bool,
         *args,
         log_requests: bool = True,
         max_log_len: int = 0,
         start_engine_loop: bool = True,
         **kwargs
     ) -> None:
-        self.worker_use_ray = worker_use_ray
-        self.engine_use_ray = engine_use_ray
         self.log_requests = log_requests
         self.max_log_len = max_log_len
         self.engine = self._init_engine(*args, **kwargs)
@@ -298,24 +295,17 @@ class AsyncHarmonySpeech:
         # Create the engine configs.
         engine_config = engine_args.create_engine_config()
 
-        if engine_config.device_config.device_type == "neuron":
-            raise NotImplementedError("Neuron is not supported for async engine yet.")
-        elif engine_config.device_config.device_type == "cpu":
-            from harmonyspeech.executor.cpu_executor import CPUExecutor
-            executor_class = CPUExecutor
-        elif engine_config.parallel_config.worker_use_ray:
-            initialize_ray_cluster(engine_config.parallel_config)
-            from harmonyspeech.executor.ray_gpu_executor import RayGPUExecutorAsync
-            executor_class = RayGPUExecutorAsync
-        else:
-            assert engine_config.parallel_config.world_size == 1, ("Ray is required if parallel_config.world_size > 1.")
-            from harmonyspeech.executor.gpu_executor import GPUExecutorAsync
-            executor_class = GPUExecutorAsync
-        # Create the async LLM engine.
-        engine = cls(engine_config.parallel_config.worker_use_ray,
-                     engine_args.engine_use_ray,
-                     **engine_config.to_dict(),
-                     executor_class=executor_class,
+        # if engine_config.device_config.device_type == "neuron":
+        #     raise NotImplementedError("Neuron is not supported for async engine yet.")
+        # elif engine_config.device_config.device_type == "cpu":
+        #     from harmonyspeech.executor.cpu_executor import CPUExecutor
+        #     executor_class = CPUExecutor
+        # else:
+        #     from harmonyspeech.executor.gpu_executor import GPUExecutorAsync
+        #     executor_class = GPUExecutorAsync
+
+        # Create the async TTS engine.
+        engine = cls(**engine_config.to_dict(),
                      log_requests=not engine_args.disable_log_requests,
                      log_stats=not engine_args.disable_log_stats,
                      max_log_len=engine_args.max_log_len,
@@ -360,23 +350,8 @@ class AsyncHarmonySpeech:
                     error_callback=self._error_callback))
         self.background_loop = asyncio.shield(self._background_loop_unshielded)
 
-    def _init_engine(self, *args,
-                     **kwargs) -> Union[_AsyncHarmonySpeech, "ray.ObjectRef"]:
-        if not self.engine_use_ray:
-            engine_class = self._engine_class
-        elif self.worker_use_ray:
-            engine_class = ray.remote(num_cpus=0)(self._engine_class).remote
-        else:
-            # FIXME: This is a bit hacky. Be careful when changing the
-            # order of the arguments.
-            cache_config = kwargs["cache_config"]
-            parallel_config = kwargs["parallel_config"]
-            if parallel_config.tensor_parallel_size == 1:
-                num_gpus = cache_config.gpu_memory_utilization
-            else:
-                num_gpus = 1
-            engine_class = ray.remote(num_gpus=num_gpus)(
-                self._engine_class).remote
+    def _init_engine(self, *args, **kwargs) -> _AsyncHarmonySpeech:
+        engine_class = self._engine_class
         return engine_class(*args, **kwargs)
 
     async def engine_step(self) -> bool:
@@ -391,10 +366,7 @@ class AsyncHarmonySpeech:
             # Add the request into the HarmonySpeech engine's waiting queue.
             # TODO: Maybe add add_request_batch to reduce Ray overhead
             try:
-                if self.engine_use_ray:
-                    await self.engine.add_request.remote(**new_request)
-                else:
-                    await self.engine.add_request_async(**new_request)
+                await self.engine.add_request_async(**new_request)
             except ValueError as e:
                 # TODO: use an HarmonySpeech specific error for failed validation
                 self._request_tracker.process_exception(
@@ -406,23 +378,16 @@ class AsyncHarmonySpeech:
         if finished_requests:
             await self._engine_abort(finished_requests)
 
-        if self.engine_use_ray:
-            request_outputs = await self.engine.step.remote()
-        else:
-            request_outputs = await self.engine.step_async()
+        request_outputs = await self.engine.step_async()
 
         # Put the outputs into the corresponding streams.
         for request_output in request_outputs:
-            self._request_tracker.process_request_output(
-                request_output, verbose=self.log_requests)
+            self._request_tracker.process_request_output(request_output, verbose=self.log_requests)
 
         return len(request_outputs) > 0
 
     async def _engine_abort(self, request_ids: Iterable[str]):
-        if self.engine_use_ray:
-            await self.engine.abort_request.remote(request_ids)
-        else:
-            self.engine.abort_request(request_ids)
+        self.engine.abort_request(request_ids)
 
     async def run_engine_loop(self):
         has_requests_in_progress = False
@@ -448,21 +413,23 @@ class AsyncHarmonySpeech:
         except KeyboardInterrupt:
             logger.info("Engine loop interrupted. Exiting gracefully.")
 
-    async def add_text_to_speech_request(
+    async def add_request(
         self,
         request_id: str,
-        request_data: TextToSpeechRequest,
+        request_input: RequestInput,
         arrival_time: Optional[float] = None,
     ) -> AsyncStream:
         if self.log_requests:
-            shortened_input = request_data.input
-            if self.max_log_len is not None:
-                if shortened_input is not None:
-                    shortened_input = shortened_input[:self.max_log_len]
-            logger.info(
-                f"Received text-to-speech request {request_id}: "
-                f"input: {shortened_input!r}."
-            )
+            # Log TTS request
+            if isinstance(request_input, TextToSpeechRequestInput):
+                shortened_input = request_input.input_text
+                if self.max_log_len is not None:
+                    if shortened_input is not None:
+                        shortened_input = shortened_input[:self.max_log_len]
+                logger.info(
+                    f"Received text-to-speech request {request_id}: "
+                    f"input: {shortened_input!r}."
+                )
 
         if not self.is_running:
             if self.start_engine_loop:
@@ -479,23 +446,23 @@ class AsyncHarmonySpeech:
 
         stream = self._request_tracker.add_request(
             request_id,
-            request_data=request_data,
+            request_input=request_input,
             arrival_time=arrival_time
         )
 
         return stream
 
-    async def generate_text_to_speech(
+    async def generate(
         self,
         request_id: str,
-        request_data: TextToSpeechRequest,
-    ) -> AsyncIterator[TextToSpeechRequestOutput]:
+        request_input: RequestInput,
+    ) -> AsyncIterator[RequestOutput]:
         """
-        Generate outputs for a TTS request.
+        Generate outputs for a request.
 
         Args:
-
-
+            request_id: ID of the request
+            request_input: Input Object holding the request data
         Yields:
             The output `RequestOutput` objects from the HarmonySpeechEngine for the
             request.
@@ -505,9 +472,9 @@ class AsyncHarmonySpeech:
         arrival_time = time.monotonic()
 
         try:
-            stream = await self.add_text_to_speech_request(
+            stream = await self.add_request(
                 request_id=request_id,
-                request_data=request_data,
+                request_input=request_input,
                 arrival_time=arrival_time,
             )
 

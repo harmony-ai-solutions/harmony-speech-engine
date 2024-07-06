@@ -8,44 +8,16 @@ import torch
 import torch.nn as nn
 from loguru import logger
 
-from harmonyspeech.attention import (
-    AttentionMetadata,
-    AttentionMetadataPerStage,
-    get_attn_backend,
-)
 from harmonyspeech.common.config import (
     DeviceConfig,
     ModelConfig,
-    ParallelConfig,
 )
 from harmonyspeech.common.logger import get_loading_progress_bar
-from harmonyspeech.common.sampling_params import SamplingParams, SamplingType
-from harmonyspeech.common.sequence import (
-    MultiModalData,
-    SamplerOutput,
-    SequenceData,
-    SequenceGroupMetadata,
-)
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import (
     CudaMemoryProfiler,
-    async_tensor_h2d,
-    is_hip,
-    is_pin_memory_available,
-    make_tensor_with_pad,
-    maybe_expand_dim,
 )
-from harmonyspeech.distributed import (
-    broadcast_tensor_dict,
-    get_tensor_model_parallel_world_size,
-    with_pynccl_for_all_reduce,
-)
-from harmonyspeech.distributed.device_communicators import (
-    custom_all_reduce,
-    pynccl_utils,
-)
-from harmonyspeech.modeling import SamplingMetadata
 from harmonyspeech.modeling.loader import get_model
-from harmonyspeech.modeling.sampling_metadata import PersistentMetadata
 
 _PAD_SLOT_ID = -1
 LORA_WARMUP_RANK = 8
@@ -71,20 +43,13 @@ class ModelRunner:
     def __init__(
         self,
         model_config: ModelConfig,
-        parallel_config: ParallelConfig,
         device_config: DeviceConfig,
         is_driver_worker: bool = False,
     ):
         self.model_config = model_config
-        self.parallel_config = parallel_config
         self.is_driver_worker = is_driver_worker
 
-        # model_config can be None in tests/samplers/test_sampler.py.
-        # FIXME: This is a hack to make the tests work. Refactor this.
-        self.sliding_window = (model_config.get_sliding_window()
-                               if model_config is not None else None)
-        self.device_config = (device_config
-                              if device_config is not None else DeviceConfig())
+        self.device_config = (device_config if device_config is not None else DeviceConfig())
         self.device = self.device_config.device
 
         self.model = None
@@ -127,9 +92,9 @@ class ModelRunner:
      @torch.inference_mode()
     def execute_model(
         self,
-        seq_group_metadata_list: Optional[List[SequenceGroupMetadata]],
-        kv_caches: List[torch.Tensor],
-    ) -> Optional[SamplerOutput]:
+         requests_to_batch: List[EngineRequest]
+     ) -> List[ExecutorResult]:
+
         (input_tokens, input_positions, attn_metadata, sampling_metadata,
          lora_requests, lora_mapping, multi_modal_input
          ) = self.prepare_input_tensors(seq_group_metadata_list)

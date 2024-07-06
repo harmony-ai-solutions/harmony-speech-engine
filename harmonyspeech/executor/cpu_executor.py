@@ -5,7 +5,7 @@ import torch
 from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import (get_distributed_init_method, get_ip, get_open_port, make_async)
 from harmonyspeech.executor.executor_base import ExecutorBase
 
@@ -25,7 +25,6 @@ class CPUExecutor(ExecutorBase):
         distributed_init_method = get_distributed_init_method(get_ip(), get_open_port())
         self.driver_worker = CPUWorker(
             model_config=self.model_config,
-            parallel_config=self.parallel_config,
             device_config=self.device_config,
             local_rank=0,
             rank=0,
@@ -35,35 +34,21 @@ class CPUExecutor(ExecutorBase):
         self.driver_worker.init_device()
         self.driver_worker.load_model()
 
-    def execute_model(self,
-                      seq_group_metadata_list: List[SequenceGroupMetadata],
-                      blocks_to_swap_in: Dict[int, int],
-                      blocks_to_swap_out: Dict[int, int],
-                      blocks_to_copy: Dict[int, List[int]],
-                      num_lookahead_slots: int) -> List[SamplerOutput]:
+    def execute_model(
+        self,
+        requests_to_batch: List[EngineRequest]
+    ) -> List[ExecutorResult]:
         output = self.driver_worker.execute_model(
-            seq_group_metadata_list=seq_group_metadata_list,
-            blocks_to_swap_in=blocks_to_swap_in,
-            blocks_to_swap_out=blocks_to_swap_out,
-            blocks_to_copy=blocks_to_copy,
-            num_lookahead_slots=num_lookahead_slots,
+            requests_to_batch=requests_to_batch
         )
         return output
 
     async def execute_model_async(
         self,
-        seq_group_metadata_list: List[SequenceGroupMetadata],
-        blocks_to_swap_in: Dict[int, int],
-        blocks_to_swap_out: Dict[int, int],
-        blocks_to_copy: Dict[int, List[int]],
-        num_lookahead_slots: int,
-    ) -> SamplerOutput:
+        requests_to_batch: List[EngineRequest],
+    ) -> List[ExecutorResult]:
         output = await make_async(self.driver_worker.execute_model)(
-            seq_group_metadata_list=seq_group_metadata_list,
-            blocks_to_swap_in=blocks_to_swap_in,
-            blocks_to_swap_out=blocks_to_swap_out,
-            blocks_to_copy=blocks_to_copy,
-            num_lookahead_slots=num_lookahead_slots,
+            requests_to_batch=requests_to_batch,
         )
         return output
 

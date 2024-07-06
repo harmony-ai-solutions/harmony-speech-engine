@@ -1,8 +1,10 @@
 import enum
+import time
 from dataclasses import dataclass
 from typing import Union, Optional
 
-from harmonyspeech.endpoints.openai.protocol import BaseRequest
+from harmonyspeech.common.inputs import RequestInput
+from harmonyspeech.common.outputs import RequestOutput
 
 
 class RequestStatus(enum.Enum):
@@ -13,6 +15,12 @@ class RequestStatus(enum.Enum):
     FINISHED_STOPPED = enum.auto()
     FINISHED_ABORTED = enum.auto()
     FINISHED_IGNORED = enum.auto()
+
+    @staticmethod
+    def is_running(status: "RequestStatus") -> bool:
+        return status in [
+            RequestStatus.RUNNING,
+        ]
 
     @staticmethod
     def is_finished(status: "RequestStatus") -> bool:
@@ -29,10 +37,7 @@ class RequestStatus(enum.Enum):
         elif status == RequestStatus.FINISHED_ABORTED:
             finish_reason = "abort"
         elif status == RequestStatus.FINISHED_IGNORED:
-            # The ignored sequences are the sequences whose prompt lengths
-            # are longer than the model's length cap. Therefore, the stop
-            # reason should also be "length" as in OpenAI API.
-            finish_reason = "length"
+            finish_reason = "skipped"
         else:
             finish_reason = None
         return finish_reason
@@ -60,11 +65,10 @@ class RequestMetrics:
 
 
 class EngineRequest:
-
     def __init__(
         self,
         request_id: str,
-        request_data: BaseRequest,
+        request_data: RequestInput,
         arrival_time: float,
     ) -> None:
         self.request_id = request_id
@@ -78,3 +82,19 @@ class EngineRequest:
 
     def is_finished(self) -> bool:
         return RequestStatus.is_finished(self.status)
+
+    def set_running(self):
+        if not RequestStatus.is_running(self.status) and not RequestStatus.is_finished(self.status):
+            self.status = RequestStatus.RUNNING
+            self.metrics.first_scheduled_time = time.monotonic()
+            self.metrics.time_in_queue = self.metrics.first_scheduled_time - self.metrics.arrival_time
+
+
+class ExecutorResult:
+    def __init__(
+        self,
+        request_id: str,
+        result_data: RequestOutput
+    ):
+        self.request_id = request_id
+        self.request_data = result_data

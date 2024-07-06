@@ -7,7 +7,7 @@ from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.sequence import (RequestStatus, RequestMetrics, EngineRequest)
+from harmonyspeech.common.request import (RequestStatus, RequestMetrics, EngineRequest)
 
 
 @dataclass
@@ -44,16 +44,10 @@ class SchedulingBudget:
 
 
 @dataclass
-class ScheduledEngineRequest:
-    # Reference to a request which is scheduled
-    request: EngineRequest
-
-
-@dataclass
 class SchedulerOutputs:
     """The scheduling decision made from a scheduler."""
     # Scheduled requests per model.
-    scheduled_requests_per_model: Dict[str, List[ScheduledEngineRequest]]
+    scheduled_requests_per_model: Dict[str, List[EngineRequest]]
     # Sequence groups that are going to be ignored.
     ignored_requests: List[EngineRequest]
 
@@ -99,24 +93,22 @@ class Scheduler:
         # Add sequence groups to the waiting queue.
         self.waiting.append(request)
 
-    def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
-        """Aborts a sequence group with the given ID.
+    def update_request_status(self, request_id: Union[str, Iterable[str]], new_status: RequestStatus) -> None:
+        """Updates status for requests with the given ID.
 
-        Check if the sequence group with the given ID
-            is present in any of the state queue.
-        If present, remove the sequence group from the state queue.
-            Also, if any of the sequences in the sequence group is not finished,
-                free the sequence with status `FINISHED_ABORTED`.
+        Check if the requests with the given ID are present in any of the state queues.
+        If present (and new status is finished), remove the sequence group from the state queue.
         Otherwise, do nothing.
 
         Args:
             request_id: The ID(s) of the sequence group to abort.
+            new_status: New Status to set for the requests
         """
         if isinstance(request_id, str):
-            request_id = (request_id, )
+            request_id = (request_id,)
         request_ids = set(request_id)
         for state_queue in [self.waiting, self.running]:
-            aborted_requests: List[EngineRequest] = []
+            updated_requests: List[EngineRequest] = []
             for request in state_queue:
                 if not request_ids:
                     # Using 'break' here may add two extra iterations,
@@ -124,14 +116,20 @@ class Scheduler:
                     break
                 if request.request_id in request_ids:
                     # Appending aborted group into pending list.
-                    aborted_requests.append(request)
+                    updated_requests.append(request)
                     request_ids.remove(request.request_id)
-            for aborted_request in aborted_requests:
-                # Remove the sequence group from the state queue.
-                state_queue.remove(aborted_request)
-                if aborted_request.is_finished():
+
+            for request in updated_requests:
+                # Skip if already finished; but remove from queue
+                if request.is_finished():
+                    state_queue.remove(request)
                     continue
-                aborted_request.status = RequestStatus.FINISHED_ABORTED
+                # Update state
+                request.status = new_status
+                if request.is_finished():
+                    request.metrics.finished_time = time.time()
+                    # Remove from queue since it is finished now
+                    state_queue.remove(request)
 
     def has_unfinished_requests(self) -> bool:
         return self.waiting or self.running
@@ -175,7 +173,7 @@ class Scheduler:
         while waiting_queue:
             # Get Request and model name
             request = waiting_queue[0]
-            model_name = request.request_data.model
+            model_name = request.request_input.model
             # Remove from queue
             waiting_queue.popleft()
 
@@ -190,7 +188,7 @@ class Scheduler:
 
             # Can schedule this request.
             requests.append(request)
-            budget.add_num_requests(request.request_data.model, 1)
+            budget.add_num_requests(request.request_input.model, 1)
             # Keep track of model name in the new scheduled list
             # This way we know it's safe to add new requests for this model
             if model_name not in new_scheduled_for_models:
@@ -231,13 +229,13 @@ class Scheduler:
         # Build mapping of ready requests on a per model dictionary
         per_model_scheduled = {}
         for r in ready.requests:
-            # Set State to running
-            r.status = RequestStatus.RUNNING
+            # Set Request to running state
+            r.set_running()
             # Fill into dict
             if r.request_data.model not in per_model_scheduled.keys():
-                per_model_scheduled[r.request_data.model] = [ScheduledEngineRequest(request=r)]
+                per_model_scheduled[r.request_data.model] = [r]
             else:
-                per_model_scheduled[r.request_data.model].append(ScheduledEngineRequest(request=r))
+                per_model_scheduled[r.request_data.model].append(r)
 
         # Update running requests.
         self.running.extend(ready.requests)

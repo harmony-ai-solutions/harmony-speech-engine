@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List
 
-from harmonyspeech.common.sequence import SamplerOutput, SequenceGroupMetadata
+from harmonyspeech.common.request import EngineRequest, ExecutorResult
 
 
 class WorkerBase(ABC):
@@ -18,10 +18,9 @@ class WorkerBase(ABC):
 
     @abstractmethod
     def execute_model(
-            self, seq_group_metadata_list: List[SequenceGroupMetadata],
-            blocks_to_swap_in: Dict[int, int], blocks_to_swap_out: Dict[int,
-                                                                        int],
-            blocks_to_copy: Dict[int, List[int]]) -> List[SamplerOutput]:
+        self,
+        requests_to_batch: List[EngineRequest]
+    ) -> List[ExecutorResult]:
         """Executes at least one model step on the given sequences, unless no
         sequences are provided."""
         raise NotImplementedError
