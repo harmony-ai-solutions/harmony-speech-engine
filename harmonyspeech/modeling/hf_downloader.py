@@ -14,15 +14,9 @@ from huggingface_hub import HfFileSystem, snapshot_download
 from loguru import logger
 from safetensors.torch import load_file, safe_open, save_file
 from tqdm.auto import tqdm
-from transformers import PretrainedConfig, AutoModelForCausalLM
 
-from aphrodite.common.config import ModelConfig
-from aphrodite.quantization.gguf_utils import (GGUFReader, get_tensor_name_map,
-                                               MODEL_ARCH_NAMES)
-from aphrodite.common.logger import get_loading_progress_bar
-from aphrodite.quantization import (QuantizationConfig,
-                                    get_quantization_config)
-from aphrodite.quantization.schema import QuantParamSchema
+from harmonyspeech.common.config import ModelConfig
+from harmonyspeech.common.logger import get_loading_progress_bar
 
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _aphrodite_filelocks_path = os.path.join(_xdg_cache_home, "aphrodite/locks/")

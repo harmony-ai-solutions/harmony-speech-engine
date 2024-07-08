@@ -8,23 +8,13 @@ from loguru import logger
 import torch
 import torch.nn as nn
 
-from aphrodite.common.config import DeviceConfig, ModelConfig
-from aphrodite.modeling.models import ModelRegistry
-from aphrodite.modeling.models.llava import LlavaForConditionalGeneration
+from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.modeling.models import ModelRegistry
 from aphrodite.modeling.hf_downloader import (
     get_quant_config,
     initialize_dummy_weights,
 )
-from aphrodite.quantization.bitsandbytes import (
-    BNBLinearMethod,
-    replace_quant_params,
-)
-from aphrodite.distributed import (
-    get_tensor_model_parallel_world_size, )
 
-_VISION_MODEL_CLASSES = [
-    LlavaForConditionalGeneration,
-]
 
 
 @contextlib.contextmanager
