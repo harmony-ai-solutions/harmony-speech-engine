@@ -10,10 +10,7 @@ import torch.nn as nn
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
-from aphrodite.modeling.hf_downloader import (
-    get_quant_config,
-    initialize_dummy_weights,
-)
+from harmonyspeech.modeling.hf_downloader import initialize_dummy_weights
 
 
 
@@ -46,22 +43,6 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig,
 
     # Get the (maybe quantized) linear method.
     linear_method = None
-    if model_config.quantization is not None:
-        quant_config = get_quant_config(model_config)
-        capability = torch.cuda.get_device_capability()
-        capability = capability[0] * 10 + capability[1]
-        if capability < quant_config.get_min_capability():
-            raise ValueError(
-                f"The quantization method {model_config.quantization} is not "
-                "supported for the current GPU. "
-                f"Minimum capability: {quant_config.get_min_capability()}. "
-                f"Current capability: {capability}.")
-        supported_dtypes = quant_config.get_supported_act_dtypes()
-        if model_config.dtype not in supported_dtypes:
-            # set the dtype to float16 for quantized models
-            model_config.dtype = torch.float16
-            logger.warning("Model is quantized. Forcing float16 datatype.")
-        linear_method = quant_config.get_linear_method()
 
     with _set_default_torch_dtype(model_config.dtype):
         # Create a model instance.

@@ -120,15 +120,6 @@ def is_cpu() -> bool:
         return False
 
 
-@lru_cache(maxsize=None)
-def is_neuron() -> bool:
-    try:
-        import transformers_neuronx
-    except ImportError:
-        transformers_neuronx = None
-    return transformers_neuronx is not None
-
-
 def get_cpu_memory() -> int:
     """Returns the total CPU memory of the node in bytes."""
     return psutil.virtual_memory().total

@@ -58,10 +58,7 @@ class HarmonySpeechEngine:
         """
         for model_cfg in self.model_configs:
             # Determine Executor class based on Device config for the model
-            if model_cfg.device_config.device_type == "neuron":
-                from harmonyspeech.executor.neuron_executor import NeuronExecutor
-                executor_class = NeuronExecutor
-            elif model_cfg.device_config.device_type == "cpu":
+            if model_cfg.device_config.device_type == "cpu":
                 from harmonyspeech.executor.cpu_executor import CPUExecutor
                 executor_class = CPUExecutor
             else:

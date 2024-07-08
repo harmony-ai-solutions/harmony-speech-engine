@@ -3,7 +3,7 @@ from loguru import logger
 
 import torch
 
-from harmonyspeech.common.utils import is_neuron, is_cpu, is_hip
+from harmonyspeech.common.utils import is_cpu, is_hip
 
 if TYPE_CHECKING:
     from ray.util.placement_group import PlacementGroup
@@ -34,8 +34,6 @@ class DeviceConfig:
             # Automated device type detection
             if torch.cuda.is_available():
                 self.device_type = "cuda"
-            elif is_neuron():
-                self.device_type = "neuron"
             elif is_cpu():
                 self.device_type = "cpu"
             else:
@@ -44,12 +42,8 @@ class DeviceConfig:
             # Device type is assigned explicitly
             self.device_type = device
 
-        # Some device types require processing inputs on CPU
-        if self.device_type in ["neuron"]:
-            self.device = torch.device("cpu")
-        else:
-            # Set device with device type
-            self.device = torch.device(self.device_type)
+        # Set device with device type
+        self.device = torch.device(self.device_type)
 
 
 class ModelConfig:

@@ -295,9 +295,7 @@ class AsyncHarmonySpeech:
         # Create the engine configs.
         engine_config = engine_args.create_engine_config()
 
-        # if engine_config.device_config.device_type == "neuron":
-        #     raise NotImplementedError("Neuron is not supported for async engine yet.")
-        # elif engine_config.device_config.device_type == "cpu":
+        # if engine_config.device_config.device_type == "cpu":
         #     from harmonyspeech.executor.cpu_executor import CPUExecutor
         #     executor_class = CPUExecutor
         # else:

@@ -26,6 +26,7 @@ Support and Ideas for Improving this Project are very welcome.
 - Support for loading and executing multiple models in parallel
 - No *distributed* execution of single models (i.e. sharding); mainly to reduce complexity
 - No general quantization; if quantization is supported, this will be part of the individual model config.
+- No Neuron Device Type Support (I don't have the means to test it properly; feel free to add support for it if you like)
 
 ### Planned and availiable Integrations
 The following Technologies and Features are planned to be supported
