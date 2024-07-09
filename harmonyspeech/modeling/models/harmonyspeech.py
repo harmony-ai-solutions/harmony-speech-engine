@@ -8,9 +8,10 @@ import torch.nn.functional as F
 import numpy as np
 import torch
 
-from harmonyspeech.modeling.models.harmonyspeech.encoder.hparams import *
-from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import CausalConv1d
-from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import CausalConvTranspose1d
+from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import (
+    CausalConv1d,
+    CausalConvTranspose1d
+)
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.residual_stack import ResidualStack
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.utils.utils import read_hdf5
 
@@ -131,34 +132,30 @@ class CBHG(nn.Module):
 
 
 class SpeakerEncoder(nn.Module):
-    def __init__(self, device):
+    def __init__(
+        self,
+        mel_n_channels: int,
+        model_hidden_size: int,
+        model_num_layers: int,
+        model_embedding_size: int
+    ):
         super().__init__()
-        self.device = device
-        self.step = 0
 
         # Network defition
         self.lstm = nn.LSTM(input_size=mel_n_channels,
                             hidden_size=model_hidden_size,
                             num_layers=model_num_layers,
-                            batch_first=True).to(self.device)
+                            batch_first=True)
         self.linear = nn.Linear(in_features=model_hidden_size,
-                                out_features=model_embedding_size).to(self.device)
-        self.relu = torch.nn.ReLU().to(self.device)
+                                out_features=model_embedding_size)
+        self.relu = torch.nn.ReLU()
 
         # Cosine similarity scaling (with fixed initial parameter values)
-        self.similarity_weight = nn.Parameter(torch.tensor([10.]).to(self.device))
-        self.similarity_bias = nn.Parameter(torch.tensor([-5.]).to(self.device))
+        self.similarity_weight = nn.Parameter(torch.tensor([10.]))
+        self.similarity_bias = nn.Parameter(torch.tensor([-5.]))
 
         # Loss
-        self.loss_fn = nn.CrossEntropyLoss().to(self.device)
-
-    # def do_gradient_ops(self, accelerator):
-    #     # Gradient scale
-    #     self.similarity_weight.grad *= 0.01
-    #     self.similarity_bias.grad *= 0.01
-    #
-    #     # Gradient clipping
-    #     accelerator.clip_grad_norm_(self.parameters(), 3, norm_type=2)
+        self.loss_fn = nn.CrossEntropyLoss()
 
     def do_gradient_ops(self):
         # Gradient scale
@@ -189,50 +186,6 @@ class SpeakerEncoder(nn.Module):
         embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
 
         return embeds
-
-    def similarity_matrix(self, embeds):
-        """
-        Computes the similarity matrix according the section 2.1 of GE2E.
-
-        :param embeds: the embeddings as a tensor of shape (speakers_per_batch,
-        utterances_per_speaker, embedding_size)
-        :return: the similarity matrix as a tensor of shape (speakers_per_batch,
-        utterances_per_speaker, speakers_per_batch)
-        """
-        speakers_per_batch, utterances_per_speaker = embeds.shape[:2]
-
-        # Inclusive centroids (1 per speaker). Cloning is needed for reverse differentiation
-        centroids_incl = torch.mean(embeds, dim=1, keepdim=True)
-        centroids_incl = centroids_incl.clone() / (torch.norm(centroids_incl, dim=2, keepdim=True) + 1e-5)
-
-        # Exclusive centroids (1 per utterance)
-        centroids_excl = (torch.sum(embeds, dim=1, keepdim=True) - embeds)
-        centroids_excl /= (utterances_per_speaker - 1)
-        centroids_excl = centroids_excl.clone() / (torch.norm(centroids_excl, dim=2, keepdim=True) + 1e-5)
-
-        # Similarity matrix. The cosine similarity of already 2-normed vectors is simply the dot
-        # product of these vectors (which is just an element-wise multiplication reduced by a sum).
-        # We vectorize the computation for efficiency.
-        sim_matrix = torch.zeros(speakers_per_batch, utterances_per_speaker, speakers_per_batch).to(self.device)
-
-        mask_matrix = 1 - np.eye(speakers_per_batch, dtype=np.int)
-        for j in range(speakers_per_batch):
-            mask = np.where(mask_matrix[j])[0]
-            sim_matrix[mask, :, j] = (embeds[mask] * centroids_incl[j]).sum(dim=2)
-            sim_matrix[j, :, j] = (embeds[j] * centroids_excl[j]).sum(dim=1)
-
-        ## Even more vectorized version (slower maybe because of transpose)
-        # sim_matrix2 = torch.zeros(speakers_per_batch, speakers_per_batch, utterances_per_speaker
-        #                           ).to(self.loss_device)
-        # eye = np.eye(speakers_per_batch, dtype=np.int)
-        # mask = np.where(1 - eye)
-        # sim_matrix2[mask] = (embeds[mask[0]] * centroids_incl[mask[1]]).sum(dim=2)
-        # mask = np.where(eye)
-        # sim_matrix2[mask] = (embeds * centroids_excl).sum(dim=2)
-        # sim_matrix2 = sim_matrix2.transpose(1, 2)
-
-        sim_matrix = sim_matrix * self.similarity_weight + self.similarity_bias
-        return sim_matrix
 
 
 class SeriesPredictor(nn.Module):

@@ -18,6 +18,7 @@ from harmonyspeech.common.utils import (
     CudaMemoryProfiler,
 )
 from harmonyspeech.modeling.loader import get_model
+from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 _PAD_SLOT_ID = -1
 LORA_WARMUP_RANK = 8
@@ -27,6 +28,7 @@ _BATCH_SIZE_ALIGNMENT = 8
 _BATCH_SIZES_TO_CAPTURE = [1, 2, 4] + [
     _BATCH_SIZE_ALIGNMENT * i for i in range(1, 33)
 ]
+
 
 # How batches are constructed.
 class BatchType(IntEnum):
@@ -38,97 +40,27 @@ class BatchType(IntEnum):
     MIXED = 2
 
 
-class ModelRunner:
+class GPUModelRunner(ModelRunnerBase):
 
     def __init__(
         self,
         model_config: ModelConfig,
         device_config: DeviceConfig,
         is_driver_worker: bool = False,
+        *args,
+        **kwargs,
     ):
-        self.model_config = model_config
-        self.is_driver_worker = is_driver_worker
-
-        self.device_config = (device_config if device_config is not None else DeviceConfig())
-        self.device = self.device_config.device
-
-        self.model = None
-        self.block_size = None  # Set after initial profiling.
-        self.lora_manager = None
-
-        self.graph_runners: Dict[int, CUDAGraphRunner] = {}
-        self.graph_memory_pool = None  # Set during graph capture.
-
-        self.max_context_len_to_capture = (
-            self.model_config.max_context_len_to_capture
-            if self.model_config is not None else 0)
-        # When using CUDA graph, the input block tables must be padded to
-        # max_context_len_to_capture. However, creating the block table in
-        # Python can be expensive. To optimize this, we cache the block table
-        # in numpy and only copy the actual input content at every iteration.
-        # The shape of the cached block table will be
-        # (max batch size to capture, max context len to capture / block size).
-        self.graph_block_tables = None  # Set after initial profiling.
-        self.pin_memory = is_pin_memory_available()
-
-        self.attn_backend = get_attn_backend(
-            self.model_config.dtype if model_config is not None else None)
+        super().__init__(model_config, device_config, is_driver_worker, *args, **kwargs)
 
     def load_model(self) -> None:
         with CudaMemoryProfiler() as m:
-            self.model = get_model(
-                self.model_config,
-                self.device_config,
-                parallel_config=self.parallel_config
-            )
+            self.model = self._load_model()
 
         self.model_memory_usage = m.consumed_memory
-        tp = get_tensor_model_parallel_world_size()
         logger.info(
             "Model weights loaded. Memory usage: "
-            f"{self.model_memory_usage / float(2**30):.2f} GiB x {tp} = "
-            f"{self.model_memory_usage * tp / float(2**30):.2f} GiB")
-
-     @torch.inference_mode()
-    def execute_model(
-        self,
-         requests_to_batch: List[EngineRequest]
-     ) -> List[ExecutorResult]:
-
-        (input_tokens, input_positions, attn_metadata, sampling_metadata,
-         lora_requests, lora_mapping, multi_modal_input
-         ) = self.prepare_input_tensors(seq_group_metadata_list)
-
-
-        # Currently cuda graph is only supported by the decode phase.
-        prefill_meta = attn_metadata.prefill_metadata
-        decode_meta = attn_metadata.decode_metadata
-        if prefill_meta is None and decode_meta.use_cuda_graph:
-            graph_batch_size = input_tokens.shape[0]
-            model_executable = self.graph_runners[graph_batch_size]
-        else:
-            model_executable = self.model
-        execute_model_kwargs = {
-            "input_ids": input_tokens,
-            "positions": input_positions,
-            "kv_caches": kv_caches,
-            "attn_metadata": attn_metadata,
-        }
-        hidden_states = model_executable(**execute_model_kwargs)
-
-        # Compute the logits.
-        logits = self.model.compute_logits(hidden_states, sampling_metadata)
-
-        # Only perform sampling in the driver worker.
-        if not sampling_metadata.perform_sampling:
-            return None
-
-        # Sample the next token.
-        output = self.model.sample(
-            logits=logits,
-            sampling_metadata=sampling_metadata,
-        )
-        return output
+            f"{self.model_memory_usage / float(2 ** 30):.2f} GiB = "
+            f"{self.model_memory_usage / float(2 ** 30):.2f} GiB")
 
     # @torch.inference_mode()
     # def profile_run(self) -> None:
@@ -402,14 +334,14 @@ class ModelRunner:
 #         return self.forward(*args, **kwargs)
 
 
-@contextlib.contextmanager
-def _maybe_pynccl():
-    if pynccl_utils.is_initialized(
-    ) and not custom_all_reduce.is_initialized():
-        with with_pynccl_for_all_reduce():
-            yield
-    else:
-        yield
+# @contextlib.contextmanager
+# def _maybe_pynccl():
+#     if pynccl_utils.is_initialized(
+#     ) and not custom_all_reduce.is_initialized():
+#         with with_pynccl_for_all_reduce():
+#             yield
+#     else:
+#         yield
 
 
 def _get_graph_batch_size(batch_size: int) -> int:
@@ -425,7 +357,6 @@ def _get_graph_batch_size(batch_size: int) -> int:
     else:
         return ((batch_size + _BATCH_SIZE_ALIGNMENT - 1) //
                 _BATCH_SIZE_ALIGNMENT * _BATCH_SIZE_ALIGNMENT)
-
 
 # def _prepare_fake_inputs(
 #         seq_len: int, vision_language_config: Optional[VisionLanguageConfig]):

@@ -8,7 +8,7 @@ class RequestOutput:
     The base class for model output data.
     Args:
         request_id: The unique ID of the request.
-        finished: Whether the whole request is finished.
+        finish_reason: Reason why this request finished, if set.
         metrics: Metrics associated with the request.
     """
     def __init__(
@@ -25,44 +25,23 @@ class RequestOutput:
         return self.finish_reason is not None
 
 
-class GeneratedSpeechOutput:
-    """
-    The output of a TTS Generate Speech request.
-
-    Args:
-        index: The index of the output in the request.
-        data: The generated output audio data.
-    """
-    def __init__(
-        self,
-        index: int,
-        data: bytes,
-    ) -> None:
-        self.index = index
-        self.data = data
-
-    def __repr__(self) -> str:
-        return (f"GeneratedSpeechOutput(index={self.index}, "
-                f"data=bytes({len(self.data)})")
-
-
 class TextToSpeechRequestOutput(RequestOutput):
     """
-    The output Data of a Text-to-Speech Request to the model.
+    The output Data of a Text-to-Speech Request.
 
     Args:
         request_id: The unique ID of the request.
-        input_text: The input text string of the request.
-        output: The output of the request.
-        finished: Whether the whole request is finished.
+        text: The text string used to generate the result.
+        output: The generated output data.
+        finish_reason: Reason why this request finished, if set.
         metrics: Metrics associated with the request.
     """
 
     def __init__(
         self,
         request_id: str,
-        input_text: str,
-        output: GeneratedSpeechOutput,
+        text: str,
+        output: bytes,
         finish_reason: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ) -> None:
@@ -71,5 +50,40 @@ class TextToSpeechRequestOutput(RequestOutput):
             finish_reason=finish_reason,
             metrics=metrics,
         )
-        self.input_text = input_text
-        self.output: output
+        self.input_text = text
+        self.output = output
+
+    def __repr__(self) -> str:
+        return (f"TextToSpeechRequestOutput(request_id={self.request_id}, "
+                f"data=bytes({len(self.output)})")
+
+
+class SpeechEmbeddingRequestOutput(RequestOutput):
+    """
+    The output Data of a Text-to-Speech Request.
+
+    Args:
+        request_id: The unique ID of the request.
+        output: The generated output data.
+        finish_reason: Reason why this request finished, if set.
+        metrics: Metrics associated with the request.
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        output: bytes,
+        finish_reason: Optional[str] = None,
+        metrics: Optional[RequestMetrics] = None,
+    ) -> None:
+        super().__init__(
+            request_id=request_id,
+            finish_reason=finish_reason,
+            metrics=metrics,
+        )
+        self.output = output
+
+    def __repr__(self) -> str:
+        return (f"TextToSpeechRequestOutput(request_id={self.request_id}, "
+                f"data=bytes({len(self.output)})")
+

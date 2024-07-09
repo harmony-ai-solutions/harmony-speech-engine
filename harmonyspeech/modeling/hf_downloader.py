@@ -117,6 +117,8 @@ def prepare_hf_model_weights(
         allow_patterns = ["*.safetensors"]
     elif load_format == "pt":
         allow_patterns = ["*.pt"]
+    elif load_format == "pth":
+        allow_patterns = ["*.pth"]
     elif load_format == "npcache":
         allow_patterns = ["*.bin"]
     else:
@@ -186,7 +188,7 @@ def hf_model_weights_iterator(
     cache_dir: Optional[str] = None,
     load_format: str = "auto",
     revision: Optional[str] = None,
-    config: Optional[PretrainedConfig] = None,
+    # config: Optional[PretrainedConfig] = None,
     fall_back_to_pt: Optional[bool] = True,
 ) -> Iterator[Tuple[str, torch.Tensor]]:
     # if model_name_or_path.endswith("gguf"):

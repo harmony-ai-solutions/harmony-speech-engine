@@ -78,7 +78,7 @@ class TextToSpeechRequest(BaseRequest):
     """
     input: str = Field(default="", description="the text to synthesize")
     voice: Optional[str] = Field(default=None, description="ID of the voice to synthesize - only if the target model supports voice IDs")
-    target_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
+    input_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
     target_embedding: Optional[bytes] = Field(default=None, description="Binary embedding of the reference speaker for converting the source - Faster than providing a target audio file")
     generation_options: Optional[GenerationOptions] = Field(default=None, description="Options for generating a speech request, see documentation for possible values")
     output_options: Optional[AudioOutputOptions] = Field(default=None, description="Options for returning the generated audio, see documentation for possible values")
@@ -144,7 +144,7 @@ class EmbedSpeakerRequest(BaseRequest):
     Used to create a Speaker Embedding form a provided audio, which can later be re-used for Text-to-Speech or Voice Conversion functionality.
     Please refer to the documentation whether an embedding is compatible between different models.
     """
-    data: bytes = Field(default=None, description="Binary audio data to be processed")
+    input_audio: bytes = Field(default=None, description="Binary audio data to be processed")
 
 
 class EmbedSpeakerResponse(BaseResponse):

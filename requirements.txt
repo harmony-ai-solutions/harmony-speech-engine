@@ -25,3 +25,4 @@ g2pkk
 matplotlib
 anyascii
 jamo
+webrtcvad

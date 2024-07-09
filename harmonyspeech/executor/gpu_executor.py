@@ -19,9 +19,9 @@ class GPUExecutor(ExecutorBase):
     def _init_worker(self):
         # Lazy import the Worker to avoid importing torch.cuda/xformers
         # before CUDA_VISIBLE_DEVICES is set in the Worker
-        from harmonyspeech.task_handler.worker import Worker
+        from harmonyspeech.task_handler.gpu_worker import GPUWorker
 
-        self.driver_worker = Worker(
+        self.driver_worker = GPUWorker(
             model_config=self.model_config,
             device_config=self.device_config,
             local_rank=0,

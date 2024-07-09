@@ -15,11 +15,11 @@ from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import in_wsl
 
 from harmonyspeech.modeling import set_random_seed
-from harmonyspeech.task_handler.model_runner import ModelRunner
+from harmonyspeech.task_handler.gpu_model_runner import GPUModelRunner
 from harmonyspeech.task_handler.worker_base import WorkerBase
 
 
-class Worker(WorkerBase):
+class GPUWorker(WorkerBase):
     """A worker class that executes the model on a GPU.
 
     Each worker is associated with a single GPU. The worker is responsible for
@@ -42,7 +42,7 @@ class Worker(WorkerBase):
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
 
-        self.model_runner = ModelRunner(
+        self.model_runner = GPUModelRunner(
             model_config,
             device_config,
             is_driver_worker=is_driver_worker
@@ -96,37 +96,10 @@ class Worker(WorkerBase):
         self,
         requests_to_batch: List[EngineRequest]
     ) -> List[ExecutorResult]:
-        if self.is_driver_worker:
-            assert seq_group_metadata_list is not None
-            num_seq_groups = len(seq_group_metadata_list)
-            assert blocks_to_swap_in is not None
-            assert blocks_to_swap_out is not None
-            assert blocks_to_copy is not None
-            data = {
-                "num_seq_groups": num_seq_groups,
-                "blocks_to_swap_in": blocks_to_swap_in,
-                "blocks_to_swap_out": blocks_to_swap_out,
-                "blocks_to_copy": blocks_to_copy,
-            }
-            broadcast_tensor_dict(data, src=0)
-        else:
-            data = broadcast_tensor_dict(src=0)
-            num_seq_groups = data["num_seq_groups"]
-            blocks_to_swap_in = data["blocks_to_swap_in"]
-            blocks_to_swap_out = data["blocks_to_swap_out"]
-            blocks_to_copy = data["blocks_to_copy"]
-
-        self.cache_swap(blocks_to_swap_in, blocks_to_swap_out, blocks_to_copy)
-
-        # If there is no input, we don't need to execute the model.
-        if num_seq_groups == 0:
-            return []
-
-        output = self.model_runner.execute_model(seq_group_metadata_list,
-                                                 self.gpu_cache)
+        output = self.model_runner.execute_model(requests_to_batch=requests_to_batch)
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.
-        return [output]
+        return output
 
 
 def _check_if_gpu_supports_dtype(torch_dtype: torch.dtype):

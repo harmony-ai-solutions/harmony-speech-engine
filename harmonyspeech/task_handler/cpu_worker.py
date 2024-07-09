@@ -49,7 +49,6 @@ class CPUWorker(WorkerBase):
         self.cpu_cache = None
 
     def init_device(self) -> None:
-        self.init_distributed_environment()
         # Set random seed.
         set_random_seed(self.model_config.seed)
 
@@ -61,32 +60,7 @@ class CPUWorker(WorkerBase):
         self,
         requests_to_batch: List[EngineRequest]
     ) -> List[ExecutorResult]:
-        if self.is_driver_worker:
-            assert seq_group_metadata_list is not None
-            num_seq_groups = len(seq_group_metadata_list)
-            assert blocks_to_swap_in is not None
-            assert blocks_to_swap_out is not None
-            assert blocks_to_copy is not None
-            assert len(blocks_to_swap_in) == 0
-            assert len(blocks_to_swap_out) == 0
-            data = {
-                "num_seq_groups": num_seq_groups,
-                "blocks_to_copy": blocks_to_copy,
-            }
-            broadcast_tensor_dict(data, src=0)
-        else:
-            data = broadcast_tensor_dict(src=0)
-            num_seq_groups = data["num_seq_groups"]
-            blocks_to_copy = data["blocks_to_copy"]
-
-        self.cache_copy(blocks_to_copy)
-
-        # If there is no input, we don't need to execute the model.
-        if num_seq_groups == 0:
-            return []
-
-        output = self.model_runner.execute_model(seq_group_metadata_list,
-                                                 self.cpu_cache)
+        output = self.model_runner.execute_model(requests_to_batch=requests_to_batch)
         # CPU worker only supports single-step execution.
-        return [output]
+        return output
 
