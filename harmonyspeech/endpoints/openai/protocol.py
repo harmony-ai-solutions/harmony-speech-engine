@@ -154,3 +154,19 @@ class EmbedSpeakerResponse(BaseResponse):
     """
     id: str = Field(default_factory=lambda: f"embed-{random_uuid()}")
     data: bytes = Field(default=None, description="Speaker embedding data for the audio provided in the initial request")
+
+
+class VocodeAudioRequest(BaseRequest):
+    """
+    VocodeAudioRequest
+    Used to run a vocoder model over a provided input audio
+    """
+    input_audio: bytes = Field(default=None, description="Binary audio data to be processed")
+
+
+class VocodeAudioResponse(AudioDataResponse):
+    """
+    EmbedSpeakerResult
+    Result Audio file after vocoding step
+    """
+    id: str = Field(default_factory=lambda: f"vocode-{random_uuid()}")

@@ -1,7 +1,21 @@
 model_configs:
-  #- model: "HarmonySpeechEncoder"
-  - model: "models/harmony-ai-solutions/harmonyspeech/encoder"
+  - name: "hs1-encoder"
+    model: "models/harmony-ai-solutions/harmonyspeech/encoder"
     model_type: "HarmonySpeechEncoder"
+    max_batch_size: 10
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-synthesizer"
+    model: "models/harmony-ai-solutions/harmonyspeech/synthesizer"
+    model_type: "HarmonySpeechSynthesizer"
+    max_batch_size: 10
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-vocoder"
+    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
+    model_type: "HarmonySpeechVocoder"
     max_batch_size: 10
     device_config:
       device: "cpu"

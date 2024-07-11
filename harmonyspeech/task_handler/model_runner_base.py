@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput
+from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput, VocodeAudioRequestInput
 from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling.loader import get_model
@@ -99,17 +99,43 @@ class ModelRunnerBase:
         inputs = []
         model_name = getattr(self.model_config, 'model_name', None)
         if model_name == "HarmonySpeechEncoder":
-            # We assume it's a TTS Request which needs Audio to be encoded
             for r in requests_to_batch:
-                if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(r.request_data, SpeechEmbeddingRequestInput):
+                if (
+                    isinstance(r.request_data, TextToSpeechRequestInput) or
+                    isinstance(r.request_data, SpeechEmbeddingRequestInput)
+                ):
                     inputs.append(r.request_data)
                 else:
-                    raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SpeechEmbeddingRequestInput")
+                    raise ValueError(
+                        f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                        f"SpeechEmbeddingRequestInput")
             return self._prepare_harmonyspeech_encoder_inputs(inputs)
+        elif model_name == "HarmonySpeechSynthesizer":
+            for r in requests_to_batch:
+                if isinstance(r.request_data, TextToSpeechRequestInput):
+                    inputs.append(r.request_data)
+                else:
+                    raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput")
+            return self._prepare_harmonyspeech_synthesizer_inputs(inputs)
+        elif model_name == "HarmonySpeechVocoder":
+            for r in requests_to_batch:
+                if (
+                    isinstance(r.request_data, TextToSpeechRequestInput) or
+                    isinstance(r.request_data, VocodeAudioRequestInput)
+                ):
+                    inputs.append(r.request_data)
+                else:
+                    raise ValueError(
+                        f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                        f"VocodeAudioRequestInput")
+            return self._prepare_harmonyspeech_vocoder_inputs(inputs)
         else:
             raise NotImplementedError(f"Cannot provide Inputs for model {model_name}")
 
-    def _prepare_harmonyspeech_encoder_inputs(self, requests_to_batch: List[Union[TextToSpeechRequestInput, SpeechEmbeddingRequestInput]]):
+    def _prepare_harmonyspeech_encoder_inputs(self, requests_to_batch: List[Union[
+        TextToSpeechRequestInput,
+        SpeechEmbeddingRequestInput
+    ]]):
         # We're expecting audio in waveform format in the requests
         def prepare(request):
             preprocessed_audio = preprocess_wav(request.input_audio)
@@ -122,4 +148,31 @@ class ModelRunnerBase:
 
         return inputs
 
+    def _prepare_harmonyspeech_synthesizer_inputs(self, requests_to_batch: List[Union[TextToSpeechRequestInput]]):
+        # We're expecting audio in waveform format in the requests
+        def prepare(request):
+            preprocessed_audio = preprocess_wav(request.input_audio)
+            input_frames = get_input_frames(preprocessed_audio)
+            # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
+            return input_frames
 
+        with ThreadPoolExecutor() as executor:
+            inputs = list(executor.map(prepare, requests_to_batch))
+
+        return inputs
+
+    def _prepare_harmonyspeech_vocoder_inputs(self, requests_to_batch: List[Union[
+        TextToSpeechRequestInput,
+        VocodeAudioRequestInput
+    ]]):
+        # We're expecting audio in waveform format in the requests
+        def prepare(request):
+            preprocessed_audio = preprocess_wav(request.input_audio)
+            input_frames = get_input_frames(preprocessed_audio)
+            # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
+            return input_frames
+
+        with ThreadPoolExecutor() as executor:
+            inputs = list(executor.map(prepare, requests_to_batch))
+
+        return inputs

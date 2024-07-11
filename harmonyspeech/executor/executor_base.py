@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
+from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
@@ -20,6 +21,10 @@ class ExecutorBase(ABC):
         self.device_config = model_config.device_config
 
         self._init_executor()
+        logger.info(
+            f"Successfully initialized executor for model {self.model_config.name} ({self.model_config.model_type}) "
+            f"on device {self.device_config.device}"
+        )
 
     @abstractmethod
     def _init_executor(self) -> None:

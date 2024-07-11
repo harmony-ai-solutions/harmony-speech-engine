@@ -203,8 +203,8 @@ class Scheduler:
         budget_count = {}
         per_model_requests = {}
         for model_cfg in self.model_configs:
-            budget_count[model_cfg.model] = model_cfg.max_batch_size
-            per_model_requests[model_cfg.model] = 0
+            budget_count[model_cfg.name] = model_cfg.max_batch_size
+            per_model_requests[model_cfg.name] = 0
 
         return SchedulingBudget(
             request_per_model_budget=budget_count,

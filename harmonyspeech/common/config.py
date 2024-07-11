@@ -1,10 +1,9 @@
 from dataclasses import dataclass, fields
-from typing import Optional, TYPE_CHECKING, Union, List
+from typing import Optional, Union, List
 from loguru import logger
 
 import torch
 import yaml
-from transformers import PretrainedConfig
 
 from harmonyspeech.common.utils import is_cpu, is_hip
 from harmonyspeech.config_utils.config import get_config
@@ -48,6 +47,7 @@ class ModelConfig:
 
     def __init__(
         self,
+        name: str,
         model: str,
         model_type: str,
         max_batch_size: int,
@@ -61,6 +61,7 @@ class ModelConfig:
         code_revision: Optional[str] = None,
         enforce_eager: bool = True,
     ) -> None:
+        self.name = name
         self.model = model
         self.model_type = model_type
         self.max_batch_size = max_batch_size

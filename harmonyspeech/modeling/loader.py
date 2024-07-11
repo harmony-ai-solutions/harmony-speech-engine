@@ -1,9 +1,6 @@
 """Utilities for selecting and loading models."""
 import contextlib
-import gc
-from contextlib import nullcontext
 from typing import Type
-from loguru import logger
 
 import torch
 import torch.nn as nn

@@ -6,7 +6,7 @@ from typing import List, Optional, Type, Union, Iterable, Dict
 from loguru import logger
 
 import harmonyspeech
-from harmonyspeech.common.config import EngineConfig, ModelConfig
+from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import RequestInput
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import RequestOutput
@@ -68,7 +68,7 @@ class HarmonySpeechEngine:
                 model_config=model_cfg,
             )
             # Append the created executor to the dict of model executors
-            self.model_executors[model_cfg.model] = executor
+            self.model_executors[model_cfg.name] = executor
 
     @classmethod
     def from_engine_args(cls, engine_args: EngineArgs) -> "HarmonySpeechEngine":
