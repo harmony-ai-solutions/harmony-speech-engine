@@ -1,6 +1,6 @@
 from typing import Optional, List
 
-from harmonyspeech.common.request import RequestMetrics, ExecutorResult
+from harmonyspeech.common.metrics import RequestMetrics
 
 
 class RequestOutput:

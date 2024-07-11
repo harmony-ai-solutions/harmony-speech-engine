@@ -4,11 +4,10 @@ import time
 from functools import partial
 from typing import Type, Optional, Dict, Union, Callable, Tuple, List, Set, AsyncIterator, Iterable
 
-import ray
 from loguru import logger
 
 from harmonyspeech import HarmonySpeechEngine
-from harmonyspeech.common.config import ModelConfig
+from harmonyspeech.common.config import ModelConfig, EngineConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
@@ -288,12 +287,15 @@ class AsyncHarmonySpeech:
         self._errored_with: Optional[BaseException] = None
 
     @classmethod
-    def from_engine_args(cls,
-                         engine_args: AsyncEngineArgs,
-                         start_engine_loop: bool = True) -> "AsyncHarmonySpeech":
+    def from_engine_args_and_config(
+        cls,
+        engine_args: AsyncEngineArgs,
+        base_config: EngineConfig,
+        start_engine_loop: bool = True
+    ) -> "AsyncHarmonySpeech":
         """Creates an async LLM engine from the engine arguments."""
         # Create the engine configs.
-        engine_config = engine_args.create_engine_config()
+        engine_config = engine_args.create_engine_config(base_config)
 
         # if engine_config.device_config.device_type == "cpu":
         #     from harmonyspeech.executor.cpu_executor import CPUExecutor
@@ -302,7 +304,7 @@ class AsyncHarmonySpeech:
         #     from harmonyspeech.executor.gpu_executor import GPUExecutorAsync
         #     executor_class = GPUExecutorAsync
 
-        # Create the async TTS engine.
+        # Create the async Speech engine.
         engine = cls(**engine_config.to_dict(),
                      log_requests=not engine_args.disable_log_requests,
                      log_stats=not engine_args.disable_log_stats,
@@ -519,16 +521,10 @@ class AsyncHarmonySpeech:
 
     async def get_model_configs(self) -> List[ModelConfig]:
         """Get the model configuration of the HarmonySpeech engine."""
-        if self.engine_use_ray:
-            return await self.engine.get_model_configs.remote()
-        else:
-            return self.engine.get_model_configs()
+        return self.engine.get_model_configs()
 
     async def do_log_stats(self) -> None:
-        if self.engine_use_ray:
-            await self.engine.do_log_stats.remote()
-        else:
-            self.engine.do_log_stats()
+        self.engine.do_log_stats()
 
     async def check_health(self) -> None:
         """Raises an error if engine is unhealthy."""
@@ -537,11 +533,5 @@ class AsyncHarmonySpeech:
         if self.is_stopped:
             raise AsyncEngineDeadError("Background loop is stopped.")
 
-        if self.engine_use_ray:
-            try:
-                await self.engine.check_health.remote()
-            except ray.exceptions.RayActorError as e:
-                raise RuntimeError("Engine is dead.") from e
-        else:
-            await self.engine.check_health_async()
+        await self.engine.check_health_async()
         logger.debug(f"Health check took {time.perf_counter()-t}s")

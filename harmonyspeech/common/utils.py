@@ -1,5 +1,6 @@
 import asyncio
 import enum
+import gc
 import os
 import subprocess
 import uuid
@@ -216,6 +217,7 @@ def get_nvcc_cuda_version() -> Optional[Version]:
     release_idx = output.index("release") + 1
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
     return nvcc_cuda_version
+
 
 class CudaMemoryProfiler:
 

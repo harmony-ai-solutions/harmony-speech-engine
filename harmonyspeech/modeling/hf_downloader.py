@@ -15,9 +15,6 @@ from loguru import logger
 from safetensors.torch import load_file, safe_open, save_file
 from tqdm.auto import tqdm
 
-from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.logger import get_loading_progress_bar
-
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
 

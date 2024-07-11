@@ -23,7 +23,7 @@ def _set_default_torch_dtype(dtype: torch.dtype):
 
 
 def _get_model_cls(model_config: ModelConfig) -> Type[nn.Module]:
-    model_type = getattr(model_config, 'model', None)
+    model_type = getattr(model_config, 'model_type', None)
     model_cls = ModelRegistry.load_model_cls(model_type)
     if model_cls is not None:
         return model_cls
@@ -43,7 +43,11 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) 
         # Create a model instance.
         # The weights will be initialized as empty tensors.
         with torch.device(device_config.device):
-            model = model_class(model_config.hf_config, linear_method)
+            if hasattr(model_config.hf_config, "model"):
+                # Model class initialization for Harmony Speech Models and OpenVoice
+                model = model_class(**model_config.hf_config.model)
+            else:
+                model = model_class(model_config.hf_config, linear_method)
 
         if model_config.load_format == "dummy":
             # NOTE: For accurate performance evaluation, we assign

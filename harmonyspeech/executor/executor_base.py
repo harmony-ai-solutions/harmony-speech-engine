@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Set, Tuple
 
-from harmonyspeech.common.config import (DeviceConfig, ModelConfig, ParallelConfig)
+from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 
 

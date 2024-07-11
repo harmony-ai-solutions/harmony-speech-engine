@@ -25,11 +25,9 @@ class HarmonySpeechEngine:
 
     def __init__(
         self,
-        engine_config: EngineConfig,
         model_configs: Optional[List[ModelConfig]],
         log_stats: bool,
     ):
-        self.engine_config = engine_config
         self.model_configs = model_configs
         self.log_stats = log_stats
         self._verify_args()
@@ -50,7 +48,7 @@ class HarmonySpeechEngine:
         self.init_custom_executors()
 
         # Initialize Scheduler for requests across models
-        self.scheduler = Scheduler(model_configs=model_configs)
+        self.scheduler = Scheduler(model_configs=self.model_configs)
 
     def init_custom_executors(self) -> None:
         """
@@ -217,7 +215,7 @@ class HarmonySpeechEngine:
             >>> # Please see the example/ folder for more detailed examples.
             >>>
             >>> # initialize engine and request arguments
-            >>> engine = AphroditeEngine.from_engine_args(engine_args)
+            >>> engine = AphroditeEngine.from_engine_args_and_config(engine_args)
             >>> example_inputs = [(0, "What is LLM?",
             >>>    SamplingParams(temperature=0.0))]
             >>>
@@ -252,7 +250,6 @@ class HarmonySpeechEngine:
 
         request_outputs = self._process_model_outputs(
             outputs=output,
-            scheduled_requests_per_model=scheduler_outputs.scheduled_requests_per_model,
             ignored_requests=scheduler_outputs.ignored_requests
         )
 

@@ -40,6 +40,7 @@ class OpenAIServing:
         model_cards = [ModelCard(id=x, root=x) for x in self.available_models]
         return ModelList(data=model_cards)
 
+
     def create_error_response(
             self,
             message: str,

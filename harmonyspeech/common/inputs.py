@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, List
 
-from harmonyspeech.common.request import RequestMetrics
+from harmonyspeech.common.metrics import RequestMetrics
 from harmonyspeech.endpoints.openai.protocol import VoiceConversionRequest, TextToSpeechRequest, EmbedSpeakerRequest
 
 

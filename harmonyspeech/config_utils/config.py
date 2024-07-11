@@ -2,15 +2,16 @@ from typing import Optional
 
 from transformers import AutoConfig, PretrainedConfig
 
+from harmonyspeech.config_utils.configs.harmonyspeech import (
+    HarmonySpeechEncoderConfig,
+    HarmonySpeechSynthesizerConfig,
+    HarmonySpeechVocoderConfig
+)
 
 _CONFIG_REGISTRY = {
-    "baichuan": BaiChuanConfig,
-    "chatglm": ChatGLMConfig,
-    "dbrx": DbrxConfig,
-    "mpt": MPTConfig,
-    "qwen": QWenConfig,
-    "RefinedWeb": RWConfig,  # For tiiuae/falcon-40b(-instruct)
-    "RefinedWebModel": RWConfig,  # For tiiuae/falcon-7b(-instruct)
+    "HarmonySpeechEncoder": HarmonySpeechEncoderConfig,
+    "HarmonySpeechSynthesizer": HarmonySpeechSynthesizerConfig,
+    "HarmonySpeechVocoder": HarmonySpeechVocoderConfig,
 }
 
 
