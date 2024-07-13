@@ -8,7 +8,7 @@ from loguru import logger
 
 from harmonyspeech import HarmonySpeechEngine
 from harmonyspeech.common.config import ModelConfig, EngineConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput
+from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput, SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
     TextToSpeechRequest
@@ -205,7 +205,7 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
-        seq_group_metadata_list, scheduler_outputs = self.scheduler.schedule()
+        scheduler_outputs = self.scheduler.schedule()
 
         outputs = []
         if not scheduler_outputs.is_empty():
@@ -416,19 +416,25 @@ class AsyncHarmonySpeech:
     async def add_request(
         self,
         request_id: str,
-        request_input: RequestInput,
+        request_data: RequestInput,
         arrival_time: Optional[float] = None,
     ) -> AsyncStream:
         if self.log_requests:
             # Log TTS request
-            if isinstance(request_input, TextToSpeechRequestInput):
-                shortened_input = request_input.input_text
+            if isinstance(request_data, TextToSpeechRequestInput):
+                shortened_input = request_data.input_text
                 if self.max_log_len is not None:
                     if shortened_input is not None:
                         shortened_input = shortened_input[:self.max_log_len]
                 logger.info(
                     f"Received text-to-speech request {request_id}: "
                     f"input: {shortened_input!r}."
+                )
+
+            # Log Embedding request
+            if isinstance(request_data, SpeechEmbeddingRequestInput):
+                logger.info(
+                    f"Received text-to-speech request {request_id}"
                 )
 
         if not self.is_running:
@@ -446,7 +452,7 @@ class AsyncHarmonySpeech:
 
         stream = self._request_tracker.add_request(
             request_id,
-            request_input=request_input,
+            request_data=request_data,
             arrival_time=arrival_time
         )
 
@@ -455,14 +461,14 @@ class AsyncHarmonySpeech:
     async def generate(
         self,
         request_id: str,
-        request_input: RequestInput,
+        request_data: RequestInput,
     ) -> AsyncIterator[RequestOutput]:
         """
         Generate outputs for a request.
 
         Args:
             request_id: ID of the request
-            request_input: Input Object holding the request data
+            request_data: Input Object holding the request data
         Yields:
             The output `RequestOutput` objects from the HarmonySpeechEngine for the
             request.
@@ -474,7 +480,7 @@ class AsyncHarmonySpeech:
         try:
             stream = await self.add_request(
                 request_id=request_id,
-                request_input=request_input,
+                request_data=request_data,
                 arrival_time=arrival_time,
             )
 

@@ -40,7 +40,6 @@ class OpenAIServing:
         model_cards = [ModelCard(id=x, root=x) for x in self.available_models]
         return ModelList(data=model_cards)
 
-
     def create_error_response(
             self,
             message: str,
@@ -64,7 +63,7 @@ class OpenAIServing:
         return json_str
 
     async def _check_model(self, request) -> Optional[ErrorResponse]:
-        if request.model in [self.available_models]:
+        if request.model in self.available_models:
             return
         return self.create_error_response(
             message=f"The model `{request.model}` does not exist.",

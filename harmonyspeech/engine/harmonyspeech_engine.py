@@ -7,12 +7,13 @@ from loguru import logger
 
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import RequestInput
+from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import RequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
-from harmonyspeech.processing.scheduler import Scheduler
+from harmonyspeech.engine.metrics import Stats, StatLogger
+from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
 
@@ -50,6 +51,13 @@ class HarmonySpeechEngine:
         # Initialize Scheduler for requests across models
         self.scheduler = Scheduler(model_configs=self.model_configs)
 
+        # Metric Logging.
+        if self.log_stats:
+            self.stat_logger = StatLogger(
+                local_interval=_LOCAL_LOGGING_INTERVAL_SEC,
+                labels=dict()
+            )
+
     def init_custom_executors(self) -> None:
         """
         Initialize custom executors for each provided ModelConfig.
@@ -60,8 +68,8 @@ class HarmonySpeechEngine:
                 from harmonyspeech.executor.cpu_executor import CPUExecutor
                 executor_class = CPUExecutor
             else:
-                from harmonyspeech.executor.gpu_executor import GPUExecutor
-                executor_class = GPUExecutor
+                from harmonyspeech.executor.gpu_executor import GPUExecutorAsync
+                executor_class = GPUExecutorAsync
 
             # Create a new executor for each ModelConfig
             executor = executor_class(
@@ -91,6 +99,13 @@ class HarmonySpeechEngine:
         #     model_cfg.verify_with_parallel_config(self.parallel_config)
         return None
 
+    def check_reroute_request_to_model(self, request: RequestInput):
+        if request.model == "harmonyspeech":
+            if isinstance(request, SpeechEmbeddingRequestInput):
+                for cfg in self.model_configs:
+                    if cfg.model_type == "HarmonySpeechEncoder":
+                        request.model = cfg.name
+
     def add_request(
         self,
         request_id: str,
@@ -106,7 +121,7 @@ class HarmonySpeechEngine:
 
         Args:
             request_id: The unique ID of the request.
-            request_data: The incoming TextToSpeechRequest data.
+            request_data: The incoming Request data.
             arrival_time: The arrival time of the request. If None, we use
                 the current monotonic time.
 
@@ -117,7 +132,10 @@ class HarmonySpeechEngine:
         if arrival_time is None:
             arrival_time = time.monotonic()
 
-        # Add the sequence group to the scheduler.
+        # Route to correct model if necessary
+        self.check_reroute_request_to_model(request=request_data)
+
+        # Add the request to the scheduler.
         self.scheduler.add_request(EngineRequest(
             request_id=request_id,
             request_data=request_data,
@@ -163,6 +181,10 @@ class HarmonySpeechEngine:
 
         Returns RequestOutputs that can be returned to the client.
         """
+        # Check for Re-Schedule conditions
+        # TODO
+
+
         # Create the outputs and update the requests
         request_outputs: List[RequestOutput] = []
         for result in outputs:
@@ -178,7 +200,7 @@ class HarmonySpeechEngine:
             )
             request_outputs.append(request_output)
 
-        # Free the finished sequence groups.
+        # Free the finished requests.
         self.scheduler.free_finished_requests()
 
         return request_outputs
@@ -259,6 +281,33 @@ class HarmonySpeechEngine:
         #         self._get_stats(scheduler_outputs, model_output=output))
 
         return request_outputs
+
+    def do_log_stats(self) -> None:
+        """Forced log when no requests active."""
+        if self.log_stats:
+            self.stat_logger.log(self._get_stats(scheduler_outputs=None))
+
+    def _get_stats(
+            self,
+            scheduler_outputs: Optional[SchedulerOutputs]) -> Stats:
+        """Get Stats to be Logged to Prometheus.
+        Args:
+            scheduler_outputs: Optional, used to populate metrics related to
+                the scheduled batch,
+            model_output: Optional, used to emit speculative decoding metrics
+                which are created by the workers.
+        """
+        now = time.monotonic()
+
+        # Scheduler State
+        num_running = len(self.scheduler.running)
+        num_waiting = len(self.scheduler.waiting)
+
+        return Stats(
+            now=now,
+            num_running=num_running,
+            num_waiting=num_waiting,
+        )
 
     def check_health(self) -> None:
         for model_executor in self.model_executors:

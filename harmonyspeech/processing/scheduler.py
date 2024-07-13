@@ -173,7 +173,7 @@ class Scheduler:
         while waiting_queue:
             # Get Request and model name
             request = waiting_queue[0]
-            model_name = request.request_input.model
+            model_name = request.request_data.model
             # Remove from queue
             waiting_queue.popleft()
 
@@ -188,7 +188,7 @@ class Scheduler:
 
             # Can schedule this request.
             requests.append(request)
-            budget.add_num_requests(request.request_input.model, 1)
+            budget.add_num_requests(model_name, 1)
             # Keep track of model name in the new scheduled list
             # This way we know it's safe to add new requests for this model
             if model_name not in new_scheduled_for_models:

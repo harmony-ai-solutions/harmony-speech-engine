@@ -17,8 +17,9 @@ import harmonyspeech
 from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
-from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest, ErrorResponse
+from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest, ErrorResponse, EmbedSpeakerRequest
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from fastapi.responses import (HTMLResponse, JSONResponse, Response, StreamingResponse)
@@ -28,10 +29,11 @@ TIMEOUT_KEEP_ALIVE = 5  # seconds
 
 engine: Optional[AsyncHarmonySpeech] = None
 engine_args: Optional[AsyncEngineArgs] = None
+engine_config: Optional[EngineConfig] = None
 openai_serving_tts: OpenAIServingTextToSpeech = None
 # TODO: STT
 # TODO: VC
-# TODO: Embed
+openai_serving_embedding: OpenAIServingVoiceEmbedding = None
 
 router = APIRouter()
 
@@ -72,9 +74,9 @@ async def show_version(x_api_key: Optional[str] = Header(None)):
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createSpeech
 @router.post("/v1/audio/speech")
-async def create_completion(request: TextToSpeechRequest,
-                            raw_request: Request,
-                            x_api_key: Optional[str] = Header(None)):
+async def create_speech(request: TextToSpeechRequest,
+                        raw_request: Request,
+                        x_api_key: Optional[str] = Header(None)):
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -87,6 +89,25 @@ async def create_completion(request: TextToSpeechRequest,
 @router.get("/v1/audio/models")
 async def show_available_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_tts.show_available_models()
+    return JSONResponse(content=models.model_dump())
+
+
+@router.post("/v1/embed/speaker")
+async def create_embedding(request: EmbedSpeakerRequest,
+                        raw_request: Request,
+                        x_api_key: Optional[str] = Header(None)):
+    generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    if request.stream:
+        return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.get("/v1/embed/models")
+async def show_available_models(x_api_key: Optional[str] = Header(None)):
+    models = await openai_serving_embedding.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
@@ -160,7 +181,8 @@ def run_server(args):
 
     logger.debug(f"args: {args}")
 
-    global engine, engine_args, openai_serving_tts  # TODO: Add other Endpoint serving classes here
+    global engine, engine_args, engine_config, openai_serving_tts, openai_serving_embedding
+    # TODO: Add other Endpoint serving classes here
 
     if args.config_file_path is not None:
         config_file_path = args.config_file_path
@@ -168,14 +190,17 @@ def run_server(args):
         config_file_path = "config.yml"
 
     # Load Args from Config file if there is one
-    engine_config = EngineConfig.load_config_from_yaml(config_file_path)
     engine_args = AsyncEngineArgs.from_cli_args(args)
+    engine_config = EngineConfig.load_config_from_yaml(config_file_path)
     engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config)
 
-    available_models = []
     openai_serving_tts = OpenAIServingTextToSpeech(
         engine,
-        available_models
+        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+    )
+    openai_serving_embedding = OpenAIServingVoiceEmbedding(
+        engine,
+        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
 

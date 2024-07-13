@@ -196,7 +196,9 @@ class SpeakerEncoder(nn.Module):
         load_format: str = "auto",
         revision: Optional[str] = None,
     ):
-        load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        checkpoint = torch.load(model_name_or_path + "/encoder.pt")
+        self.load_state_dict(checkpoint["model_state"])
+        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
 
 
 class SeriesPredictor(nn.Module):

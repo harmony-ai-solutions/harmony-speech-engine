@@ -53,8 +53,8 @@ class ModelRunnerBase:
         inputs = self.prepare_inputs(requests_to_batch)
         outputs = []
 
-        model_name = getattr(self.model_config, 'model_name', None)
-        if model_name == "HarmonySpeechEncoder":
+        model_type = getattr(self.model_config, 'model_type', None)
+        if model_type == "HarmonySpeechEncoder":
             # FIXME: This is not properly batched
             def embed_utterance(utterances):
                 utterances_tensor = torch.from_numpy(utterances).to(self.device)
@@ -85,7 +85,7 @@ class ModelRunnerBase:
                 outputs.append(result)
 
         else:
-            raise NotImplementedError(f"Model {model_name} is not supported")
+            raise NotImplementedError(f"Model {model_type} is not supported")
 
         return outputs
 
@@ -97,8 +97,8 @@ class ModelRunnerBase:
         :return:
         """
         inputs = []
-        model_name = getattr(self.model_config, 'model_name', None)
-        if model_name == "HarmonySpeechEncoder":
+        model_type = getattr(self.model_config, 'model_type', None)
+        if model_type == "HarmonySpeechEncoder":
             for r in requests_to_batch:
                 if (
                     isinstance(r.request_data, TextToSpeechRequestInput) or
@@ -110,14 +110,14 @@ class ModelRunnerBase:
                         f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                         f"SpeechEmbeddingRequestInput")
             return self._prepare_harmonyspeech_encoder_inputs(inputs)
-        elif model_name == "HarmonySpeechSynthesizer":
+        elif model_type == "HarmonySpeechSynthesizer":
             for r in requests_to_batch:
                 if isinstance(r.request_data, TextToSpeechRequestInput):
                     inputs.append(r.request_data)
                 else:
                     raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput")
             return self._prepare_harmonyspeech_synthesizer_inputs(inputs)
-        elif model_name == "HarmonySpeechVocoder":
+        elif model_type == "HarmonySpeechVocoder":
             for r in requests_to_batch:
                 if (
                     isinstance(r.request_data, TextToSpeechRequestInput) or
@@ -130,7 +130,7 @@ class ModelRunnerBase:
                         f"VocodeAudioRequestInput")
             return self._prepare_harmonyspeech_vocoder_inputs(inputs)
         else:
-            raise NotImplementedError(f"Cannot provide Inputs for model {model_name}")
+            raise NotImplementedError(f"Cannot provide Inputs for model {model_type}")
 
     def _prepare_harmonyspeech_encoder_inputs(self, requests_to_batch: List[Union[
         TextToSpeechRequestInput,

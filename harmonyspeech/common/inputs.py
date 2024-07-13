@@ -67,12 +67,12 @@ class VoiceConversionRequestInput(RequestInput):
     def from_openai(cls, request_id: str, request: "VoiceConversionRequest"):
         return cls(
             request_id=request_id,
-            model=request.get('model', ''),
-            source_audio=request.get('source_audio', None),
-            target_audio=request.get('target_audio', None),
-            target_embedding=request.get('target_embedding', None),
-            generation_options=request.get('generation_options', None),
-            output_options=request.get('output_options', None),
+            model=getattr(request, 'model', ''),
+            source_audio=getattr(request, 'source_audio', None),
+            target_audio=getattr(request, 'target_audio', None),
+            target_embedding=getattr(request, 'target_embedding', None),
+            generation_options=getattr(request, 'generation_options', None),
+            output_options=getattr(request, 'output_options', None),
         )
 
 
@@ -111,14 +111,14 @@ class TextToSpeechRequestInput(RequestInput):
     def from_openai(cls, request_id: str, request: "TextToSpeechRequest"):
         return cls(
             request_id=request_id,
-            model=request.get('model', ''),
-            input_text=request.get('input_text', ''),
-            voice_id=request.get('voice_id', None),
-            input_audio=request.get('input_audio', None),
-            input_embedding=request.get('input_embedding', None),
-            generation_options=request.get('generation_options', None),
-            output_options=request.get('output_options', None),
-            post_generation_filters=request.get('post_generation_filters', None)
+            model=getattr(request, 'model', ''),
+            input_text=getattr(request, 'input_text', ''),
+            voice_id=getattr(request, 'voice_id', None),
+            input_audio=getattr(request, 'input_audio', None),
+            input_embedding=getattr(request, 'input_embedding', None),
+            generation_options=getattr(request, 'generation_options', None),
+            output_options=getattr(request, 'output_options', None),
+            post_generation_filters=getattr(request, 'post_generation_filters', None)
         )
 
 
@@ -145,8 +145,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
     def from_openai(cls, request_id: str, request: "EmbedSpeakerRequest"):
         return cls(
             request_id=request_id,
-            model=request.get('model', ''),
-            input_audio=request.get('input_audio', None),
+            model=getattr(request, 'model', ''),
+            input_audio=getattr(request, 'input_audio', None),
         )
 
 
@@ -173,6 +173,6 @@ class VocodeAudioRequestInput(RequestInput):
     def from_openai(cls, request_id: str, request: "VocodeAudioRequest"):
         return cls(
             request_id=request_id,
-            model=request.get('model', ''),
-            input_audio=request.get('input_audio', None),
+            model=getattr(request, 'model', ''),
+            input_audio=getattr(request, 'input_audio', None),
         )

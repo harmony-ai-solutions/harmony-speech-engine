@@ -330,6 +330,17 @@ def load_weights_generic(
             # Skip loading extra bias for GPTQ models.
             if name.endswith(".bias") and name not in params_dict:
                 continue
+
+            # if isinstance(loaded_weight, dict):
+            #     for weight_name, weight in loaded_weight.items():
+            #         try:
+            #             param = params_dict[weight_name]
+            #             weight_loader = getattr(param, "weight_loader",
+            #                                     default_weight_loader)
+            #             weight_loader(param, loaded_weight[weight_name])
+            #         except KeyError as e:
+            #             logger.warning(f"Param {weight_name} not found in params_dict, ignoring and attempting to continue")
+            # else:
             try:
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader",

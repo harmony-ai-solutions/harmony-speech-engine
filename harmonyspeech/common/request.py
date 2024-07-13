@@ -52,7 +52,7 @@ class EngineRequest:
         arrival_time: float,
     ) -> None:
         self.request_id = request_id
-        self.request_data = request_data,
+        self.request_data = request_data
         self.metrics = RequestMetrics(
             arrival_time=arrival_time,
             first_scheduled_time=None,

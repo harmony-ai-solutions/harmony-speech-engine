@@ -1,15 +1,24 @@
+import copy
 import time
 from typing import List, Union, AsyncGenerator, AsyncIterator
 
 from fastapi import Request
 from loguru import logger
 
+from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
 from harmonyspeech.common.utils import random_uuid
 from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, TextToSpeechRequest
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+
+
+# Add new model classes which allow handling TTS Requests here
+# If multiple models need to be initialized to process request, add multiple to the list
+_TTS_MODEL_Groups = {
+    "harmonyspeech": ["HarmonySpeechSynthesizer", "HarmonySpeechVocoder"]
+}
 
 
 class OpenAIServingTextToSpeech(OpenAIServing):
@@ -20,6 +29,18 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         available_models: List[str],
     ):
         super().__init__(engine=engine, available_models=available_models)
+
+    @staticmethod
+    def models_from_config(configured_models: List[ModelConfig]):
+        check_dict = copy.deepcopy(_TTS_MODEL_Groups)
+        for m in configured_models:
+            for group_name, remaining_models in check_dict.items():
+                if len(remaining_models) == 0:
+                    continue
+                if m.model_type in remaining_models:
+                    check_dict[group_name].remove(m.model_type)
+
+        return [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request
@@ -34,7 +55,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_input=TextToSpeechRequestInput.from_openai(
+            request_data=TextToSpeechRequestInput.from_openai(
                 request_id=request_id,
                 request=request
             ),
