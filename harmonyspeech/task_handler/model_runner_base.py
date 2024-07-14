@@ -1,3 +1,4 @@
+import base64
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Union
@@ -49,44 +50,48 @@ class ModelRunnerBase:
         :param requests_to_batch:
         :return:
         """
-        model_executable = self.model
         inputs = self.prepare_inputs(requests_to_batch)
         outputs = []
 
         model_type = getattr(self.model_config, 'model_type', None)
         if model_type == "HarmonySpeechEncoder":
-            # FIXME: This is not properly batched
-            def embed_utterance(utterances):
-                utterances_tensor = torch.from_numpy(utterances).to(self.device)
-                kwargs = {
-                    "utterances": utterances_tensor
-                }
-                partial_embeds = model_executable(**kwargs).detach().cpu().numpy()
-                # Compute the utterance embedding from the partial embeddings
-                raw_embed = np.mean(partial_embeds, axis=0)
-                embed = raw_embed / np.linalg.norm(raw_embed, 2)
-                return embed
-
-            for i, x in enumerate(inputs):
-                initial_request = requests_to_batch[i]
-                request_id = initial_request.request_id
-                metrics = initial_request.metrics
-                metrics.finished_time = time.time()
-
-                result = ExecutorResult(
-                    request_id=request_id,
-                    result_data=SpeechEmbeddingRequestOutput(
-                        request_id=request_id,
-                        output=embed_utterance(x),
-                        finish_reason="stop",
-                        metrics=metrics
-                    )
-                )
-                outputs.append(result)
-
+            outputs = self._execute_harmonyspeech_encoder(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
+        return outputs
+
+    def _execute_harmonyspeech_encoder(self, inputs, requests_to_batch):
+        # FIXME: This is not properly batched
+        def embed_utterance(utterances):
+            utterances_tensor = torch.from_numpy(utterances).to(self.device)
+            kwargs = {
+                "utterances": utterances_tensor
+            }
+            partial_embeds = self.model(**kwargs).detach().cpu().numpy()
+            # Compute the utterance embedding from the partial embeddings
+            raw_embed = np.mean(partial_embeds, axis=0)
+            embed = raw_embed / np.linalg.norm(raw_embed, 2)
+            embed = base64.b64encode(embed).decode('UTF-8')
+            return embed
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            request_id = initial_request.request_id
+            metrics = initial_request.metrics
+            metrics.finished_time = time.time()
+
+            result = ExecutorResult(
+                request_id=request_id,
+                result_data=SpeechEmbeddingRequestOutput(
+                    request_id=request_id,
+                    output=embed_utterance(x),
+                    finish_reason="stop",
+                    metrics=metrics
+                )
+            )
+            outputs.append(result)
         return outputs
 
     def prepare_inputs(self, requests_to_batch: List[EngineRequest]):
@@ -138,6 +143,7 @@ class ModelRunnerBase:
     ]]):
         # We're expecting audio in waveform format in the requests
         def prepare(request):
+            # FIXME: This is not properly batched
             preprocessed_audio = preprocess_wav(request.input_audio)
             input_frames = get_input_frames(preprocessed_audio)
             # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)

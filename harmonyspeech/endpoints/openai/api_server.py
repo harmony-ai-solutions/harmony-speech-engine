@@ -99,8 +99,8 @@ async def create_embedding(request: EmbedSpeakerRequest,
     generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
-    if request.stream:
-        return StreamingResponse(content=generator, media_type="text/event-stream")
+    # if request.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
     else:
         return JSONResponse(content=generator.model_dump())
 

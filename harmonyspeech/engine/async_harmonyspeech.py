@@ -434,7 +434,7 @@ class AsyncHarmonySpeech:
             # Log Embedding request
             if isinstance(request_data, SpeechEmbeddingRequestInput):
                 logger.info(
-                    f"Received text-to-speech request {request_id}"
+                    f"Received speech embedding request {request_id}"
                 )
 
         if not self.is_running:

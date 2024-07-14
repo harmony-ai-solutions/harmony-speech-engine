@@ -3,6 +3,7 @@ model_configs:
     model: "models/harmony-ai-solutions/harmonyspeech/encoder"
     model_type: "HarmonySpeechEncoder"
     max_batch_size: 10
+    dtype: "float32"
     device_config:
       device: "cpu"
 

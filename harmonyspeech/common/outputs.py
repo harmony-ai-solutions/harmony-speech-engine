@@ -32,7 +32,7 @@ class TextToSpeechRequestOutput(RequestOutput):
     Args:
         request_id: The unique ID of the request.
         text: The text string used to generate the result.
-        output: The generated output data.
+        output: The generated output data, encoded in base64.
         finish_reason: Reason why this request finished, if set.
         metrics: Metrics associated with the request.
     """
@@ -41,7 +41,7 @@ class TextToSpeechRequestOutput(RequestOutput):
         self,
         request_id: str,
         text: str,
-        output: bytes,
+        output: str,
         finish_reason: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ) -> None:
@@ -64,7 +64,7 @@ class SpeechEmbeddingRequestOutput(RequestOutput):
 
     Args:
         request_id: The unique ID of the request.
-        output: The generated output data.
+        output: The generated output data, encoded in base64.
         finish_reason: Reason why this request finished, if set.
         metrics: Metrics associated with the request.
     """
@@ -72,7 +72,7 @@ class SpeechEmbeddingRequestOutput(RequestOutput):
     def __init__(
         self,
         request_id: str,
-        output: bytes,
+        output: str,
         finish_reason: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ) -> None:

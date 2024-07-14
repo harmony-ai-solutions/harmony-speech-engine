@@ -62,11 +62,24 @@ class VoiceConversionRequest(BaseRequest):
     Used to convert the tone or nature of a voice in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
-    source_audio: bytes = Field(default=None, description="Binary audio data to be processed")
-    target_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
-    target_embedding: Optional[bytes] = Field(default=None, description="Binary embedding of the reference speaker for converting the source - Faster than providing a target audio file")
-    generation_options: Optional[GenerationOptions] = Field(default=None, description="Options for generating a speech request, see documentation for possible values")
-    output_options: Optional[AudioOutputOptions] = Field(default=None, description="Options for returning the generated audio, see documentation for possible values")
+    source_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    target_audio: Optional[str] = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+    )
+    target_embedding: Optional[str] = Field(
+        default=None,
+        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+                    "Faster than providing a target audio file"
+    )
+    generation_options: Optional[GenerationOptions] = Field(
+        default=None,
+        description="Options for generating a speech request, see documentation for possible values"
+    )
+    output_options: Optional[AudioOutputOptions] = Field(
+        default=None,
+        description="Options for returning the generated audio, see documentation for possible values"
+    )
 
 
 class TextToSpeechRequest(BaseRequest):
@@ -77,12 +90,31 @@ class TextToSpeechRequest(BaseRequest):
     Based on OpenAI TTS API; extended for Harmony Speech Engine features.
     """
     input: str = Field(default="", description="the text to synthesize")
-    voice: Optional[str] = Field(default=None, description="ID of the voice to synthesize - only if the target model supports voice IDs")
-    input_audio: Optional[bytes] = Field(default=None, description="Binary audio data of the reference speaker for converting the source")
-    target_embedding: Optional[bytes] = Field(default=None, description="Binary embedding of the reference speaker for converting the source - Faster than providing a target audio file")
-    generation_options: Optional[GenerationOptions] = Field(default=None, description="Options for generating a speech request, see documentation for possible values")
-    output_options: Optional[AudioOutputOptions] = Field(default=None, description="Options for returning the generated audio, see documentation for possible values")
-    post_generation_filters: Optional[List[VoiceConversionRequest]] = Field(default_factory=list, description="List of Post-Generation filters to apply to the generated audio.")
+    voice: Optional[str] = Field(
+        default=None,
+        description="ID of the voice to synthesize - only if the target model supports voice IDs"
+    )
+    input_audio: Optional[str] = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+    )
+    target_embedding: Optional[str] = Field(
+        default=None,
+        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+                    "Faster than providing a target audio file"
+    )
+    generation_options: Optional[GenerationOptions] = Field(
+        default=None,
+        description="Options for generating a speech request, see documentation for possible values"
+    )
+    output_options: Optional[AudioOutputOptions] = Field(
+        default=None,
+        description="Options for returning the generated audio, see documentation for possible values"
+    )
+    post_generation_filters: Optional[List[VoiceConversionRequest]] = Field(
+        default_factory=list,
+        description="List of Post-Generation filters to apply to the generated audio."
+    )
 
 
 class BaseResponse(BaseModel):
@@ -96,7 +128,7 @@ class AudioDataResponse(BaseResponse):
     AudioDataResponse
     Result Audio Data
     """
-    data: bytes = Field(default=None, description="Audio Bytes in requested format of the initial request")
+    data: str = Field(default=None, description="Audio Bytes in requested format of the initial request")
 
 
 class TextToSpeechResponse(AudioDataResponse):
@@ -122,9 +154,15 @@ class SpeechTranscribeRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
-    file: bytes = Field(default=None, description="Binary audio data to be processed")
-    get_language: Optional[bool] = Field(default=False, description="whether to return the source language tag. Check model description if supported.")
-    get_timestamps: Optional[bool] = Field(default=False, description="whether to return the word timestamps. Check model description if supported.")
+    file: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    get_language: Optional[bool] = Field(
+        default=False,
+        description="whether to return the source language tag. Check model description if supported."
+    )
+    get_timestamps: Optional[bool] = Field(
+        default=False,
+        description="whether to return the word timestamps. Check model description if supported."
+    )
 
 
 class SpeechToTextResponse(BaseResponse):
@@ -141,10 +179,11 @@ class SpeechToTextResponse(BaseResponse):
 class EmbedSpeakerRequest(BaseRequest):
     """
     EmbedSpeakerRequest
-    Used to create a Speaker Embedding form a provided audio, which can later be re-used for Text-to-Speech or Voice Conversion functionality.
+    Used to create a Speaker Embedding form a provided audio, which can later be re-used for Text-to-Speech or
+    Voice Conversion functionality.
     Please refer to the documentation whether an embedding is compatible between different models.
     """
-    input_audio: bytes = Field(default=None, description="Binary audio data to be processed")
+    input_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
 
 
 class EmbedSpeakerResponse(BaseResponse):
@@ -153,7 +192,10 @@ class EmbedSpeakerResponse(BaseResponse):
     Result Speaker Embedding
     """
     id: str = Field(default_factory=lambda: f"embed-{random_uuid()}")
-    data: bytes = Field(default=None, description="Speaker embedding data for the audio provided in the initial request")
+    data: str = Field(
+        default=None,
+        description="Speaker embedding data for the audio provided in the initial request, encoded in base64"
+    )
 
 
 class VocodeAudioRequest(BaseRequest):
@@ -161,7 +203,7 @@ class VocodeAudioRequest(BaseRequest):
     VocodeAudioRequest
     Used to run a vocoder model over a provided input audio
     """
-    input_audio: bytes = Field(default=None, description="Binary audio data to be processed")
+    input_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
 
 
 class VocodeAudioResponse(AudioDataResponse):

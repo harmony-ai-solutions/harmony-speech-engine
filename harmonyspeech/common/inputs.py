@@ -45,9 +45,9 @@ class VoiceConversionRequestInput(RequestInput):
         self,
         request_id: str,
         model: str,
-        source_audio: bytes,
-        target_audio: Optional[bytes],
-        target_embedding: Optional[bytes],
+        source_audio: str,
+        target_audio: Optional[str],
+        target_embedding: Optional[str],
         generation_options: Optional[TextToSpeechGenerationOptions],
         output_options: Optional[TextToSpeechAudioOutputOptions],
         metrics: Optional[RequestMetrics] = None,
@@ -87,8 +87,8 @@ class TextToSpeechRequestInput(RequestInput):
         model: str,
         input_text: str,
         voice_id: Optional[str] = None,
-        input_audio: Optional[bytes] = None,
-        input_embedding: Optional[bytes] = None,
+        input_audio: Optional[str] = None,
+        input_embedding: Optional[str] = None,
         generation_options: Optional[TextToSpeechGenerationOptions] = None,
         output_options: Optional[TextToSpeechAudioOutputOptions] = None,
         post_generation_filters: Optional[List[VoiceConversionRequestInput]] = None,
@@ -131,7 +131,7 @@ class SpeechEmbeddingRequestInput(RequestInput):
         self,
         request_id: str,
         model: str,
-        input_audio: Optional[bytes] = None,
+        input_audio: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -159,7 +159,7 @@ class VocodeAudioRequestInput(RequestInput):
         self,
         request_id: str,
         model: str,
-        input_audio: Optional[bytes] = None,
+        input_audio: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
