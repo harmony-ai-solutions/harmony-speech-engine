@@ -61,7 +61,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             ),
         )
 
-        if request.output_options.stream:
+        if request.output_options and request.output_options.stream:
             # FIXME: Add Stream Output
             error = "Stream output is not yet supported"
             logger.error(error)

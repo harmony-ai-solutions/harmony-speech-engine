@@ -20,6 +20,7 @@ model_configs:
     max_batch_size: 10
     device_config:
       device: "cpu"
+
 #    download_dir: "models/harmonyspeech/encoder"
 #    load_format: "pt"
 #    dtype: "float32"

@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, List, Dict
 
 from torch.nn import Embedding
 from torch.nn.utils import clip_grad_norm_
@@ -261,7 +261,7 @@ class ForwardTacotron(nn.Module):
                  postnet_dropout: float,
                  n_mels: int,
                  speaker_embed_dims: int,
-                 padding_value=-11.5129):
+                 padding_value: float):
         super().__init__()
         self.rnn_dims = rnn_dims
         self.padding_value = padding_value
@@ -494,7 +494,8 @@ class ForwardTacotron(nn.Module):
         load_format: str = "auto",
         revision: Optional[str] = None,
     ):
-        load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        self.load(model_name_or_path + "/synthesizer.pt")
 
     # @classmethod
     # def from_config(cls, config: Dict[str, Any]) -> 'ForwardTacotron':
@@ -516,21 +517,21 @@ class MelGANGenerator(torch.nn.Module):
 
     def __init__(
         self,
-        in_channels=80,
-        out_channels=1,
-        kernel_size=7,
-        channels=512,
-        bias=True,
-        upsample_scales=[8, 8, 2, 2],
-        stack_kernel_size=3,
-        stacks=3,
-        nonlinear_activation="LeakyReLU",
-        nonlinear_activation_params={"negative_slope": 0.2},
-        pad="ReflectionPad1d",
-        pad_params={},
-        use_final_nonlinear_activation=True,
-        use_weight_norm=True,
-        use_causal_conv=False,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        channels: int,
+        bias: bool,
+        upsample_scales: List[int],
+        stack_kernel_size: int,
+        stacks: int,
+        nonlinear_activation: str,
+        nonlinear_activation_params: Dict,
+        pad: str,
+        pad_params: Dict,
+        use_final_nonlinear_activation: bool,
+        use_weight_norm: bool,
+        use_causal_conv: bool,
     ):
         """Initialize MelGANGenerator module.
 
@@ -767,4 +768,6 @@ class MelGANGenerator(torch.nn.Module):
         load_format: str = "auto",
         revision: Optional[str] = None,
     ):
-        load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        checkpoint = torch.load(model_name_or_path + "/vocoder.pt")
+        self.load_state_dict(checkpoint["model"]["generator"])

@@ -7,12 +7,14 @@ import numpy as np
 import torch
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput, VocodeAudioRequestInput
+from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput, VocodeRequestInput, \
+    SynthesisRequestInput
 from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling.loader import get_model
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
+from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
 
 
 class ModelRunnerBase:
@@ -84,6 +86,7 @@ class ModelRunnerBase:
 
             result = ExecutorResult(
                 request_id=request_id,
+                input_data=initial_request.request_data,
                 result_data=SpeechEmbeddingRequestOutput(
                     request_id=request_id,
                     output=embed_utterance(x),
@@ -117,7 +120,10 @@ class ModelRunnerBase:
             return self._prepare_harmonyspeech_encoder_inputs(inputs)
         elif model_type == "HarmonySpeechSynthesizer":
             for r in requests_to_batch:
-                if isinstance(r.request_data, TextToSpeechRequestInput):
+                if (
+                    isinstance(r.request_data, TextToSpeechRequestInput) or
+                    isinstance(r.request_data, SynthesisRequestInput)
+                ):
                     inputs.append(r.request_data)
                 else:
                     raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput")
@@ -126,7 +132,7 @@ class ModelRunnerBase:
             for r in requests_to_batch:
                 if (
                     isinstance(r.request_data, TextToSpeechRequestInput) or
-                    isinstance(r.request_data, VocodeAudioRequestInput)
+                    isinstance(r.request_data, VocodeRequestInput)
                 ):
                     inputs.append(r.request_data)
                 else:
@@ -144,7 +150,9 @@ class ModelRunnerBase:
         # We're expecting audio in waveform format in the requests
         def prepare(request):
             # FIXME: This is not properly batched
-            preprocessed_audio = preprocess_wav(request.input_audio)
+            # Make sure Audio is decoded from Base64
+            input_audio = base64.b64decode(request.input_audio)
+            preprocessed_audio = preprocess_wav(input_audio)
             input_frames = get_input_frames(preprocessed_audio)
             # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
             return input_frames
@@ -154,13 +162,13 @@ class ModelRunnerBase:
 
         return inputs
 
-    def _prepare_harmonyspeech_synthesizer_inputs(self, requests_to_batch: List[Union[TextToSpeechRequestInput]]):
+    def _prepare_harmonyspeech_synthesizer_inputs(self, requests_to_batch: List[Union[
+        TextToSpeechRequestInput,
+        SynthesisRequestInput
+    ]]):
         # We're expecting audio in waveform format in the requests
         def prepare(request):
-            preprocessed_audio = preprocess_wav(request.input_audio)
-            input_frames = get_input_frames(preprocessed_audio)
-            # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
-            return input_frames
+            return prepare_synthesis_inputs(request.input_text, request.target_embedding)
 
         with ThreadPoolExecutor() as executor:
             inputs = list(executor.map(prepare, requests_to_batch))
@@ -169,7 +177,7 @@ class ModelRunnerBase:
 
     def _prepare_harmonyspeech_vocoder_inputs(self, requests_to_batch: List[Union[
         TextToSpeechRequestInput,
-        VocodeAudioRequestInput
+        VocodeRequestInput
     ]]):
         # We're expecting audio in waveform format in the requests
         def prepare(request):

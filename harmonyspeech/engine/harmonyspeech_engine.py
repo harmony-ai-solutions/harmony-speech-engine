@@ -7,9 +7,10 @@ from loguru import logger
 
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput
+from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput, VocodeRequestInput, \
+    SynthesisRequestInput, TextToSpeechRequestInput
 from harmonyspeech.common.logger import setup_logger
-from harmonyspeech.common.outputs import RequestOutput
+from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import Stats, StatLogger
@@ -100,11 +101,81 @@ class HarmonySpeechEngine:
         return None
 
     def check_reroute_request_to_model(self, request: RequestInput):
-        if request.model == "harmonyspeech":
-            if isinstance(request, SpeechEmbeddingRequestInput):
+        # Harmonyspeech TTS Processing
+        if request.requested_model == "harmonyspeech":
+            if (isinstance(request, SpeechEmbeddingRequestInput) or
+                (
+                    isinstance(request, TextToSpeechRequestInput) and
+                    request.input_audio is not None and  #
+                    request.input_embedding is None  # Output of Embedding becomes input for synthesis
+                )
+            ):
                 for cfg in self.model_configs:
                     if cfg.model_type == "HarmonySpeechEncoder":
                         request.model = cfg.name
+                        break
+            elif (isinstance(request, SynthesisRequestInput) or
+                    (
+                        isinstance(request, TextToSpeechRequestInput) and
+                        request.input_audio is None and  # Removing Input audio after Embedding Step
+                        request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                    )
+                ):
+                for cfg in self.model_configs:
+                    if cfg.model_type == "HarmonySpeechSynthesizer":
+                        request.model = cfg.name
+                        break
+            elif (isinstance(request, VocodeRequestInput) or
+                  (
+                      isinstance(request, TextToSpeechRequestInput) and
+                      request.input_audio is not None and  # Output of synthesis becomes Input for vocoder
+                      request.input_embedding is not None
+                  )
+            ):
+                for cfg in self.model_configs:
+                    if cfg.model_type == "HarmonySpeechVocoder":
+                        request.model = cfg.name
+                        break
+
+    def check_forward_processing(self, result: ExecutorResult):
+        new_status = RequestStatus.FINISHED_STOPPED
+        input_data = result.input_data
+        returning_model_cfg = None
+        requested_model = input_data.requested_model
+        for cfg in self.model_configs:
+            if input_data.model == cfg.name:
+                returning_model_cfg = cfg
+                break
+
+        if returning_model_cfg == requested_model:
+            self.scheduler.update_request_status(result.request_id, new_status)
+            return new_status
+
+        # Harmonyspeech TTS Processing
+        if requested_model == "harmonyspeech" and isinstance(input_data, TextToSpeechRequestInput):
+            forwarding_request = input_data
+
+            if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Embedding step finished, update input data and continue with synthesis step
+                forwarding_request.input_audio = None
+                forwarding_request.input_embedding = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
+            elif isinstance(result.result_data, SpeechSynthesisRequestOutput):
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Embedding step finished, update input data and continue with synthesis step
+                forwarding_request.input_audio = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
+            else: # There should be only vocoder results here...
+                # Mark as finished in scheduler
+                new_status = RequestStatus.FINISHED_STOPPED
+                self.scheduler.update_request_status(result.request_id, new_status)
+
+        return new_status
 
     def add_request(
         self,
@@ -181,15 +252,15 @@ class HarmonySpeechEngine:
 
         Returns RequestOutputs that can be returned to the client.
         """
-        # Check for Re-Schedule conditions
-        # TODO
 
-
-        # Create the outputs and update the requests
+        # Forward Processing or create the outputs and update the requests
         request_outputs: List[RequestOutput] = []
         for result in outputs:
-            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
-            request_outputs.append(result.request_data)
+            # Check for Re-Schedule conditions
+            new_status = self.check_forward_processing(result)
+            if new_status == RequestStatus.FINISHED_STOPPED:
+                # Finished normally, return output
+                request_outputs.append(result.result_data)
 
         for request in ignored_requests:
             # Mark as Finished / Ignored

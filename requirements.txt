@@ -26,3 +26,7 @@ anyascii
 jamo
 webrtcvad
 pyyaml
+mecab-python3
+unidic-lite
+pykakasi
+unidecode

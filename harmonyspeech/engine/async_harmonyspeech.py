@@ -269,7 +269,7 @@ class AsyncHarmonySpeech:
         self,
         *args,
         log_requests: bool = True,
-        max_log_len: int = 0,
+        max_log_len: int = 50,
         start_engine_loop: bool = True,
         **kwargs
     ) -> None:

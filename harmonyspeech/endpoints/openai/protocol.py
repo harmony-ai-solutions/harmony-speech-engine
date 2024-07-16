@@ -98,6 +98,10 @@ class TextToSpeechRequest(BaseRequest):
         default=None,
         description="Binary audio data of the reference speaker for converting the source, encoded in base64"
     )
+    target_audio: Optional[str] = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+    )
     target_embedding: Optional[str] = Field(
         default=None,
         description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
@@ -196,6 +200,31 @@ class EmbedSpeakerResponse(BaseResponse):
         default=None,
         description="Speaker embedding data for the audio provided in the initial request, encoded in base64"
     )
+
+
+class SynthesizeAudioRequest(BaseRequest):
+    """
+    SynthesizeAudioRequest
+    Used to run a synthesizer model for a provided input audio
+    """
+    input: str = Field(default="", description="the text to synthesize")
+    target_embedding: Optional[str] = Field(
+        default=None,
+        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+                    "Faster than providing a target audio file"
+    )
+    generation_options: Optional[GenerationOptions] = Field(
+        default=None,
+        description="Options for generating a speech request, see documentation for possible values"
+    )
+
+
+class SynthesizeAudioResponse(AudioDataResponse):
+    """
+    EmbedSpeakerResult
+    Result Audio file after vocoding step
+    """
+    id: str = Field(default_factory=lambda: f"vocode-{random_uuid()}")
 
 
 class VocodeAudioRequest(BaseRequest):

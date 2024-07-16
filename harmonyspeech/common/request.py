@@ -16,6 +16,13 @@ class RequestStatus(enum.Enum):
     FINISHED_STOPPED = enum.auto()
     FINISHED_ABORTED = enum.auto()
     FINISHED_IGNORED = enum.auto()
+    FINISHED_FORWARDED = enum.auto()
+
+    @staticmethod
+    def is_waiting(status: "RequestStatus") -> bool:
+        return status in [
+            RequestStatus.WAITING,
+        ]
 
     @staticmethod
     def is_running(status: "RequestStatus") -> bool:
@@ -29,6 +36,7 @@ class RequestStatus(enum.Enum):
             RequestStatus.FINISHED_STOPPED,
             RequestStatus.FINISHED_ABORTED,
             RequestStatus.FINISHED_IGNORED,
+            RequestStatus.FINISHED_FORWARDED,
         ]
 
     @staticmethod
@@ -39,6 +47,8 @@ class RequestStatus(enum.Enum):
             finish_reason = "abort"
         elif status == RequestStatus.FINISHED_IGNORED:
             finish_reason = "skipped"
+        elif status == RequestStatus.FINISHED_FORWARDED:
+            finish_reason = "forwarded"
         else:
             finish_reason = None
         return finish_reason
@@ -60,6 +70,12 @@ class EngineRequest:
         )
         self.status = RequestStatus.WAITING
 
+    def is_waiting(self) -> bool:
+        return RequestStatus.is_finished(self.status)
+
+    def is_running(self) -> bool:
+        return RequestStatus.is_running(self.status)
+
     def is_finished(self) -> bool:
         return RequestStatus.is_finished(self.status)
 
@@ -74,7 +90,9 @@ class ExecutorResult:
     def __init__(
         self,
         request_id: str,
+        input_data: RequestInput,
         result_data: RequestOutput
     ):
         self.request_id = request_id
-        self.request_data = result_data
+        self.input_data = input_data
+        self.result_data = result_data

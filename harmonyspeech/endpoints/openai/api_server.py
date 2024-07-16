@@ -80,7 +80,7 @@ async def create_speech(request: TextToSpeechRequest,
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
-    if request.stream:
+    if request.output_options and request.output_options.stream:
         return StreamingResponse(content=generator, media_type="text/event-stream")
     else:
         return JSONResponse(content=generator.model_dump())

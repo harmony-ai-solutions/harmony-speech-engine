@@ -54,7 +54,6 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
         # TODO: Basic checks for Embedding Generate request
 
         request_id = f"emb-{random_uuid()}"
-        request.input_audio = base64.b64decode(request.input_audio)
 
         result_generator = self.engine.generate(
             request_id=request_id,
