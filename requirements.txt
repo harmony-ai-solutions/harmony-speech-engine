@@ -30,3 +30,4 @@ mecab-python3
 unidic-lite
 pykakasi
 unidecode
+soundfile

@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Callable, Optional, List, Dict
 
@@ -14,6 +15,7 @@ from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers
     CausalConv1d,
     CausalConvTranspose1d
 )
+from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.pqmf import PQMF
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.residual_stack import ResidualStack
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.utils.utils import read_hdf5
 
@@ -769,5 +771,13 @@ class MelGANGenerator(torch.nn.Module):
         revision: Optional[str] = None,
     ):
         # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
+        with open(model_name_or_path + "/config.json") as cfg:
+            config_data = json.load(cfg)
+
         checkpoint = torch.load(model_name_or_path + "/vocoder.pt")
         self.load_state_dict(checkpoint["model"]["generator"])
+        # Initialize PQMF after loading state dict to avoid crash
+        if "out_channels" in config_data["model"] and config_data["model"]["out_channels"] > 1:
+            self.pqmf = PQMF(
+                subbands=config_data["model"]["out_channels"],
+            )

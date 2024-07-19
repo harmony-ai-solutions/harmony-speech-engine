@@ -2,16 +2,18 @@ from typing import Optional
 
 from transformers import AutoConfig, PretrainedConfig
 
-from harmonyspeech.config_utils.configs.harmonyspeech import (
-    HarmonySpeechEncoderConfig,
-    HarmonySpeechSynthesizerConfig,
-    HarmonySpeechVocoderConfig
-)
+from harmonyspeech.config_utils.configs.harmonyspeech import *
+from harmonyspeech.config_utils.configs.openvoice_v1 import *
+from harmonyspeech.config_utils.configs.openvoice_v2 import *
 
 _CONFIG_REGISTRY = {
     "HarmonySpeechEncoder": HarmonySpeechEncoderConfig,
     "HarmonySpeechSynthesizer": HarmonySpeechSynthesizerConfig,
     "HarmonySpeechVocoder": HarmonySpeechVocoderConfig,
+    "OpenVoiceV1Synthesizer": OpenVoiceV1SynthesizerConfig,
+    "OpenVoiceV1ToneConverter": OpenVoiceV1ToneConverterConfig,
+    "OpenVoiceV2Synthesizer": OpenVoiceV2SynthesizerConfig,
+    "OpenVoiceV2ToneConverter": OpenVoiceV2ToneConverterConfig,
 }
 
 

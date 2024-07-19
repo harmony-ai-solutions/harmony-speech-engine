@@ -90,9 +90,14 @@ class TextToSpeechRequest(BaseRequest):
     Based on OpenAI TTS API; extended for Harmony Speech Engine features.
     """
     input: str = Field(default="", description="the text to synthesize")
+    language: str = Field(
+        default=None,
+        description="language to synthesize. Only if the model supports language IDs. "
+                    "Please refer to the model's documentation for which values are availiable.")
     voice: Optional[str] = Field(
         default=None,
-        description="ID of the voice to synthesize - only if the target model supports voice IDs"
+        description="ID of the voice to synthesize. Only if the model supports voice IDs. "
+                    "Please refer to the model's documentation for which values are availiable."
     )
     input_audio: Optional[str] = Field(
         default=None,
@@ -208,6 +213,15 @@ class SynthesizeAudioRequest(BaseRequest):
     Used to run a synthesizer model for a provided input audio
     """
     input: str = Field(default="", description="the text to synthesize")
+    language: str = Field(
+        default=None,
+        description="language to synthesize. Only if the model supports language IDs. "
+                    "Please refer to the model's documentation for which values are availiable.")
+    voice: Optional[str] = Field(
+        default=None,
+        description="ID of the voice to synthesize. Only if the model supports voice IDs. "
+                    "Please refer to the model's documentation for which values are availiable."
+    )
     target_embedding: Optional[str] = Field(
         default=None,
         description="Binary embedding of the reference speaker for converting the source, encoded in base64. "

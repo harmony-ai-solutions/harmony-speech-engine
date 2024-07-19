@@ -11,6 +11,7 @@ model_configs:
     model: "models/harmony-ai-solutions/harmonyspeech/synthesizer"
     model_type: "HarmonySpeechSynthesizer"
     max_batch_size: 10
+    dtype: "float32"
     device_config:
       device: "cpu"
 
@@ -18,6 +19,23 @@ model_configs:
     model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
     model_type: "HarmonySpeechVocoder"
     max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-synthesizer"
+    model: "models/myshell-ai/openvoice"
+    model_type: "HarmonySpeechVocoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-vocoder"
+    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
+    model_type: "HarmonySpeechVocoder"
+    max_batch_size: 10
+    dtype: "float32"
     device_config:
       device: "cpu"
 

@@ -195,7 +195,7 @@ class RequestTracker:
 class _AsyncHarmonySpeech(HarmonySpeechEngine):
     """Extension of HarmonySpeechEngine to add async methods."""
 
-    async def step_async(self) -> List[RequestOutput]:
+    async def step_async(self) -> Tuple[List[RequestOutput], List[RequestInput]]:
         """Performs one decoding iteration and returns newly generated results.
         The workers are ran asynchronously if possible.
 
@@ -214,7 +214,7 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
                 model_results = await self.model_executors[model_name].execute_model_async(model_requests)
                 outputs.extend(model_results)
 
-        request_outputs = self._process_model_outputs(
+        request_outputs, forwarded_requests = self._process_model_outputs(
             outputs=outputs,
             ignored_requests=scheduler_outputs.ignored_requests
         )
@@ -223,7 +223,7 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         # if self.log_stats:
         #     self.stat_logger.log(self._get_stats(scheduler_outputs))
 
-        return request_outputs
+        return request_outputs, forwarded_requests
 
     async def add_request_async(
         self,
@@ -378,13 +378,13 @@ class AsyncHarmonySpeech:
         if finished_requests:
             await self._engine_abort(finished_requests)
 
-        request_outputs = await self.engine.step_async()
+        request_outputs, forwarded_requests = await self.engine.step_async()
 
         # Put the outputs into the corresponding streams.
         for request_output in request_outputs:
             self._request_tracker.process_request_output(request_output, verbose=self.log_requests)
 
-        return len(request_outputs) > 0
+        return (len(request_outputs) + len(forwarded_requests)) > 0
 
     async def _engine_abort(self, request_ids: Iterable[str]):
         self.engine.abort_request(request_ids)

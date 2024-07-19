@@ -1,7 +1,7 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Type, Union, Iterable, Dict
+from typing import List, Optional, Type, Union, Iterable, Dict, Tuple
 
 from loguru import logger
 
@@ -10,7 +10,8 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput, VocodeRequestInput, \
     SynthesisRequestInput, TextToSpeechRequestInput
 from harmonyspeech.common.logger import setup_logger
-from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput
+from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput, \
+    TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import Stats, StatLogger
@@ -137,6 +138,10 @@ class HarmonySpeechEngine:
                         request.model = cfg.name
                         break
 
+        # OpenVoice V1 TTS & VC Processing
+        # if request.requested_model == "openvoice_v1":
+
+
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED
         input_data = result.input_data
@@ -148,10 +153,10 @@ class HarmonySpeechEngine:
                 break
 
         if returning_model_cfg == requested_model:
-            self.scheduler.update_request_status(result.request_id, new_status)
             return new_status
 
         # Harmonyspeech TTS Processing
+        forwarding_request = None
         if requested_model == "harmonyspeech" and isinstance(input_data, TextToSpeechRequestInput):
             forwarding_request = input_data
 
@@ -170,12 +175,21 @@ class HarmonySpeechEngine:
                 # Embedding step finished, update input data and continue with synthesis step
                 forwarding_request.input_audio = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
-            else: # There should be only vocoder results here...
+            else:  # There should be only vocoder results here...
                 # Mark as finished in scheduler
                 new_status = RequestStatus.FINISHED_STOPPED
                 self.scheduler.update_request_status(result.request_id, new_status)
+                # Convert result to TTS output - Assuming VocodeRequestOutput
+                tts_result = TextToSpeechRequestOutput(
+                    request_id=result.request_id,
+                    text=input_data.input_text,
+                    output=result.result_data.output,
+                    finish_reason=result.result_data.finish_reason,
+                    metrics=result.result_data.metrics if result.result_data.metrics else None
+                )
+                result.result_data = tts_result
 
-        return new_status
+        return new_status, forwarding_request
 
     def add_request(
         self,
@@ -247,7 +261,7 @@ class HarmonySpeechEngine:
     def _process_model_outputs(
         self, outputs: List[ExecutorResult],
         ignored_requests: List[EngineRequest]
-    ) -> List[RequestOutput]:
+    ) -> Tuple[List[RequestOutput], List[RequestInput]]:
         """Apply the model output to the sequences in the scheduled seq groups.
 
         Returns RequestOutputs that can be returned to the client.
@@ -255,12 +269,15 @@ class HarmonySpeechEngine:
 
         # Forward Processing or create the outputs and update the requests
         request_outputs: List[RequestOutput] = []
+        forwarded_requests: List[RequestInput] = []
         for result in outputs:
             # Check for Re-Schedule conditions
-            new_status = self.check_forward_processing(result)
+            new_status, forwarding_request = self.check_forward_processing(result)
             if new_status == RequestStatus.FINISHED_STOPPED:
                 # Finished normally, return output
                 request_outputs.append(result.result_data)
+            if forwarding_request is not None:
+                forwarded_requests.append(forwarding_request)
 
         for request in ignored_requests:
             # Mark as Finished / Ignored
@@ -274,9 +291,9 @@ class HarmonySpeechEngine:
         # Free the finished requests.
         self.scheduler.free_finished_requests()
 
-        return request_outputs
+        return request_outputs, forwarded_requests
 
-    def step(self) -> List[RequestOutput]:
+    def step(self) -> Tuple[List[RequestOutput], List[RequestOutput]]:
         """Performs one decoding iteration and returns newly generated results.
 
         .. figure:: https://i.imgur.com/sv2HssD.png
@@ -341,7 +358,7 @@ class HarmonySpeechEngine:
                     model_results = future.result()
                     output.extend(model_results)
 
-        request_outputs = self._process_model_outputs(
+        request_outputs, forwarded_requests = self._process_model_outputs(
             outputs=output,
             ignored_requests=scheduler_outputs.ignored_requests
         )
@@ -351,7 +368,7 @@ class HarmonySpeechEngine:
         #     self.stat_logger.log(
         #         self._get_stats(scheduler_outputs, model_output=output))
 
-        return request_outputs
+        return request_outputs, forwarded_requests
 
     def do_log_stats(self) -> None:
         """Forced log when no requests active."""

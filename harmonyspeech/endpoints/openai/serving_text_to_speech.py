@@ -98,7 +98,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             id=request_id,
             created=created_time,
             model=model_name,
-            data=final_res.output.data
+            data=final_res.output
         )
 
         return response

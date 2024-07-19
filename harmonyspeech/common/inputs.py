@@ -92,6 +92,7 @@ class TextToSpeechRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_text: str,
+        language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
         input_audio: Optional[str] = None,
         input_embedding: Optional[str] = None,
@@ -107,6 +108,7 @@ class TextToSpeechRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_text = input_text
+        self.language_id = language_id
         self.voice_id = voice_id
         self.input_audio = input_audio
         self.input_embedding = input_embedding
@@ -120,8 +122,9 @@ class TextToSpeechRequestInput(RequestInput):
             request_id=request_id,
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
-            input_text=getattr(request, 'input_text', ''),
-            voice_id=getattr(request, 'voice_id', None),
+            input_text=getattr(request, 'input', ''),
+            language_id=getattr(request, 'language', None),
+            voice_id=getattr(request, 'voice', None),
             input_audio=getattr(request, 'input_audio', None),
             input_embedding=getattr(request, 'input_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
@@ -172,6 +175,8 @@ class SynthesisRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_text: str = "",
+        language_id: Optional[str] = None,
+        voice_id: Optional[str] = None,
         target_embedding: str = None,
         generation_options: TextToSpeechGenerationOptions = None,
         metrics: Optional[RequestMetrics] = None,
@@ -183,6 +188,8 @@ class SynthesisRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_text = input_text
+        self.language_id = language_id
+        self.voice_id = voice_id
         self.target_embedding = target_embedding
         self.generation_options = generation_options
 
@@ -192,8 +199,10 @@ class SynthesisRequestInput(RequestInput):
             request_id=request_id,
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
-            input_text=getattr(request, 'input_text', ''),
-            target_embedding=getattr(request, 'target_embedding', ''),
+            input_text=getattr(request, 'input', ''),
+            language_id=getattr(request, 'language', None),
+            voice_id=getattr(request, 'voice', None),
+            target_embedding=getattr(request, 'target_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
         )
 

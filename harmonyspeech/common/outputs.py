@@ -19,7 +19,7 @@ class RequestOutput:
     ) -> None:
         self.request_id = request_id
         self.finish_reason = finish_reason
-        self.metrics: metrics
+        self.metrics = metrics
 
     def finished(self) -> bool:
         return self.finish_reason is not None
