@@ -8,8 +8,13 @@ from harmonyspeech.common.utils import is_hip
 
 # Architecture -> (module, class).
 _MODELS = {
-    "OpenVoice": ("openvoice", "SynthesizerTrn"),
-    "Melo": ("melo", "SynthesizerTrn"),
+    # OpenVoice V1
+    "OpenVoiceV1Synthesizer": ("openvoice", "SynthesizerTrn"),
+    "OpenVoiceV1ToneConverter": ("openvoice", "SynthesizerTrn"),
+    # OpenVoice V2 / MeloTTS
+    "MeloTTSSynthesizer": ("melo", "SynthesizerTrn"),
+    "OpenVoiceV2ToneConverter": ("openvoice", "SynthesizerTrn"),
+    # HarmonySpeech
     "HarmonySpeechEncoder": ("harmonyspeech", "SpeakerEncoder"),
     "HarmonySpeechSynthesizer": ("harmonyspeech", "ForwardTacotron"),
     "HarmonySpeechVocoder": ("harmonyspeech", "MelGANGenerator"),

@@ -9,6 +9,7 @@ packaging
 numpy
 numba
 huggingface_hub
+cached_path
 safetensors
 scipy
 librosa

@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import numpy as np
 import torch
 
-from harmonyspeech.modeling.hf_downloader import load_weights_generic
+from harmonyspeech.modeling.hf_downloader import load_or_download_config, load_or_download_model
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import (
     CausalConv1d,
     CausalConvTranspose1d
@@ -191,16 +191,8 @@ class SpeakerEncoder(nn.Module):
 
         return embeds
 
-    def load_weights(
-        self,
-        model_name_or_path: str,
-        cache_dir: Optional[str] = None,
-        load_format: str = "auto",
-        revision: Optional[str] = None,
-    ):
-        checkpoint = torch.load(model_name_or_path + "/encoder.pt")
+    def load_weights(self, checkpoint, hf_config=None):
         self.load_state_dict(checkpoint["model_state"])
-        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
 
 
 class SeriesPredictor(nn.Module):
@@ -455,17 +447,6 @@ class ForwardTacotron(nn.Module):
         x = F.pad(x, [0, max_len - x.size(2), 0, 0], 'constant', self.padding_value)
         return x
 
-    def load(self, path, optimizer=None, checkpoint=None):
-        # Use device of model params as location for loaded state
-        if checkpoint is None:
-            device = next(self.parameters()).device
-            checkpoint = torch.load(str(path), map_location=device)
-
-        # Load weights
-        self.load_state_dict(checkpoint["model_state"])
-        if "optimizer_state" in checkpoint and optimizer is not None:
-            optimizer.load_state_dict(checkpoint["optimizer_state"])
-
     def save(self, path, optimizer=None):
         if optimizer is not None:
             torch.save({
@@ -489,15 +470,8 @@ class ForwardTacotron(nn.Module):
             print("Trainable Parameters: %.3fM" % parameters)
         return parameters
 
-    def load_weights(
-        self,
-        model_name_or_path: str,
-        cache_dir: Optional[str] = None,
-        load_format: str = "auto",
-        revision: Optional[str] = None,
-    ):
-        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
-        self.load(model_name_or_path + "/synthesizer.pt")
+    def load_weights(self, checkpoint, hf_config=None):
+        self.load_state_dict(checkpoint["model_state"])
 
     # @classmethod
     # def from_config(cls, config: Dict[str, Any]) -> 'ForwardTacotron':
@@ -763,21 +737,11 @@ class MelGANGenerator(torch.nn.Module):
             print("Trainable Parameters: %.3fM" % parameters)
         return parameters
 
-    def load_weights(
-        self,
-        model_name_or_path: str,
-        cache_dir: Optional[str] = None,
-        load_format: str = "auto",
-        revision: Optional[str] = None,
-    ):
-        # load_weights_generic(self, model_name_or_path, cache_dir, load_format, revision)
-        with open(model_name_or_path + "/config.json") as cfg:
-            config_data = json.load(cfg)
-
-        checkpoint = torch.load(model_name_or_path + "/vocoder.pt")
+    def load_weights(self, checkpoint, hf_config=None):
         self.load_state_dict(checkpoint["model"]["generator"])
-        # Initialize PQMF after loading state dict to avoid crash
-        if "out_channels" in config_data["model"] and config_data["model"]["out_channels"] > 1:
+
+        # Initialize PQMF AFTER loading state dict to avoid crash
+        if hf_config and "out_channels" in hf_config["model"] and hf_config["model"]["out_channels"] > 1:
             self.pqmf = PQMF(
-                subbands=config_data["model"]["out_channels"],
+                subbands=hf_config["model"]["out_channels"],
             )

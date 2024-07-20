@@ -1,13 +1,14 @@
 """Utilities for selecting and loading models."""
 import contextlib
-from typing import Type
+from typing import Type, Optional
 
 import torch
 import torch.nn as nn
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
-from harmonyspeech.modeling.hf_downloader import initialize_dummy_weights
+from harmonyspeech.modeling.hf_downloader import initialize_dummy_weights, load_or_download_model, \
+    load_or_download_config
 
 
 @contextlib.contextmanager
@@ -30,21 +31,122 @@ def _get_model_cls(model_config: ModelConfig) -> Type[nn.Module]:
             f"Supported models: {ModelRegistry.get_supported_archs()}")
 
 
+_MODEL_CONFIGS = {
+    # OpenVoice V1
+    "OpenVoiceV1Synthesizer": {
+        "EN": "base_speakers/EN/config.json",
+        "ZH": "base_speakers/ZH/config.json",
+    },
+    "OpenVoiceV1ToneConverter": {
+        "default": "converter/config.json",
+    },
+    # OpenVoice V2 / MeloTTS
+    "MeloTTSSynthesizer": {
+        "default": "config.json",
+    },
+    "OpenVoiceV2ToneConverter": {
+        "default": "converter/config.json",
+    },
+    # Harmony Speech V1
+    "HarmonySpeechEncoder": {
+        "default": "encoder/config.json"
+    },
+    "HarmonySpeechSynthesizer": {
+        "default": "synthesizer/config.json"
+    },
+    "HarmonySpeechVocoder": {
+        "default": "vocoder/config.json"
+    },
+}
+
+_MODEL_WEIGHTS = {
+    # OpenVoice V1
+    "OpenVoiceV1Synthesizer": {
+        "EN": "base_speakers/EN/checkpoint.pth",
+        "ZH": "base_speakers/ZH/checkpoint.pth",
+    },
+    "OpenVoiceV1ToneConverter": {
+        "default": "converter/checkpoint.pth",
+    },
+    # OpenVoice V2 / MeloTTS FIXME: This needs flavours, but all the same for each language
+    "MeloTTSSynthesizer": {
+        "default": "checkpoint.pth",
+    },
+    "OpenVoiceV2ToneConverter": {
+        "default": "converter/checkpoint.pth",
+    },
+    # Harmony Speech V1
+    "HarmonySpeechEncoder": {
+        "default": "encoder/encoder.pt"
+    },
+    "HarmonySpeechSynthesizer": {
+        "default": "synthesizer/synthesizer.pt"
+    },
+    "HarmonySpeechVocoder": {
+        "default": "vocoder/vocoder.pt"
+    },
+}
+
+
+def get_model_config(
+    model_name_or_path: str,
+    model_type: str,
+    revision: Optional[str] = None,
+    flavour: str = "default"
+):
+    if model_type not in _MODEL_CONFIGS:
+        raise NotImplementedError(f"model type {model_type} is not implemented.")
+    if flavour not in _MODEL_CONFIGS[model_type]:
+        raise NotImplementedError(f"model subtype {flavour} for model {model_type} does not exist.")
+
+    # Get Config
+    config_data = load_or_download_config(model_name_or_path, _MODEL_CONFIGS[model_type][flavour], revision)
+    return config_data
+
+
+def get_model_weights(
+    model_name_or_path: str,
+    model_type: str,
+    revision: Optional[str] = None,
+    device: str = "cpu",
+    flavour: str = "default"
+):
+    if model_type not in _MODEL_WEIGHTS:
+        raise NotImplementedError(f"model type {model_type} is not implemented.")
+    if flavour not in _MODEL_WEIGHTS[model_type]:
+        raise NotImplementedError(f"model subtype {flavour} for model {model_type} does not exist.")
+
+    # Get Base checkpoint
+    checkpoint = load_or_download_model(model_name_or_path, device, _MODEL_WEIGHTS[model_type][flavour], revision)
+    return checkpoint
+
+
+def get_model_flavour(model_config: ModelConfig):
+    if model_config.model_type in ["OpenVoiceV1Synthesizer", "MeloTTSSynthesizer"]:
+        # OpenVoice / MeloTTS use Different Singe-Speaker-TTS weights per language
+        return model_config.language
+    return "default"
+
+
 def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) -> nn.Module:
     model_class = _get_model_cls(model_config)
 
-    # Get the (maybe quantized) linear method.
-    linear_method = None
-
     with _set_default_torch_dtype(model_config.dtype):
+        # Get model flavour if applicable
+        flavour = get_model_flavour(model_config)
+        # Load config
+        hf_config = get_model_config(model_config.model, model_config.model_type, model_config.revision, flavour)
+
         # Create a model instance.
         # The weights will be initialized as empty tensors.
         with torch.device(device_config.device):
-            if hasattr(model_config.hf_config, "model"):
+
+            # Initialize the model using config
+            if hasattr(hf_config, "model"):
                 # Model class initialization for Harmony Speech Models and OpenVoice
-                model = model_class(**model_config.hf_config.model)
+                model = model_class(**hf_config.model)
             else:
-                model = model_class(model_config.hf_config, linear_method)
+                model = model_class(**hf_config)
 
         if model_config.load_format == "dummy":
             # NOTE: For accurate performance evaluation, we assign
@@ -52,8 +154,17 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) 
             initialize_dummy_weights(model)
         else:
             # Load the weights from the cached or downloaded files.
-            model.load_weights(model_config.model, model_config.download_dir,
-                               model_config.load_format, model_config.revision)
+            checkpoint = get_model_weights(
+                model_config.model,
+                model_config.model_type,
+                model_config.revision,
+                device_config.device,
+                flavour
+            )
+            # Run the load weight method of the model
+            # Every model needs to implement this seperately, because state dicts can differ
+            # and post-init task may apply
+            model.load_weights(checkpoint, hf_config)
 
         # if isinstance(linear_method, BNBLinearMethod):
         #     replace_quant_params(

@@ -1,6 +1,6 @@
 model_configs:
   - name: "hs1-encoder"
-    model: "models/harmony-ai-solutions/harmonyspeech/encoder"
+    model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechEncoder"
     max_batch_size: 10
     dtype: "float32"
@@ -8,7 +8,7 @@ model_configs:
       device: "cpu"
 
   - name: "hs1-synthesizer"
-    model: "models/harmony-ai-solutions/harmonyspeech/synthesizer"
+    model: "models/harmony-ai-solutions/harmonyspeech"
     model_type: "HarmonySpeechSynthesizer"
     max_batch_size: 10
     dtype: "float32"
@@ -16,28 +16,36 @@ model_configs:
       device: "cpu"
 
   - name: "hs1-vocoder"
-    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
+    model: "models/harmony-ai-solutions/harmonyspeech"
     model_type: "HarmonySpeechVocoder"
     max_batch_size: 10
     dtype: "float32"
     device_config:
       device: "cpu"
 
-  - name: "ov1-synthesizer"
-    model: "models/myshell-ai/openvoice"
-    model_type: "HarmonySpeechVocoder"
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cpu"
-
-  - name: "hs1-vocoder"
-    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
-    model_type: "HarmonySpeechVocoder"
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cpu"
+#  - name: "ov1-synthesizer"
+#    model: "models/myshell-ai/openvoice"
+#    model_type: "HarmonySpeechVocoder"
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cpu"
+#
+#  - name: "ov1-tone-converter"
+#    model: "models/myshell-ai/openvoice"
+#    model_type: "HarmonySpeechVocoder"
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cpu"
+#
+#  - name: "hs1-vocoder"
+#    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
+#    model_type: "HarmonySpeechVocoder"
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cpu"
 
 #    download_dir: "models/harmonyspeech/encoder"
 #    load_format: "pt"

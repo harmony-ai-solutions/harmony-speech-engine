@@ -6,7 +6,6 @@ import torch
 import yaml
 
 from harmonyspeech.common.utils import is_cpu, is_hip
-from harmonyspeech.config_utils.config import get_config
 
 
 class DeviceConfig:
@@ -52,6 +51,7 @@ class ModelConfig:
         model_type: str,
         max_batch_size: int,
         device_config: DeviceConfig,
+        language: Optional[str] = None,
         trust_remote_code: Optional[bool] = False,
         download_dir: Optional[str] = None,
         load_format: Optional[str] = "auto",
@@ -66,6 +66,7 @@ class ModelConfig:
         self.model_type = model_type
         self.max_batch_size = max_batch_size
         self.device_config = device_config
+        self.language = language
         self.trust_remote_code = trust_remote_code
         self.download_dir = download_dir
         self.load_format = load_format
@@ -75,7 +76,6 @@ class ModelConfig:
         self.code_revision = code_revision
         self.enforce_eager = enforce_eager
 
-        self.hf_config = get_config(self.model, trust_remote_code, revision, code_revision)
         self.dtype = _get_and_verify_dtype(dtype)
 
         self._verify_load_format()
