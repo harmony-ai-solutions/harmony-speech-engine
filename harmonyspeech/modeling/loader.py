@@ -40,7 +40,7 @@ _MODEL_CONFIGS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/config.json",
     },
-    # OpenVoice V2 / MeloTTS
+    # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "config.json",
     },
@@ -68,7 +68,7 @@ _MODEL_WEIGHTS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/checkpoint.pth",
     },
-    # OpenVoice V2 / MeloTTS FIXME: This needs flavours, but all the same for each language
+    # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "checkpoint.pth",
     },
@@ -122,8 +122,8 @@ def get_model_weights(
 
 
 def get_model_flavour(model_config: ModelConfig):
-    if model_config.model_type in ["OpenVoiceV1Synthesizer", "MeloTTSSynthesizer"]:
-        # OpenVoice / MeloTTS use Different Singe-Speaker-TTS weights per language
+    if model_config.model_type in ["OpenVoiceV1Synthesizer"]:
+        # OpenVoice V1 use Different Singe-Speaker-TTS weights per language within same Repo
         return model_config.language
     return "default"
 
@@ -144,6 +144,24 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) 
             # Initialize the model using config
             if hasattr(hf_config, "model"):
                 # Model class initialization for Harmony Speech Models and OpenVoice
+                if model_config.model_type in [
+                    "OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"
+                ]:
+                    # Dynamic Parameters for OpenVoice
+                    hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))
+                    hf_config.model.spec_channels = hf_config.data.filter_length // 2 + 1
+                    hf_config.model.n_speakers = hf_config.data.n_speakers
+                if model_config.model_type in [
+                    "MeloTTSSynthesizer",
+                ]:
+                    # Dynamic Parameters for MeloTTS
+                    hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))
+                    hf_config.model.spec_channels = hf_config.data.filter_length // 2 + 1
+                    hf_config.model.segment_size = hf_config.train.segment_size // hf_config.data.hop_length
+                    hf_config.model.n_speakers = hf_config.data.n_speakers
+                    hf_config.model.num_tones = hf_config.num_tones
+                    hf_config.model.num_languages = hf_config.num_languages
+
                 model = model_class(**hf_config.model)
             else:
                 model = model_class(**hf_config)

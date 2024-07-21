@@ -504,3 +504,6 @@ class SynthesizerTrn(nn.Module):
         z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
         o_hat = self.dec(z_hat * y_mask, g=g_tgt if not self.zero_g else torch.zeros_like(g_tgt))
         return o_hat, y_mask, (z, z_p, z_hat)
+
+    def load_weights(self, checkpoint, hf_config=None):
+        self.load_state_dict(checkpoint["model"], strict=False)
