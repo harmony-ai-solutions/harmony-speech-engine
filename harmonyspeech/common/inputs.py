@@ -177,7 +177,7 @@ class SynthesisRequestInput(RequestInput):
         input_text: str = "",
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
-        target_embedding: str = None,
+        input_embedding: str = None,
         generation_options: TextToSpeechGenerationOptions = None,
         metrics: Optional[RequestMetrics] = None,
     ):
@@ -190,7 +190,7 @@ class SynthesisRequestInput(RequestInput):
         self.input_text = input_text
         self.language_id = language_id
         self.voice_id = voice_id
-        self.target_embedding = target_embedding
+        self.input_embedding = input_embedding
         self.generation_options = generation_options
 
     @classmethod
@@ -202,7 +202,7 @@ class SynthesisRequestInput(RequestInput):
             input_text=getattr(request, 'input', ''),
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
-            target_embedding=getattr(request, 'target_embedding', None),
+            input_embedding=getattr(request, 'input_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
         )
 

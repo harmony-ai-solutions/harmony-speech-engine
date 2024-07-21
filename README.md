@@ -29,22 +29,23 @@ Support and Ideas for Improving this Project are very welcome.
 - No Neuron Device Type Support (I don't have the means to test it properly; feel free to add support for it if you like)
 
 ### Planned and availiable Integrations
-The following Technologies and Features are planned to be supported
+The following Technologies and Features are planned to be supported.
+May change over time as new models and frameworks are being developed.
 
 - [ ] Zero-Shot Voice Conversion
   - [ ] NaturalSpeech3 Voice Converter
-  - [ ] OpenVoice Tone Converter
+  - [x] OpenVoice Tone Converter
 - [ ] Multi-Shot Voice Conversion
   - [ ] StyleTTS 2 Voice Converter
   - [ ] RVC (Retrieval-base-Voice-Conversion)
 - [ ] Multi-Shot Voice Cloning
   - [ ] StyleTTS 2
 - [ ] Zero-Shot Voice Cloning
-  - [ ] Harmony Speech V1 (english)
+  - [x] Harmony Speech V1 (english)
   - [ ] Vall-E-X (Multilingual)
-- [ ] Generic Single-Speaker TTS
-  - [ ] OpenVoice V1 (English / Chinese + basic emotions)
-  - [ ] OpenVoice V2 (English, Spanish, French, Chinese, Japanese and Korean)
+- [x] Generic Single-Speaker TTS
+  - [x] OpenVoice V1 (English / Chinese + basic emotions)
+  - [x] OpenVoice V2 (English, Spanish, French, Chinese, Japanese and Korean)
 - [ ] Generic Multispeaker TTS
   - [ ] EmotiVoice (English / Chinese + basic emotions for a wide range of speakers)
 - [ ] Adaptive Voice Cloning
@@ -52,6 +53,7 @@ The following Technologies and Features are planned to be supported
   - [ ] Embedding Vector Matching (Convenience Feature)
 - [ ] Automatic Speech Recognition & Language Detection
   - [ ] Whisper
+  - [ ] Faster-Whisper
   - [ ] Distil-Whisper
 
 

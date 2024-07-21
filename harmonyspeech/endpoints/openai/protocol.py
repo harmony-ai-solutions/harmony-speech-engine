@@ -101,15 +101,11 @@ class TextToSpeechRequest(BaseRequest):
     )
     input_audio: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
-    target_audio: Optional[str] = Field(
+    input_embedding: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
-    )
-    target_embedding: Optional[str] = Field(
-        default=None,
-        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
                     "Faster than providing a target audio file"
     )
     generation_options: Optional[GenerationOptions] = Field(
@@ -222,9 +218,9 @@ class SynthesizeAudioRequest(BaseRequest):
         description="ID of the voice to synthesize. Only if the model supports voice IDs. "
                     "Please refer to the model's documentation for which values are availiable."
     )
-    target_embedding: Optional[str] = Field(
+    input_embedding: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
                     "Faster than providing a target audio file"
     )
     generation_options: Optional[GenerationOptions] = Field(
