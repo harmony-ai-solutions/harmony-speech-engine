@@ -95,6 +95,8 @@ class TextToSpeechRequestInput(RequestInput):
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
         input_audio: Optional[str] = None,
+        input_vad_mode: Optional[str] = None,
+        input_vad_data: Optional[str] = None,
         input_embedding: Optional[str] = None,
         generation_options: Optional[TextToSpeechGenerationOptions] = None,
         output_options: Optional[TextToSpeechAudioOutputOptions] = None,
@@ -111,6 +113,8 @@ class TextToSpeechRequestInput(RequestInput):
         self.language_id = language_id
         self.voice_id = voice_id
         self.input_audio = input_audio
+        self.input_vad_mode = input_vad_mode
+        self.input_vad_data = input_vad_data
         self.input_embedding = input_embedding
         self.generation_options = generation_options
         self.output_options = output_options
@@ -126,6 +130,8 @@ class TextToSpeechRequestInput(RequestInput):
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
             input_audio=getattr(request, 'input_audio', None),
+            input_vad_mode=getattr(request, 'input_vad_mode', None),
+            input_vad_data=getattr(request, 'input_vad_data', None),
             input_embedding=getattr(request, 'input_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
             output_options=getattr(request, 'output_options', None),
@@ -144,6 +150,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_audio: Optional[str] = None,
+        input_vad_mode: Optional[str] = None,
+        input_vad_data: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -153,6 +161,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_audio = input_audio
+        self.input_vad_mode = input_vad_mode
+        self.input_vad_data = input_vad_data
 
     @classmethod
     def from_openai(cls, request_id: str, request: "EmbedSpeakerRequest"):
@@ -161,6 +171,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
             input_audio=getattr(request, 'input_audio', None),
+            input_vad_mode=getattr(request, 'input_vad_mode', None),
+            input_vad_data=getattr(request, 'input_vad_data', None),
         )
 
 

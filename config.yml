@@ -49,6 +49,14 @@ model_configs:
     device_config:
       device: "cpu"
 
+  - name: "ov1-tone-converter-encoder"
+    model: "models/myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
   - name: "ov2-synthesizer-en"
     model: "models/myshell-ai/MeloTTS-English-v3"
     model_type: "MeloTTSSynthesizer"
@@ -74,6 +82,22 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cpu"
+
+  - name: "ov2-tone-converter-Encoder"
+    model: "models/myshell-ai/openvoice_v2"
+    model_type: "OpenVoiceV2ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "faster-whisper"
+    model: "large-v3"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float16"
+    device_config:
+      device: "cuda:0"
 #
 #  - name: "hs1-vocoder"
 #    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"

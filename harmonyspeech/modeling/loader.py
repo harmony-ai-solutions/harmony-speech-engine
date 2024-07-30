@@ -4,6 +4,7 @@ from typing import Type, Optional
 
 import torch
 import torch.nn as nn
+from faster_whisper import WhisperModel
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
@@ -40,11 +41,17 @@ _MODEL_CONFIGS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/config.json",
     },
+    "OpenVoiceV1ToneConverterEncoder": {
+        "default": "converter/config.json",
+    },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "config.json",
     },
     "OpenVoiceV2ToneConverter": {
+        "default": "converter/config.json",
+    },
+    "OpenVoiceV2ToneConverterEncoder": {
         "default": "converter/config.json",
     },
     # Harmony Speech V1
@@ -57,6 +64,10 @@ _MODEL_CONFIGS = {
     "HarmonySpeechVocoder": {
         "default": "vocoder/config.json"
     },
+    # Faster-Whisper
+    "FasterWhisper": {
+        "default": "native"
+    }
 }
 
 _MODEL_WEIGHTS = {
@@ -68,11 +79,17 @@ _MODEL_WEIGHTS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/checkpoint.pth",
     },
+    "OpenVoiceV1ToneConverterEncoder": {
+        "default": "converter/checkpoint.pth",
+    },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "checkpoint.pth",
     },
     "OpenVoiceV2ToneConverter": {
+        "default": "converter/checkpoint.pth",
+    },
+    "OpenVoiceV2ToneConverterEncoder": {
         "default": "converter/checkpoint.pth",
     },
     # Harmony Speech V1
@@ -85,6 +102,10 @@ _MODEL_WEIGHTS = {
     "HarmonySpeechVocoder": {
         "default": "vocoder/vocoder.pt"
     },
+    # Faster-Whisper
+    "FasterWhisper": {
+        "default": "native"
+    }
 }
 
 
@@ -98,6 +119,10 @@ def get_model_config(
         raise NotImplementedError(f"model type {model_type} is not implemented.")
     if flavour not in _MODEL_CONFIGS[model_type]:
         raise NotImplementedError(f"model subtype {flavour} for model {model_type} does not exist.")
+
+    # Bailout for native Model implementations
+    if _MODEL_CONFIGS[model_type][flavour] == "native":
+        return "native"
 
     # Get Config
     config_data = load_or_download_config(model_name_or_path, _MODEL_CONFIGS[model_type][flavour], revision)
@@ -128,7 +153,7 @@ def get_model_flavour(model_config: ModelConfig):
     return "default"
 
 
-def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) -> nn.Module:
+def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
     model_class = _get_model_cls(model_config)
 
     with _set_default_torch_dtype(model_config.dtype):
@@ -141,11 +166,21 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) 
         # The weights will be initialized as empty tensors.
         with torch.device(device_config.device):
 
+            # Bailout for native models
+            if model_class == "native" and hf_config == "native":
+                if model_config.model_type == "FasterWhisper":
+                    model = WhisperModel(model_config.model)
+                    return model
+
             # Initialize the model using config
             if hasattr(hf_config, "model"):
                 # Model class initialization for Harmony Speech Models and OpenVoice
                 if model_config.model_type in [
-                    "OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"
+                    "OpenVoiceV1Synthesizer",
+                    "OpenVoiceV1ToneConverter",
+                    "OpenVoiceV1ToneConverterEncoder",
+                    "OpenVoiceV2ToneConverter",
+                    "OpenVoiceV2ToneConverterEncoder"
                 ]:
                     # Dynamic Parameters for OpenVoice
                     hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))

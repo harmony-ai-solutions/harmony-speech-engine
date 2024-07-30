@@ -61,6 +61,8 @@ class ModelRunnerBase:
             outputs = self._execute_harmonyspeech_synthesizer(inputs, requests_to_batch)
         elif model_type == "HarmonySpeechVocoder":
             outputs = self._execute_harmonyspeech_vocoder(inputs, requests_to_batch)
+        elif model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"]:
+            outputs = self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
         elif model_type in ["OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"]:
             outputs = self._execute_openvoice_tone_converter(inputs, requests_to_batch)
         else:
@@ -188,7 +190,7 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
-    def _execute_openvoice_tone_converter(self, inputs, requests_to_batch):
+    def _execute_openvoice_tone_converter_encoder(self, inputs, requests_to_batch):
         # Get model flavour if applicable
         flavour = get_model_flavour(self.model_config)
         # Load config
@@ -201,19 +203,17 @@ class ModelRunnerBase:
 
 
         # FIXME: This is not properly batched
-        def run_converter(input_params):
+        def run_converter_encoder(input_params):
             audio_ref, input_embedding = input_params
-            if input_embedding is None:
-                # Embed
-                y = torch.FloatTensor(audio_ref)
-                y = y.to(self.device)
-                y = y.unsqueeze(0)
-                y = spectrogram_torch(y, hf_config.data.filter_length,
-                                      hf_config.data.sampling_rate, hf_config.data.hop_length, hf_config.data.win_length,
-                                      center=False).to(self.device)
 
-            else:
-                # Convert
+            # Embed
+            y = torch.FloatTensor(audio_ref)
+            y = y.to(self.device)
+            y = y.unsqueeze(0)
+            y = spectrogram_torch(y, hf_config.data.filter_length,
+                                  hf_config.data.sampling_rate, hf_config.data.hop_length, hf_config.data.win_length,
+                                  center=False).to(self.device)
+
 
 
             # Encode as WAV and return base64

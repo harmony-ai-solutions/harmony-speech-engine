@@ -99,114 +99,144 @@ class HarmonySpeechEngine:
         #     model_cfg.verify_with_parallel_config(self.parallel_config)
         return None
 
+    def reroute_request_harmonyspeech(self, request: RequestInput):
+        if (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechSynthesizer":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VocodeRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for vocoder
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechVocoder":
+                    request.model = cfg.name
+                    break
+
+    def reroute_request_openvoice_v1(self, request: RequestInput):
+        if (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1ToneConverterEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1Synthesizer" and cfg.language == request.language_id:
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VoiceConversionRequest) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1ToneConverter":
+                    request.model = cfg.name
+                    break
+
+    def reroute_request_openvoice_v2(self, request: RequestInput):
+        """
+        OpenVoice uses a multi-step-embedding process for improving accuracy.
+        This process involves retrieving VAD information for the provided audio if that's not provided.
+        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
+        provided in the OpenVoice repo.
+
+        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
+        2. Embedding using ToneConverter in Encoder mode using Audio segments returned from VAD step.
+        3. TTS using Melo
+        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
+        """
+        if (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "FasterWhisper":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV2ToneConverterEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "MeloTTSSynthesizer" and cfg.language == request.language_id:
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VoiceConversionRequest) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV2ToneConverter":
+                    request.model = cfg.name
+                    break
+
     def check_reroute_request_to_model(self, request: RequestInput):
         # Harmonyspeech TTS Processing
         if request.requested_model == "harmonyspeech":
-            if (isinstance(request, SpeechEmbeddingRequestInput) or
-                (
-                    isinstance(request, TextToSpeechRequestInput) and
-                    request.input_audio is not None and  #
-                    request.input_embedding is None  # Output of Embedding becomes input for synthesis
-                )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechEncoder":
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, SynthesisRequestInput) or
-                  (
-                      isinstance(request, TextToSpeechRequestInput) and
-                      request.input_audio is None and  # Removing Input audio after Embedding Step
-                      request.input_embedding is not None  # Output of Embedding becomes input for synthesis
-                  )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechSynthesizer":
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, VocodeRequestInput) or
-                  (
-                      isinstance(request, TextToSpeechRequestInput) and
-                      request.input_audio is not None and  # Output of synthesis becomes Input for vocoder
-                      request.input_embedding is not None
-                  )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechVocoder":
-                        request.model = cfg.name
-                        break
-
+            self.reroute_request_harmonyspeech(request)
         # OpenVoice V1 TTS & VC Processing
         if request.requested_model == "openvoice_v1":
-            if (isinstance(request, SpeechEmbeddingRequestInput) or
-                (
-                    isinstance(request, TextToSpeechRequestInput) and
-                    request.input_audio is not None and  #
-                    request.input_embedding is None  # Output of Embedding becomes input for synthesis
-                )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "OpenVoiceV1ToneConverter":
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, SynthesisRequestInput) or
-                  (
-                      isinstance(request, TextToSpeechRequestInput) and
-                      request.input_audio is None and  # Removing Input audio after Embedding Step
-                      request.input_embedding is not None  # Output of Embedding becomes input for synthesis
-                  )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "OpenVoiceV1Synthesizer" and cfg.language == request.language_id:
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, VoiceConversionRequest) or
-                  (
-                      isinstance(request, TextToSpeechRequestInput) and
-                      request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
-                      request.input_embedding is not None
-                  )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "OpenVoiceV1ToneConverter":
-                        request.model = cfg.name
-                        break
-
-            # OpenVoice V2 TTS & VC Processing
-            if request.requested_model == "openvoice_v2":
-                if (isinstance(request, SpeechEmbeddingRequestInput) or
-                    (
-                        isinstance(request, TextToSpeechRequestInput) and
-                        request.input_audio is not None and  #
-                        request.input_embedding is None  # Output of Embedding becomes input for synthesis
-                    )
-                ):
-                    for cfg in self.model_configs:
-                        if cfg.model_type == "OpenVoiceV2ToneConverter":
-                            request.model = cfg.name
-                            break
-                elif (isinstance(request, SynthesisRequestInput) or
-                      (
-                          isinstance(request, TextToSpeechRequestInput) and
-                          request.input_audio is None and  # Removing Input audio after Embedding Step
-                          request.input_embedding is not None  # Output of Embedding becomes input for synthesis
-                      )
-                ):
-                    for cfg in self.model_configs:
-                        if cfg.model_type == "MeloTTSSynthesizer" and cfg.language == request.language_id:
-                            request.model = cfg.name
-                            break
-                elif (isinstance(request, VoiceConversionRequest) or
-                      (
-                          isinstance(request, TextToSpeechRequestInput) and
-                          request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
-                          request.input_embedding is not None
-                      )
-                ):
-                    for cfg in self.model_configs:
-                        if cfg.model_type == "OpenVoiceV2ToneConverter":
-                            request.model = cfg.name
-                            break
+            self.reroute_request_openvoice_v1(request)
+        # OpenVoice V2 TTS & VC Processing
+        if request.requested_model == "openvoice_v2":
+            self.reroute_request_openvoice_v2(request)
 
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED

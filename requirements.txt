@@ -32,3 +32,4 @@ unidic-lite
 pykakasi
 unidecode
 soundfile
+faster-whisper
