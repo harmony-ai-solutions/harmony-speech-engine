@@ -8,8 +8,10 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from faster_whisper import BatchedInferencePipeline
+
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput, VocodeRequestOutput
+from harmonyspeech.common.outputs import *
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
@@ -65,19 +67,21 @@ class ModelRunnerBase:
             outputs = self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
         elif model_type in ["OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"]:
             outputs = self._execute_openvoice_tone_converter(inputs, requests_to_batch)
+        elif model_type == "FasterWhisper":
+            outputs = self._execute_faster_whisper_transcribe(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
         return outputs
 
-    def _build_result(self, initial_request, inference_result):
+    def _build_result(self, initial_request, inference_result, result_cls):
         request_id = initial_request.request_id
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
         result = ExecutorResult(
             request_id=request_id,
             input_data=initial_request.request_data,
-            result_data=SpeechEmbeddingRequestOutput(
+            result_data=result_cls(
                 request_id=request_id,
                 output=inference_result,
                 finish_reason="stop",
@@ -104,7 +108,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             inference_result = embed_utterance(x)
-            result = self._build_result(initial_request, inference_result)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -149,7 +153,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -186,7 +190,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             inference_result = vocode_mel(x)
-            result = self._build_result(initial_request, inference_result)
+            result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -227,6 +231,27 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             inference_result = run_converter(x)
-            result = self._build_result(initial_request, inference_result)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_faster_whisper_transcribe(self, inputs, requests_to_batch):
+        def run_batched_transcribe(input_params):
+            audio_ref = input_params
+            batched_model = BatchedInferencePipeline(model=self.model)
+            segments, info = batched_model.transcribe(audio_ref, batch_size=16)
+            segments = list(segments)
+
+            response = {
+                "segments": base64.b64encode(json.dumps(segments).encode('utf-8')).decode('utf-8'),
+                "info": base64.b64encode(json.dumps(info).encode('utf-8')).decode('utf-8')
+            }
+            return json.dumps(response)
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_batched_transcribe(x)
+            result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
             outputs.append(result)
         return outputs

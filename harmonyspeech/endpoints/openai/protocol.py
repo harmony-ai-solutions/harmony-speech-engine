@@ -103,6 +103,14 @@ class TextToSpeechRequest(BaseRequest):
         default=None,
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
+    input_vad_mode: Optional[str] = Field(
+        default=None,
+        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
+    )
+    input_vad_data: Optional[str] = Field(
+        default=None,
+        description="result data from VAD step to be processed in follow-up TTS or VC steps"
+    )
     input_embedding: Optional[str] = Field(
         default=None,
         description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
@@ -159,7 +167,18 @@ class SpeechTranscribeRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
-    file: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    input_audio: Optional[str] = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+    )
+    input_vad_mode: Optional[str] = Field(
+        default=None,
+        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
+    )
+    input_vad_data: Optional[str] = Field(
+        default=None,
+        description="result data from VAD step to be processed in follow-up TTS or VC steps"
+    )
     get_language: Optional[bool] = Field(
         default=False,
         description="whether to return the source language tag. Check model description if supported."

@@ -84,6 +84,18 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                     f"VoiceConversionRequestInput or SpeechEmbeddingRequestInput")
         return prepare_openvoice_tone_converter_inputs(inputs)
+    elif model_config.model_type == "FasterWhisper":
+        for r in requests_to_batch:
+            if (
+                isinstance(r.request_data, TextToSpeechRequestInput) or
+                isinstance(r.request_data, SpeechTranscribeRequestInput)
+            ):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                    f"SpeechTranscribeRequestInput")
+        return prepare_faster_whisper_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -234,6 +246,23 @@ def prepare_openvoice_tone_converter_inputs(model_config: ModelConfig, requests_
         bytes_pointer = io.BytesIO(input_audio)
         audio_ref, _ = librosa.load(bytes_pointer, sr=hf_config.data.sampling_rate)
         return audio_ref, input_embedding
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_faster_whisper_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SpeechTranscribeRequestInput
+]]):
+    def prepare(request):
+        # Make sure Audio data is decoded from Base64
+        input_audio = base64.b64decode(request.input_audio)
+        input_audio_ref = io.BytesIO(input_audio)
+        # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
+        return input_audio_ref
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
