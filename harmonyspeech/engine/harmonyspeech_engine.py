@@ -135,12 +135,38 @@ class HarmonySpeechEngine:
                     break
 
     def reroute_request_openvoice_v1(self, request: RequestInput):
-        if (isinstance(request, SpeechEmbeddingRequestInput) or
+        """
+        OpenVoice V1 uses a multi-step-embedding process for improving accuracy.
+        This process involves retrieving VAD information for the provided audio if that's not provided.
+        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
+        provided in the OpenVoice repo.
+
+        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
+        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
+        3. TTS using base Synthesizer model
+        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
+        """
+        if (isinstance(request, SpeechTranscribeRequestInput) or
             (
                 isinstance(request, TextToSpeechRequestInput) and
                 request.input_audio is not None and  #
+                request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
             )
+        ):
+            for cfg in self.model_configs:
+                # TODO: add switch for silero here using request.input_vad_mode
+                if cfg.model_type == "FasterWhisper":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SpeechEmbeddingRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  #
+                  request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
+                  request.input_embedding is None  # Output of Embedding becomes input for synthesis
+              )
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "OpenVoiceV1ToneConverterEncoder":
@@ -171,25 +197,27 @@ class HarmonySpeechEngine:
 
     def reroute_request_openvoice_v2(self, request: RequestInput):
         """
-        OpenVoice uses a multi-step-embedding process for improving accuracy.
+        OpenVoice V2 uses a multi-step-embedding process for improving accuracy.
         This process involves retrieving VAD information for the provided audio if that's not provided.
         The default variant is to use whisper for this Process; however there's also a SileroTTS variant
         provided in the OpenVoice repo.
 
         When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
         1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
-        2. Embedding using ToneConverter in Encoder mode using Audio segments returned from VAD step.
+        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
         3. TTS using Melo
         4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
         """
-        if (isinstance(request, SpeechEmbeddingRequestInput) or
+        if (isinstance(request, SpeechTranscribeRequestInput) or
             (
                 isinstance(request, TextToSpeechRequestInput) and
                 request.input_audio is not None and  #
+                request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
             )
         ):
             for cfg in self.model_configs:
+                # TODO: add switch for silero here using request.input_vad_mode
                 if cfg.model_type == "FasterWhisper":
                     request.model = cfg.name
                     break
@@ -197,6 +225,7 @@ class HarmonySpeechEngine:
             (
                 isinstance(request, TextToSpeechRequestInput) and
                 request.input_audio is not None and  #
+                request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
             )
         ):
@@ -261,7 +290,23 @@ class HarmonySpeechEngine:
         ]:
             forwarding_request = input_data
 
-            if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+            if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
+                # Transcription results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Transcription Step Finished, provide VAD Result Data for Embedding Step
+                forwarding_request.input_vad_data = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
+            elif isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+                # Embedding results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as forwarded in scheduler
                 new_status = RequestStatus.FINISHED_FORWARDED
                 self.scheduler.update_request_status(result.request_id, new_status)
@@ -270,6 +315,11 @@ class HarmonySpeechEngine:
                 forwarding_request.input_embedding = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
             elif isinstance(result.result_data, SpeechSynthesisRequestOutput):
+                # Synthesis results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as forwarded in scheduler
                 new_status = RequestStatus.FINISHED_FORWARDED
                 self.scheduler.update_request_status(result.request_id, new_status)
@@ -277,6 +327,11 @@ class HarmonySpeechEngine:
                 forwarding_request.input_audio = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
             else:  # There should be only vocoder results here...
+                # Vocoding / Voice Conversion results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as finished in scheduler
                 new_status = RequestStatus.FINISHED_STOPPED
                 self.scheduler.update_request_status(result.request_id, new_status)

@@ -259,8 +259,6 @@ class SpeechTranscribeRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_audio: Optional[str] = None,
-        input_vad_mode: Optional[str] = None,
-        input_vad_data: Optional[str] = None,
         get_language: Optional[bool] = False,
         get_timestamps: Optional[bool] = False,
         metrics: Optional[RequestMetrics] = None,
@@ -272,8 +270,6 @@ class SpeechTranscribeRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_audio = input_audio
-        self.input_vad_mode = input_vad_mode
-        self.input_vad_data = input_vad_data
         self.get_language = get_language
         self.get_timestamps = get_timestamps
 
@@ -284,8 +280,6 @@ class SpeechTranscribeRequestInput(RequestInput):
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
             input_audio=getattr(request, 'input_audio', None),
-            input_vad_mode=getattr(request, 'input_vad_mode', None),
-            input_vad_data=getattr(request, 'input_vad_data', None),
             get_language=getattr(request, 'get_language', False),
             get_timestamps=getattr(request, 'get_timestamps', False),
         )

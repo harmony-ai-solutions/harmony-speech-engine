@@ -1,12 +1,15 @@
 import base64
 import io
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
+from tempfile import NamedTemporaryFile
 
 import torch
 import librosa
 import numpy as np
 from loguru import logger
+from pydub import AudioSegment
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import *
@@ -72,7 +75,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                     f"VoiceConversionRequestInput or SpeechEmbeddingRequestInput")
         return prepare_openvoice_tone_converter_inputs(model_config, inputs)
-    elif model_config.model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverter"]:
+    elif model_config.model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"]:
         for r in requests_to_batch:
             if (
                 isinstance(r.request_data, TextToSpeechRequestInput) or
@@ -83,7 +86,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                     f"VoiceConversionRequestInput or SpeechEmbeddingRequestInput")
-        return prepare_openvoice_tone_converter_inputs(inputs)
+        return prepare_openvoice_tone_converter_encoder_inputs(inputs)
     elif model_config.model_type == "FasterWhisper":
         for r in requests_to_batch:
             if (
@@ -196,24 +199,71 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
         flavour
     )
 
-    # We're expecting audio in waveform format in the requests
+    # Based on VAD Data we're processing the Audio file provided
+    # TODO: This expects Whisper, needs rework to be compatible with Silero VAD
     def prepare(request):
         # Make sure Audio is decoded from Base64
         # REMARK: Embedding is only set IF we want to convert the speaker voice in the audio to the embedded voice
         #         Otherwise (if only audio provided), we want to get the embedding instead.
         input_audio = base64.b64decode(request.input_audio)
-        input_embedding = base64.b64decode(request.input_embedding.encode('utf-8')) if request.input_embedding else None
+        input_vad_data = json.loads(request.input_vad_data)
+        segments = input_vad_data["segments"] if "segments" in input_vad_data else []
+
+        # Load Audio from BytesIO
         bytes_pointer = io.BytesIO(input_audio)
         audio_data, _ = librosa.load(bytes_pointer, sr=hf_config.data.sampling_rate)
+        # convert from float to uint16
+        # https://stackoverflow.com/questions/58810035/converting-audio-files-between-pydub-and-librosa
+        audio_data = np.array(audio_data * (1 << 15), dtype=np.int16)
+        audio = AudioSegment(
+            audio_data.tobytes(),
+            frame_rate=hf_config.data.sampling_rate,
+            sample_width=audio_data.dtype.itemsize,
+            channels=1
+        )
+        max_len = len(audio)
 
-        # Split into different parts using VAD module
-        # TODO: This could run through Whisper as well, see OpenVoice repo
-        audio_data_tensor = torch.Tensor(audio_data)
-        vad_segments = split_audio_vad(audio_data_tensor, hf_config.data.sampling_rate)
+        # Iterate over VAD segments to build a list of audio segments exactly matching VAD parts
+        # see OpenVoice - se_extractor.py:split_audio_whisper
+        vad_audio_segments = []
+        s_ind = 0
+        start_time = None
 
+        for k, segment in enumerate(segments):
+            # process with the time
+            if k == 0:
+                start_time = max(0, segment.start)
+            end_time = segment.end
 
+            # clean text
+            text = segment.text.replace('...', '')
 
-        return audio_ref, input_embedding
+            # left 0.08s for each audio
+            audio_seg = audio[int(start_time * 1000): min(max_len, int(end_time * 1000) + 80)]
+
+            # filter out the segment if shorter than 1.5s and longer than 20s
+            save = 1.5 < audio_seg.duration_seconds < 20. and 2 <= len(text) < 200
+            if save:
+                # https://github.com/PyFilesystem/pyfilesystem2/issues/402#issuecomment-638750112
+                # https://stackoverflow.com/questions/71765778/how-to-process-files-in-fastapi-from-multiple-clients-without-saving-the-files-t
+                tmp_file = NamedTemporaryFile(delete=False, suffix=".ove")
+                try:
+                    audio_seg.export(tmp_file, format='wav')
+                    audio_seg_bytes, _ = librosa.load(tmp_file.name, sr=hf_config.data.sampling_rate)
+                    vad_audio_segments.append(audio_seg_bytes)
+                except Exception as e:
+                    logger.error(str(e))
+                finally:
+                    os.unlink(tmp_file.name)
+
+            if k < len(segments) - 1:
+                start_time = max(0, segments[k + 1].start - 0.08)
+
+            s_ind = s_ind + 1
+
+        # Audio segments returned here will be used for inference
+        # see reference implementation in OpenVoice - ToneColorConverter:extract_se
+        return vad_audio_segments
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

@@ -171,14 +171,6 @@ class SpeechTranscribeRequest(BaseRequest):
         default=None,
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
-    input_vad_mode: Optional[str] = Field(
-        default=None,
-        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
-    )
-    input_vad_data: Optional[str] = Field(
-        default=None,
-        description="result data from VAD step to be processed in follow-up TTS or VC steps"
-    )
     get_language: Optional[bool] = Field(
         default=False,
         description="whether to return the source language tag. Check model description if supported."
