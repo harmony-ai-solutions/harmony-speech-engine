@@ -67,6 +67,10 @@ class ModelRunnerBase:
             outputs = self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
         elif model_type in ["OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"]:
             outputs = self._execute_openvoice_tone_converter(inputs, requests_to_batch)
+        elif model_type == "OpenVoiceV1Synthesizer":
+            outputs = self._execute_openvoice_synthesizer(inputs, requests_to_batch)
+        elif model_type == "MeloTTSSynthesizer":
+            outputs = self._execute_melotts_synthesizer(inputs, requests_to_batch)
         elif model_type == "FasterWhisper":
             outputs = self._execute_faster_whisper_transcribe(inputs, requests_to_batch)
         else:
@@ -205,32 +209,34 @@ class ModelRunnerBase:
             flavour
         )
 
-
         # FIXME: This is not properly batched
         def run_converter_encoder(input_params):
-            audio_ref, input_embedding = input_params
+            vad_audio_segments = input_params
 
-            # Embed
-            y = torch.FloatTensor(audio_ref)
-            y = y.to(self.device)
-            y = y.unsqueeze(0)
-            y = spectrogram_torch(y, hf_config.data.filter_length,
-                                  hf_config.data.sampling_rate, hf_config.data.hop_length, hf_config.data.win_length,
-                                  center=False).to(self.device)
+            gs = []
+            for audio_data in vad_audio_segments:
+                y = torch.FloatTensor(audio_data)
+                y = y.to(self.device)
+                y = y.unsqueeze(0)
+                y = spectrogram_torch(y, hf_config.data.filter_length,
+                                      hf_config.data.sampling_rate, hf_config.data.hop_length, hf_config.data.win_length,
+                                      center=False).to(self.device)
+                with torch.no_grad():
+                    g = self.model.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
+                    gs.append(g.detach())
+            gs = torch.stack(gs).mean(0)
 
-
-
-            # Encode as WAV and return base64
+            # Save Embedding
             with io.BytesIO() as handle:
-                sf.write(handle, wav, samplerate=16000, format='wav')
-                wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+                torch.save(gs.cpu(), handle)
+                embedding_string = handle.getvalue()
+            encoded_wav = base64.b64encode(embedding_string).decode('UTF-8')
             return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_converter(x)
+            inference_result = run_converter_encoder(x)
             result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             outputs.append(result)
         return outputs
@@ -253,5 +259,95 @@ class ModelRunnerBase:
             initial_request = requests_to_batch[i]
             inference_result = run_batched_transcribe(x)
             result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
+        # FIXME: This is not properly batched
+        def synthesize_text(input_params):
+            # Get inputs
+            chars, speaker_embeddings, speed_modifier, pitch_function, energy_function = input_params
+
+            # Convert to tensor
+            chars = torch.tensor(chars).long().to(self.device)
+            speaker_embeddings = torch.tensor(speaker_embeddings).float().to(self.device)
+
+            kwargs = {
+                "x": chars,
+                "spk_emb": speaker_embeddings,
+                "alpha": speed_modifier,
+                "pitch_function": pitch_function,
+                "energy_function": energy_function
+            }
+            _, mels, _, _, _  = self.model.generate(**kwargs)
+            mels = mels.detach().cpu().numpy()
+            # Combine Spectograms from generation
+            specs = []
+            for m in mels:
+                specs.append(m)
+            breaks = [subspec.shape[1] for subspec in specs]
+            full_spectogram = np.concatenate(specs, axis=1)
+
+            # Build response - TODO: This whole encoding process can be optimized later I think
+            breaks_json = json.dumps(breaks)
+            full_spectogram_json = full_spectogram.copy(order='C')  # Make C-Contigous to allow encoding
+            full_spectogram_json = json.dumps(full_spectogram_json.tolist())
+
+            response = {
+                "mel": base64.b64encode(full_spectogram_json.encode('utf-8')).decode('utf-8'),
+                "breaks": base64.b64encode(breaks_json.encode('utf-8')).decode('utf-8')
+            }
+            return json.dumps(response)
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
+        # FIXME: This is not properly batched
+        def synthesize_text(input_params):
+            # Get inputs
+            chars, speaker_embeddings, speed_modifier, pitch_function, energy_function = input_params
+
+            # Convert to tensor
+            chars = torch.tensor(chars).long().to(self.device)
+            speaker_embeddings = torch.tensor(speaker_embeddings).float().to(self.device)
+
+            kwargs = {
+                "x": chars,
+                "spk_emb": speaker_embeddings,
+                "alpha": speed_modifier,
+                "pitch_function": pitch_function,
+                "energy_function": energy_function
+            }
+            _, mels, _, _, _  = self.model.generate(**kwargs)
+            mels = mels.detach().cpu().numpy()
+            # Combine Spectograms from generation
+            specs = []
+            for m in mels:
+                specs.append(m)
+            breaks = [subspec.shape[1] for subspec in specs]
+            full_spectogram = np.concatenate(specs, axis=1)
+
+            # Build response - TODO: This whole encoding process can be optimized later I think
+            breaks_json = json.dumps(breaks)
+            full_spectogram_json = full_spectogram.copy(order='C')  # Make C-Contigous to allow encoding
+            full_spectogram_json = json.dumps(full_spectogram_json.tolist())
+
+            response = {
+                "mel": base64.b64encode(full_spectogram_json.encode('utf-8')).decode('utf-8'),
+                "breaks": base64.b64encode(breaks_json.encode('utf-8')).decode('utf-8')
+            }
+            return json.dumps(response)
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             outputs.append(result)
         return outputs

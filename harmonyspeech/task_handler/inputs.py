@@ -200,7 +200,7 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
     )
 
     # Based on VAD Data we're processing the Audio file provided
-    # TODO: This expects Whisper, needs rework to be compatible with Silero VAD
+    # TODO: This expects Whisper VAD input, needs rework to be compatible with Silero VAD
     def prepare(request):
         # Make sure Audio is decoded from Base64
         # REMARK: Embedding is only set IF we want to convert the speaker voice in the audio to the embedded voice
@@ -313,6 +313,35 @@ def prepare_faster_whisper_inputs(requests_to_batch: List[Union[
         input_audio_ref = io.BytesIO(input_audio)
         # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
         return input_audio_ref
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_openvoice_synthesizer_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    # We're recieving a text, a voice embedding and voice modifiers
+    def prepare(request):
+        input_text, input_embedding = prepare_synthesis_inputs(request.input_text, request.input_embedding)
+
+        # Base Input modifiers for HS Forward Tacotron
+        speed_function = 1.0
+        pitch_function = lambda x: x
+        energy_function = lambda x: x
+
+        if request.generation_options:
+            if request.generation_options.speed:
+                speed_function = float(request.generation_options.speed)
+            if request.generation_options.pitch:
+                pitch_function = lambda x: x * float(request.generation_options.pitch)
+            if request.generation_options.energy:
+                energy_function = lambda x: x * float(request.generation_options.energy)
+
+        return input_text, input_embedding, speed_function, pitch_function, energy_function
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
