@@ -219,7 +219,8 @@ class ModelRunnerBase:
                 y = y.to(self.device)
                 y = y.unsqueeze(0)
                 y = spectrogram_torch(y, hf_config.data.filter_length,
-                                      hf_config.data.sampling_rate, hf_config.data.hop_length, hf_config.data.win_length,
+                                      hf_config.data.sampling_rate, hf_config.data.hop_length,
+                                      hf_config.data.win_length,
                                       center=False).to(self.device)
                 with torch.no_grad():
                     g = self.model.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
@@ -230,8 +231,56 @@ class ModelRunnerBase:
             with io.BytesIO() as handle:
                 torch.save(gs.cpu(), handle)
                 embedding_string = handle.getvalue()
-            encoded_wav = base64.b64encode(embedding_string).decode('UTF-8')
-            return encoded_wav
+            encoded_embedding = base64.b64encode(embedding_string).decode('UTF-8')
+            return encoded_embedding
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_converter_encoder(x)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_openvoice_tone_converter(self, inputs, requests_to_batch):
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
+
+        # FIXME: This is not properly batched
+        def run_converter_encoder(input_params):
+            audio_ref, input_embedding_ref, source_embedding_ref = input_params
+
+            # Prepare conversion
+            target_embedding = torch.load(input_embedding_ref).to(self.device)
+            src_embedding = torch.load(source_embedding_ref).to(self.device)
+            audio = torch.tensor(audio_ref).float()
+            y = torch.FloatTensor(audio).to(self.device)
+            y = y.unsqueeze(0)
+            spec = spectrogram_torch(y, hf_config.data.filter_length,
+                                  hf_config.data.sampling_rate, hf_config.data.hop_length,
+                                  hf_config.data.win_length,
+                                  center=False).to(self.device)
+            spec_lengths = torch.LongTensor([spec.size(-1)]).to(self.device)
+
+            with torch.no_grad():
+                output_audio = self.model.voice_conversion(
+                    spec, spec_lengths, sid_src=src_embedding, sid_tgt=target_embedding, tau=0.3
+                )
+                output_audio = output_audio[0][0, 0].data.cpu().float().numpy()
+
+                # Encode as WAV and return base64
+                with io.BytesIO() as handle:
+                    sf.write(handle, output_audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                    wav_string = handle.getvalue()
+                encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+                return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -264,40 +313,45 @@ class ModelRunnerBase:
 
     def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
+
         def synthesize_text(input_params):
-            # Get inputs
-            chars, speaker_embeddings, speed_modifier, pitch_function, energy_function = input_params
+            # Iterate over inputs and add data to list
+            audio_segment_list = []
+            text_normalized, speaker_id, speed_modifier = input_params
+            for text_element in text_normalized:
+                # Get inputs
+                text_normalized, speaker_id = text_element
+                # Inference
+                with torch.no_grad():
+                    x_tst = text_normalized.unsqueeze(0).to(self.device)
+                    x_tst_lengths = torch.LongTensor([text_normalized.size(0)]).to(self.device)
+                    sid = torch.LongTensor([speaker_id]).to(self.device)
+                    audio = self.model.infer(x_tst, x_tst_lengths, sid=sid, noise_scale=0.667, noise_scale_w=0.6,
+                                             length_scale=1.0 / speed_modifier)[0][0, 0].data.cpu().float().numpy()
+                audio_segment_list.append(audio)
 
-            # Convert to tensor
-            chars = torch.tensor(chars).long().to(self.device)
-            speaker_embeddings = torch.tensor(speaker_embeddings).float().to(self.device)
+            # Concat Output Audio
+            audio_segments = []
+            for segment_data in audio_segment_list:
+                audio_segments += segment_data.reshape(-1).tolist()
+                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
+            audio = np.array(audio_segments).astype(np.float32)
 
-            kwargs = {
-                "x": chars,
-                "spk_emb": speaker_embeddings,
-                "alpha": speed_modifier,
-                "pitch_function": pitch_function,
-                "energy_function": energy_function
-            }
-            _, mels, _, _, _  = self.model.generate(**kwargs)
-            mels = mels.detach().cpu().numpy()
-            # Combine Spectograms from generation
-            specs = []
-            for m in mels:
-                specs.append(m)
-            breaks = [subspec.shape[1] for subspec in specs]
-            full_spectogram = np.concatenate(specs, axis=1)
-
-            # Build response - TODO: This whole encoding process can be optimized later I think
-            breaks_json = json.dumps(breaks)
-            full_spectogram_json = full_spectogram.copy(order='C')  # Make C-Contigous to allow encoding
-            full_spectogram_json = json.dumps(full_spectogram_json.tolist())
-
-            response = {
-                "mel": base64.b64encode(full_spectogram_json.encode('utf-8')).decode('utf-8'),
-                "breaks": base64.b64encode(breaks_json.encode('utf-8')).decode('utf-8')
-            }
-            return json.dumps(response)
+            # Encode as WAV and return base64
+            with io.BytesIO() as handle:
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                wav_string = handle.getvalue()
+            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):

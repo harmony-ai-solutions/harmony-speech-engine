@@ -8,8 +8,7 @@ from faster_whisper import WhisperModel
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
-from harmonyspeech.modeling.hf_downloader import initialize_dummy_weights, load_or_download_model, \
-    load_or_download_config
+from harmonyspeech.modeling.hf_downloader import *
 
 
 @contextlib.contextmanager
@@ -107,6 +106,44 @@ _MODEL_WEIGHTS = {
         "default": "native"
     }
 }
+
+_MODEL_SPEAKERS = {
+    "OpenVoiceV1ToneConverter": {
+        "EN": {
+            "default": "base_speakers/EN/en_default_se.pth",
+            "whispering": "base_speakers/EN/en_style_se.pth",
+            "shouting": "base_speakers/EN/en_style_se.pth",
+            "excited": "base_speakers/EN/en_style_se.pth",
+            "cheerful": "base_speakers/EN/en_style_se.pth",
+            "terrified": "base_speakers/EN/en_style_se.pth",
+            "angry": "base_speakers/EN/en_style_se.pth",
+            "sad": "base_speakers/EN/en_style_se.pth",
+            "friendly": "base_speakers/EN/en_style_se.pth",
+        },
+        "ZH": {
+            "default": "base_speakers/ZH/checkpoint.pth"
+        },
+    }
+}
+
+
+def get_model_speaker(
+    model_name_or_path: str,
+    model_type: str,
+    revision: Optional[str] = None,
+    language: str = "default",
+    speaker: str = "default"
+):
+    if model_type not in _MODEL_SPEAKERS:
+        raise NotImplementedError(f"model type {model_type} has no language option.")
+    if language not in _MODEL_SPEAKERS[model_type]:
+        raise NotImplementedError(f"model language {language} for model {model_type} does not exist.")
+    if speaker not in _MODEL_SPEAKERS[model_type][speaker]:
+        raise NotImplementedError(f"model speaker {speaker} for model {model_type} and language {language} does not exist.")
+
+    # Get Speaker
+    speaker_data = load_or_download_file(model_name_or_path, _MODEL_SPEAKERS[model_type][language][speaker], revision)
+    return speaker_data
 
 
 def get_model_config(

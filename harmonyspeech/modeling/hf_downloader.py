@@ -85,6 +85,23 @@ def get_hparams_from_file(config_path):
     return hparams
 
 
+def load_or_download_file(model_name_or_path: str, file_filename: str = "file.json", revision: str = None):
+    file_base_path = model_name_or_path
+    file_path = file_base_path + "/" + file_filename
+    if not os.path.isfile(file_path):
+        # Try via Huggingface if path is not pointing to a local file
+        # assuming file_base_path is a huggingface repo URL
+        file_path = hf_hub_download(
+            repo_id=file_base_path,
+            revision=revision,
+            filename=file_filename
+        )
+    # Read file via binary mode
+    with open(file_path, "rb", encoding="utf-8") as f:
+        data = f.read()
+    return data
+
+
 def load_or_download_config(model_name_or_path: str, config_filename: str = "config.json", revision: str = None):
     config_base_path = model_name_or_path
     config_path = config_base_path + "/" + config_filename

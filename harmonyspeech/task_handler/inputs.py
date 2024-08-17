@@ -14,10 +14,11 @@ from pydub import AudioSegment
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import *
 from harmonyspeech.common.request import EngineRequest
-from harmonyspeech.modeling.loader import get_model_flavour, get_model_config
+from harmonyspeech.modeling.loader import get_model_flavour, get_model_config, get_model_speaker
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
+from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs
 
 
 def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequest]):
@@ -73,11 +74,12 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
-                    f"VoiceConversionRequestInput or SpeechEmbeddingRequestInput")
+                    f"VoiceConversionRequestInput")
         return prepare_openvoice_tone_converter_inputs(model_config, inputs)
     elif model_config.model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"]:
         for r in requests_to_batch:
             if (
+                isinstance(r.request_data, SpeechEmbeddingRequestInput) or
                 isinstance(r.request_data, TextToSpeechRequestInput) or
                 isinstance(r.request_data, VoiceConversionRequestInput)
             ):
@@ -86,7 +88,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                     f"VoiceConversionRequestInput or SpeechEmbeddingRequestInput")
-        return prepare_openvoice_tone_converter_encoder_inputs(inputs)
+        return prepare_openvoice_tone_converter_encoder_inputs(model_config, inputs)
     elif model_config.model_type == "FasterWhisper":
         for r in requests_to_batch:
             if (
@@ -203,8 +205,6 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
     # TODO: This expects Whisper VAD input, needs rework to be compatible with Silero VAD
     def prepare(request):
         # Make sure Audio is decoded from Base64
-        # REMARK: Embedding is only set IF we want to convert the speaker voice in the audio to the embedded voice
-        #         Otherwise (if only audio provided), we want to get the embedding instead.
         input_audio = base64.b64decode(request.input_audio)
         input_vad_data = json.loads(request.input_vad_data)
         segments = input_vad_data["segments"] if "segments" in input_vad_data else []
@@ -288,14 +288,24 @@ def prepare_openvoice_tone_converter_inputs(model_config: ModelConfig, requests_
 
     # We're expecting audio in waveform format in the requests
     def prepare(request):
-        # Make sure Audio is decoded from Base64
-        # REMARK: Embedding is only set IF we want to convert the speaker voice in the audio to the embedded voice
-        #         Otherwise (if only audio provided), we want to get the embedding instead.
-        input_audio = base64.b64decode(request.input_audio)
-        input_embedding = base64.b64decode(request.input_embedding.encode('utf-8')) if request.input_embedding else None
-        bytes_pointer = io.BytesIO(input_audio)
-        audio_ref, _ = librosa.load(bytes_pointer, sr=hf_config.data.sampling_rate)
-        return audio_ref, input_embedding
+        # Make sure Audio and Embedding are decoded from Base64
+        input_audio = base64.b64decode(request.input_audio.encode('utf-8'))
+        input_embedding = base64.b64decode(request.input_embedding.encode('utf-8'))
+        input_audio_ref = io.BytesIO(input_audio)
+        input_embedding_ref = io.BytesIO(input_embedding)
+        audio_ref, _ = librosa.load(input_audio_ref, sr=hf_config.data.sampling_rate)
+
+        # Get Base Speaker Embedding from Repo
+        source_speaker_embedding_file = get_model_speaker(
+            model_config.model,
+            model_config.model_type,
+            model_config.revision,
+            model_config.language,
+            request.voice_id
+        )
+        source_embedding_ref = io.BytesIO(source_speaker_embedding_file)
+
+        return audio_ref, input_embedding_ref, source_embedding_ref
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
@@ -320,28 +330,33 @@ def prepare_faster_whisper_inputs(requests_to_batch: List[Union[
     return inputs
 
 
-def prepare_openvoice_synthesizer_inputs(requests_to_batch: List[Union[
+def prepare_openvoice_synthesizer_inputs(model_config: ModelConfig, requests_to_batch: List[Union[
     TextToSpeechRequestInput,
     SynthesisRequestInput
 ]]):
+    # Get model flavour if applicable
+    flavour = get_model_flavour(model_config)
+    # Load config
+    hf_config = get_model_config(
+        model_config.model,
+        model_config.model_type,
+        model_config.revision,
+        flavour
+    )
+
     # We're recieving a text, a voice embedding and voice modifiers
     def prepare(request):
-        input_text, input_embedding = prepare_synthesis_inputs(request.input_text, request.input_embedding)
+        input_text = request.input_text
+        speaker_id = hf_config.speakers[request.voice_id]
 
-        # Base Input modifiers for HS Forward Tacotron
-        speed_function = 1.0
-        pitch_function = lambda x: x
-        energy_function = lambda x: x
-
+        # Base Input modifiers for OpenVoice V1
+        speed_modifier = 1.0
         if request.generation_options:
             if request.generation_options.speed:
-                speed_function = float(request.generation_options.speed)
-            if request.generation_options.pitch:
-                pitch_function = lambda x: x * float(request.generation_options.pitch)
-            if request.generation_options.energy:
-                energy_function = lambda x: x * float(request.generation_options.energy)
+                speed_modifier = float(request.generation_options.speed)
 
-        return input_text, input_embedding, speed_function, pitch_function, energy_function
+        text_normalized = normalize_text_inputs(input_text, hf_config, model_config.language)
+        return text_normalized, speaker_id, speed_modifier
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
