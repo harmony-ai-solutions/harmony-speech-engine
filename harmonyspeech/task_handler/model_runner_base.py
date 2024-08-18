@@ -363,40 +363,63 @@ class ModelRunnerBase:
 
     def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
+
         def synthesize_text(input_params):
-            # Get inputs
-            chars, speaker_embeddings, speed_modifier, pitch_function, energy_function = input_params
+            # Iterate over inputs and add data to list
+            audio_segment_list = []
+            inference_items, speaker_id, speed_modifier = input_params
+            for items in inference_items:
+                # rebuild items from tuple
+                bert, ja_bert, phones, tones, lang_ids = items
 
-            # Convert to tensor
-            chars = torch.tensor(chars).long().to(self.device)
-            speaker_embeddings = torch.tensor(speaker_embeddings).float().to(self.device)
+                # Inference
+                with torch.no_grad():
+                    x_tst = phones.to(self.device).unsqueeze(0)
+                    tones = tones.to(self.device).unsqueeze(0)
+                    lang_ids = lang_ids.to(self.device).unsqueeze(0)
+                    bert = bert.to(self.device).unsqueeze(0)
+                    ja_bert = ja_bert.to(self.device).unsqueeze(0)
+                    x_tst_lengths = torch.LongTensor([phones.size(0)]).to(self.device)
+                    del phones
+                    speakers = torch.LongTensor([speaker_id]).to(self.device)
+                    audio = self.model.infer(
+                        x_tst,
+                        x_tst_lengths,
+                        speakers,
+                        tones,
+                        lang_ids,
+                        bert,
+                        ja_bert,
+                        sdp_ratio=0.2,
+                        noise_scale=0.6,
+                        noise_scale_w=0.8,
+                        length_scale=1.0 / speed_modifier
+                    )[0][0, 0].data.cpu().float().numpy()
+                    del x_tst, tones, lang_ids, bert, ja_bert, x_tst_lengths, speakers
+                audio_segment_list.append(audio)
 
-            kwargs = {
-                "x": chars,
-                "spk_emb": speaker_embeddings,
-                "alpha": speed_modifier,
-                "pitch_function": pitch_function,
-                "energy_function": energy_function
-            }
-            _, mels, _, _, _  = self.model.generate(**kwargs)
-            mels = mels.detach().cpu().numpy()
-            # Combine Spectograms from generation
-            specs = []
-            for m in mels:
-                specs.append(m)
-            breaks = [subspec.shape[1] for subspec in specs]
-            full_spectogram = np.concatenate(specs, axis=1)
+            # Concat Output Audio
+            audio_segments = []
+            for segment_data in audio_segment_list:
+                audio_segments += segment_data.reshape(-1).tolist()
+                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
+            audio = np.array(audio_segments).astype(np.float32)
 
-            # Build response - TODO: This whole encoding process can be optimized later I think
-            breaks_json = json.dumps(breaks)
-            full_spectogram_json = full_spectogram.copy(order='C')  # Make C-Contigous to allow encoding
-            full_spectogram_json = json.dumps(full_spectogram_json.tolist())
-
-            response = {
-                "mel": base64.b64encode(full_spectogram_json.encode('utf-8')).decode('utf-8'),
-                "breaks": base64.b64encode(breaks_json.encode('utf-8')).decode('utf-8')
-            }
-            return json.dumps(response)
+            # Encode as WAV and return base64
+            with io.BytesIO() as handle:
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                wav_string = handle.getvalue()
+            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):

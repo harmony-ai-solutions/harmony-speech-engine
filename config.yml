@@ -83,7 +83,7 @@ model_configs:
     device_config:
       device: "cpu"
 
-  - name: "ov2-tone-converter-Encoder"
+  - name: "ov2-tone-converter-encoder"
     model: "models/myshell-ai/openvoice_v2"
     model_type: "OpenVoiceV2ToneConverterEncoder"
     max_batch_size: 10

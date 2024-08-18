@@ -11,9 +11,6 @@ _supported_languages = ['EN', 'ZH']
 
 def split_sentences_into_pieces(text, language_str):
     texts = split_sentence(text, language_str=language_str)
-    print(" > Text splitted to sentences.")
-    print('\n'.join(texts))
-    print(" > ===========================")
     return texts
 
 

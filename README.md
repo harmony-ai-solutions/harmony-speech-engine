@@ -22,6 +22,7 @@ It's designed to serve as the backbone for providing Project Harmony.AI's Speech
   - [ ] Post-Processing / Output Filtering Overlays
   - [ ] Batching behaviour
   - [ ] TTS-Streaming
+  - [ ] More comprehensive approach to internal Re-Routing of Requests 
 - Testing & Operation
   - [ ] Unit Testing & Test mocking for Key Components
   - [ ] API Integration Tests

@@ -121,7 +121,32 @@ _MODEL_SPEAKERS = {
             "friendly": "base_speakers/EN/en_style_se.pth",
         },
         "ZH": {
-            "default": "base_speakers/ZH/checkpoint.pth"
+            "default": "base_speakers/ZH/zh_default_se.pth"
+        },
+    },
+    "OpenVoiceV2ToneConverter": {
+        "EN": {
+            "EN-Newest": "base_speakers/ses/en-newest.pth",
+            "EN-US": "base_speakers/ses/en-us.pth",
+            "EN-BR": "base_speakers/ses/en-br.pth",
+            "EN_INDIA": "base_speakers/ses/en-india.pth",
+            "EN_AU": "base_speakers/ses/en-au.pth",
+            "EN-Default": "base_speakers/ses/en-default.pth",
+        },
+        "ES": {
+            "default": "base_speakers/ses/es.pth"
+        },
+        "FR": {
+            "default": "base_speakers/ses/fr.pth"
+        },
+        "JP": {
+            "default": "base_speakers/ses/jp.pth"
+        },
+        "KR": {
+            "default": "base_speakers/ses/kr.pth"
+        },
+        "ZH": {
+            "default": "base_speakers/ses/zh.pth"
         },
     }
 }

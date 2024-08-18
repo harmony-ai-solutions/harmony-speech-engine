@@ -18,7 +18,8 @@ from harmonyspeech.modeling.loader import get_model_flavour, get_model_config, g
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
-from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs
+from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs as ov1_normalize_inputs
+from harmonyspeech.modeling.models.melo.inputs import normalize_text_inputs as melo_normalize_inputs
 
 
 def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequest]):
@@ -113,6 +114,17 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                 raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                                  f"SynthesisRequestInput")
         return prepare_openvoice_synthesizer_inputs(model_config, inputs)
+    elif model_config.model_type == "MeloTTSSynthesizer":
+        for r in requests_to_batch:
+            if (
+                isinstance(r.request_data, TextToSpeechRequestInput) or
+                isinstance(r.request_data, SynthesisRequestInput)
+            ):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                                 f"SynthesisRequestInput")
+        return prepare_melotts_synthesizer_inputs(model_config, inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -378,8 +390,42 @@ def prepare_openvoice_synthesizer_inputs(model_config: ModelConfig, requests_to_
             if request.generation_options.speed:
                 speed_modifier = float(request.generation_options.speed)
 
-        text_normalized = normalize_text_inputs(input_text, hf_config, model_config.language)
+        text_normalized = ov1_normalize_inputs(input_text, hf_config, model_config.language)
         return text_normalized, speaker_id, speed_modifier
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_melotts_synthesizer_inputs(model_config: ModelConfig, requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    # Get model flavour if applicable
+    flavour = get_model_flavour(model_config)
+    # Load config
+    hf_config = get_model_config(
+        model_config.model,
+        model_config.model_type,
+        model_config.revision,
+        flavour
+    )
+
+    # We're recieving a text, a voice embedding and voice modifiers
+    def prepare(request):
+        input_text = request.input_text
+        speaker_id = hf_config.data.spk2id[request.voice_id]
+
+        # Base Input modifiers for MeloTTS
+        speed_modifier = 1.0
+        if request.generation_options:
+            if request.generation_options.speed:
+                speed_modifier = float(request.generation_options.speed)
+
+        inference_items = melo_normalize_inputs(input_text, hf_config, model_config.language)
+        return inference_items, speaker_id, speed_modifier
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

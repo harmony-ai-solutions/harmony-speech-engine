@@ -5,7 +5,7 @@ import re
 import unicodedata
 from transformers import AutoTokenizer
 
-from harmonyspeech.modeling.models.melo.text import symbols
+from harmonyspeech.modeling.models.melo.text.symbols import symbols
 
 punctuation = ["!", "?", "…", ",", ".", "'", "-"]
 
@@ -537,21 +537,25 @@ def replace_punctuation(text):
 
     return replaced_text
 
-from pykakasi import kakasi
-# Initialize kakasi object
-kakasi = kakasi()
-# Set options for converting Chinese characters to Katakana
-kakasi.setMode("J", "K")  # Chinese to Katakana
-kakasi.setMode("H", "K")  # Hiragana to Katakana
-# Convert Chinese characters to Katakana
-conv = kakasi.getConverter()
+
+# Commented out until this is fixed:
+# https://youtrack.jetbrains.com/issue/PY-65289/Pytestddtrace-crashes-with-python-3.12-and-2023.3
+
+# from pykakasi import kakasi
+# # Initialize kakasi object
+# kakasi = kakasi()
+# # Set options for converting Chinese characters to Katakana
+# kakasi.setMode("J", "K")  # Chinese to Katakana
+# kakasi.setMode("H", "K")  # Hiragana to Katakana
+# # Convert Chinese characters to Katakana
+# conv = kakasi.getConverter()
 
 def text_normalize(text):
     res = unicodedata.normalize("NFKC", text)
     res = japanese_convert_numbers_to_words(res)
     res = "".join([i for i in res if is_japanese_character(i)])
     res = replace_punctuation(res)
-    res = conv.do(res)
+    # res = conv.do(res) <------------------------------------------------------ THIS AS WELL (PY-65289)
     return res
 
 
@@ -608,29 +612,29 @@ def g2p(norm_text):
         phs += phonemes
     phones = ["_"] + phs + ["_"]
     tones = [0 for i in phones]
-    word2ph =  [1] + word2ph + [1]
+    word2ph = [1] + word2ph + [1]
     assert len(word2ph) == len(tokenized) + 2
     return phones, tones, word2ph
 
 def get_bert_feature(text, word2ph, device):
-    from text import japanese_bert
+    from harmonyspeech.modeling.models.melo.text import japanese_bert
 
     return japanese_bert.get_bert_feature(text, word2ph, device=device)
 
 
-if __name__ == "__main__":
-    # tokenizer = AutoTokenizer.from_pretrained("./bert/bert-base-japanese-v3")
-    text = "こんにちは、世界！..."
-    text = 'ええ、僕はおきなと申します。こちらの小さいわらべは杏子。ご挨拶が遅れてしまいすみません。あなたの名は?'
-    text = 'あの、お前以外のみんなは、全員生きてること?'
-    from text.japanese_bert import get_bert_feature
-
-    text = text_normalize(text)
-    print(text)
-    phones, tones, word2ph = g2p(text)
-    bert = get_bert_feature(text, word2ph)
-
-    print(phones, tones, word2ph, bert.shape)
+# if __name__ == "__main__":
+#     # tokenizer = AutoTokenizer.from_pretrained("./bert/bert-base-japanese-v3")
+#     text = "こんにちは、世界！..."
+#     text = 'ええ、僕はおきなと申します。こちらの小さいわらべは杏子。ご挨拶が遅れてしまいすみません。あなたの名は?'
+#     text = 'あの、お前以外のみんなは、全員生きてること?'
+#     from harmonyspeech.modeling.models.melo.text.japanese_bert import get_bert_feature
+#
+#     text = text_normalize(text)
+#     print(text)
+#     phones, tones, word2ph = g2p(text)
+#     bert = get_bert_feature(text, word2ph)
+#
+#     print(phones, tones, word2ph, bert.shape)
 
 # if __name__ == '__main__':
 #     from pykakasi import kakasi
