@@ -5,7 +5,8 @@ import re
 from g2p_en import G2p
 from transformers import AutoTokenizer
 
-from harmonyspeech.modeling.models.melo.text import symbols, english_bert
+from harmonyspeech.modeling.models.melo.text import english_bert
+from harmonyspeech.modeling.models.melo.text.symbols import symbols
 from harmonyspeech.modeling.models.melo.text.english_utils.abbreviations import expand_abbreviations
 from harmonyspeech.modeling.models.melo.text.english_utils.number_norm import normalize_numbers
 from harmonyspeech.modeling.models.melo.text.english_utils.time_norm import expand_time_english

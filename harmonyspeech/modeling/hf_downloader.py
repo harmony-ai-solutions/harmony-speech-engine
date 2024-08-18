@@ -6,26 +6,6 @@ import huggingface_hub.constants
 import torch
 from huggingface_hub import hf_hub_download
 
-_DOWNLOAD_CKPT_URLS = {
-    'EN': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/EN/checkpoint.pth',
-    'EN_V2': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/EN_V2/checkpoint.pth',
-    'FR': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/FR/checkpoint.pth',
-    'JP': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/JP/checkpoint.pth',
-    'ES': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/ES/checkpoint.pth',
-    'ZH': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/ZH/checkpoint.pth',
-    'KR': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/KR/checkpoint.pth',
-}
-
-DOWNLOAD_CONFIG_URLS = {
-    'EN': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/EN/config.json',
-    'EN_V2': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/EN_V2/config.json',
-    'FR': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/FR/config.json',
-    'JP': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/JP/config.json',
-    'ES': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/ES/config.json',
-    'ZH': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/ZH/config.json',
-    'KR': 'https://myshell-public-repo-hosting.s3.amazonaws.com/openvoice/basespeakers/KR/config.json',
-}
-
 
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
@@ -103,6 +83,23 @@ def get_hparams_from_file(config_path):
 
     hparams = HParams(**config)
     return hparams
+
+
+def load_or_download_file(model_name_or_path: str, file_filename: str = "file.json", revision: str = None):
+    file_base_path = model_name_or_path
+    file_path = file_base_path + "/" + file_filename
+    if not os.path.isfile(file_path):
+        # Try via Huggingface if path is not pointing to a local file
+        # assuming file_base_path is a huggingface repo URL
+        file_path = hf_hub_download(
+            repo_id=file_base_path,
+            revision=revision,
+            filename=file_filename
+        )
+    # Read file via binary mode
+    with open(file_path, "rb") as f:
+        data = f.read()
+    return data
 
 
 def load_or_download_config(model_name_or_path: str, config_filename: str = "config.json", revision: str = None):

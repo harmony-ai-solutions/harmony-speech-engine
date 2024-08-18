@@ -4,11 +4,11 @@ from typing import Type, Optional
 
 import torch
 import torch.nn as nn
+from faster_whisper import WhisperModel
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
-from harmonyspeech.modeling.hf_downloader import initialize_dummy_weights, load_or_download_model, \
-    load_or_download_config
+from harmonyspeech.modeling.hf_downloader import *
 
 
 @contextlib.contextmanager
@@ -40,11 +40,17 @@ _MODEL_CONFIGS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/config.json",
     },
+    "OpenVoiceV1ToneConverterEncoder": {
+        "default": "converter/config.json",
+    },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "config.json",
     },
     "OpenVoiceV2ToneConverter": {
+        "default": "converter/config.json",
+    },
+    "OpenVoiceV2ToneConverterEncoder": {
         "default": "converter/config.json",
     },
     # Harmony Speech V1
@@ -57,6 +63,10 @@ _MODEL_CONFIGS = {
     "HarmonySpeechVocoder": {
         "default": "vocoder/config.json"
     },
+    # Faster-Whisper
+    "FasterWhisper": {
+        "default": "native"
+    }
 }
 
 _MODEL_WEIGHTS = {
@@ -68,11 +78,17 @@ _MODEL_WEIGHTS = {
     "OpenVoiceV1ToneConverter": {
         "default": "converter/checkpoint.pth",
     },
+    "OpenVoiceV1ToneConverterEncoder": {
+        "default": "converter/checkpoint.pth",
+    },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
         "default": "checkpoint.pth",
     },
     "OpenVoiceV2ToneConverter": {
+        "default": "converter/checkpoint.pth",
+    },
+    "OpenVoiceV2ToneConverterEncoder": {
         "default": "converter/checkpoint.pth",
     },
     # Harmony Speech V1
@@ -85,7 +101,74 @@ _MODEL_WEIGHTS = {
     "HarmonySpeechVocoder": {
         "default": "vocoder/vocoder.pt"
     },
+    # Faster-Whisper
+    "FasterWhisper": {
+        "default": "native"
+    }
 }
+
+_MODEL_SPEAKERS = {
+    "OpenVoiceV1ToneConverter": {
+        "EN": {
+            "default": "base_speakers/EN/en_default_se.pth",
+            "whispering": "base_speakers/EN/en_style_se.pth",
+            "shouting": "base_speakers/EN/en_style_se.pth",
+            "excited": "base_speakers/EN/en_style_se.pth",
+            "cheerful": "base_speakers/EN/en_style_se.pth",
+            "terrified": "base_speakers/EN/en_style_se.pth",
+            "angry": "base_speakers/EN/en_style_se.pth",
+            "sad": "base_speakers/EN/en_style_se.pth",
+            "friendly": "base_speakers/EN/en_style_se.pth",
+        },
+        "ZH": {
+            "default": "base_speakers/ZH/zh_default_se.pth"
+        },
+    },
+    "OpenVoiceV2ToneConverter": {
+        "EN": {
+            "EN-Newest": "base_speakers/ses/en-newest.pth",
+            "EN-US": "base_speakers/ses/en-us.pth",
+            "EN-BR": "base_speakers/ses/en-br.pth",
+            "EN_INDIA": "base_speakers/ses/en-india.pth",
+            "EN_AU": "base_speakers/ses/en-au.pth",
+            "EN-Default": "base_speakers/ses/en-default.pth",
+        },
+        "ES": {
+            "default": "base_speakers/ses/es.pth"
+        },
+        "FR": {
+            "default": "base_speakers/ses/fr.pth"
+        },
+        "JP": {
+            "default": "base_speakers/ses/jp.pth"
+        },
+        "KR": {
+            "default": "base_speakers/ses/kr.pth"
+        },
+        "ZH": {
+            "default": "base_speakers/ses/zh.pth"
+        },
+    }
+}
+
+
+def get_model_speaker(
+    model_name_or_path: str,
+    model_type: str,
+    revision: Optional[str] = None,
+    language: str = "default",
+    speaker: str = "default"
+):
+    if model_type not in _MODEL_SPEAKERS:
+        raise NotImplementedError(f"model type {model_type} has no language option.")
+    if language not in _MODEL_SPEAKERS[model_type]:
+        raise NotImplementedError(f"model language {language} for model {model_type} does not exist.")
+    if speaker not in _MODEL_SPEAKERS[model_type][language]:
+        raise NotImplementedError(f"model speaker {speaker} for model {model_type} and language {language} does not exist.")
+
+    # Get Speaker
+    speaker_data = load_or_download_file(model_name_or_path, _MODEL_SPEAKERS[model_type][language][speaker], revision)
+    return speaker_data
 
 
 def get_model_config(
@@ -98,6 +181,10 @@ def get_model_config(
         raise NotImplementedError(f"model type {model_type} is not implemented.")
     if flavour not in _MODEL_CONFIGS[model_type]:
         raise NotImplementedError(f"model subtype {flavour} for model {model_type} does not exist.")
+
+    # Bailout for native Model implementations
+    if _MODEL_CONFIGS[model_type][flavour] == "native":
+        return "native"
 
     # Get Config
     config_data = load_or_download_config(model_name_or_path, _MODEL_CONFIGS[model_type][flavour], revision)
@@ -128,7 +215,7 @@ def get_model_flavour(model_config: ModelConfig):
     return "default"
 
 
-def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) -> nn.Module:
+def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
     model_class = _get_model_cls(model_config)
 
     with _set_default_torch_dtype(model_config.dtype):
@@ -141,11 +228,21 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs) 
         # The weights will be initialized as empty tensors.
         with torch.device(device_config.device):
 
+            # Bailout for native models
+            if model_class == "native" and hf_config == "native":
+                if model_config.model_type == "FasterWhisper":
+                    model = WhisperModel(model_config.model)
+                    return model
+
             # Initialize the model using config
             if hasattr(hf_config, "model"):
                 # Model class initialization for Harmony Speech Models and OpenVoice
                 if model_config.model_type in [
-                    "OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"
+                    "OpenVoiceV1Synthesizer",
+                    "OpenVoiceV1ToneConverter",
+                    "OpenVoiceV1ToneConverterEncoder",
+                    "OpenVoiceV2ToneConverter",
+                    "OpenVoiceV2ToneConverterEncoder"
                 ]:
                     # Dynamic Parameters for OpenVoice
                     hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))

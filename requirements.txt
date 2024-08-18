@@ -27,8 +27,12 @@ anyascii
 jamo
 webrtcvad
 pyyaml
+pydub
 mecab-python3
 unidic-lite
 pykakasi
 unidecode
 soundfile
+faster-whisper
+eng_to_ipa
+fugashi

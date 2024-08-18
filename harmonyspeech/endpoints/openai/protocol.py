@@ -101,15 +101,19 @@ class TextToSpeechRequest(BaseRequest):
     )
     input_audio: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
-    target_audio: Optional[str] = Field(
+    input_vad_mode: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
     )
-    target_embedding: Optional[str] = Field(
+    input_vad_data: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+        description="result data from VAD step to be processed in follow-up TTS or VC steps"
+    )
+    input_embedding: Optional[str] = Field(
+        default=None,
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
                     "Faster than providing a target audio file"
     )
     generation_options: Optional[GenerationOptions] = Field(
@@ -163,7 +167,10 @@ class SpeechTranscribeRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
-    file: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    input_audio: Optional[str] = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+    )
     get_language: Optional[bool] = Field(
         default=False,
         description="whether to return the source language tag. Check model description if supported."
@@ -222,9 +229,9 @@ class SynthesizeAudioRequest(BaseRequest):
         description="ID of the voice to synthesize. Only if the model supports voice IDs. "
                     "Please refer to the model's documentation for which values are availiable."
     )
-    target_embedding: Optional[str] = Field(
+    input_embedding: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
                     "Faster than providing a target audio file"
     )
     generation_options: Optional[GenerationOptions] = Field(

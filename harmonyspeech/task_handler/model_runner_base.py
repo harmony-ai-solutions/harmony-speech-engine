@@ -2,23 +2,20 @@ import base64
 import io
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
-from typing import List, Union
-from loguru import logger
+from typing import List
 
-import soundfile as sf
 import numpy as np
+import soundfile as sf
 import torch
 
+from faster_whisper import BatchedInferencePipeline
+
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput, VocodeRequestInput, \
-    SynthesisRequestInput
-from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput, VocodeRequestOutput
+from harmonyspeech.common.outputs import *
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
-from harmonyspeech.modeling.loader import get_model
-from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
-from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
-from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
+from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
+from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
+from harmonyspeech.task_handler.inputs import prepare_inputs
 
 
 class ModelRunnerBase:
@@ -56,7 +53,7 @@ class ModelRunnerBase:
         :param requests_to_batch:
         :return:
         """
-        inputs = self.prepare_inputs(requests_to_batch)
+        inputs = prepare_inputs(self.model_config, requests_to_batch)
         outputs = []
 
         model_type = getattr(self.model_config, 'model_type', None)
@@ -66,10 +63,36 @@ class ModelRunnerBase:
             outputs = self._execute_harmonyspeech_synthesizer(inputs, requests_to_batch)
         elif model_type == "HarmonySpeechVocoder":
             outputs = self._execute_harmonyspeech_vocoder(inputs, requests_to_batch)
+        elif model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"]:
+            outputs = self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
+        elif model_type in ["OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"]:
+            outputs = self._execute_openvoice_tone_converter(inputs, requests_to_batch)
+        elif model_type == "OpenVoiceV1Synthesizer":
+            outputs = self._execute_openvoice_synthesizer(inputs, requests_to_batch)
+        elif model_type == "MeloTTSSynthesizer":
+            outputs = self._execute_melotts_synthesizer(inputs, requests_to_batch)
+        elif model_type == "FasterWhisper":
+            outputs = self._execute_faster_whisper_transcribe(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
         return outputs
+
+    def _build_result(self, initial_request, inference_result, result_cls):
+        request_id = initial_request.request_id
+        metrics = initial_request.metrics
+        metrics.finished_time = time.time()
+        result = ExecutorResult(
+            request_id=request_id,
+            input_data=initial_request.request_data,
+            result_data=result_cls(
+                request_id=request_id,
+                output=inference_result,
+                finish_reason="stop",
+                metrics=metrics
+            )
+        )
+        return result
 
     def _execute_harmonyspeech_encoder(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
@@ -88,20 +111,8 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            request_id = initial_request.request_id
-            metrics = initial_request.metrics
-            metrics.finished_time = time.time()
-
-            result = ExecutorResult(
-                request_id=request_id,
-                input_data=initial_request.request_data,
-                result_data=SpeechEmbeddingRequestOutput(
-                    request_id=request_id,
-                    output=embed_utterance(x),
-                    finish_reason="stop",
-                    metrics=metrics
-                )
-            )
+            inference_result = embed_utterance(x)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -145,20 +156,8 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            request_id = initial_request.request_id
-            metrics = initial_request.metrics
-            metrics.finished_time = time.time()
-
-            result = ExecutorResult(
-                request_id=request_id,
-                input_data=initial_request.request_data,
-                result_data=SpeechSynthesisRequestOutput(
-                    request_id=request_id,
-                    output=synthesize_text(x),
-                    finish_reason="stop",
-                    metrics=metrics
-                )
-            )
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -194,145 +193,238 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            request_id = initial_request.request_id
-            metrics = initial_request.metrics
-            metrics.finished_time = time.time()
-
-            result = ExecutorResult(
-                request_id=request_id,
-                input_data=initial_request.request_data,
-                result_data=VocodeRequestOutput(
-                    request_id=request_id,
-                    output=vocode_mel(x),
-                    finish_reason="stop",
-                    metrics=metrics
-                )
-            )
+            inference_result = vocode_mel(x)
+            result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
             outputs.append(result)
         return outputs
 
-    def prepare_inputs(self, requests_to_batch: List[EngineRequest]):
-        """
-        Prepares the request data depending on the model type this runner is executing.
-        Throws a NotImplementedError if the model type is unknown
-        :param requests_to_batch:
-        :return:
-        """
-        inputs = []
-        model_type = getattr(self.model_config, 'model_type', None)
-        if model_type == "HarmonySpeechEncoder":
-            for r in requests_to_batch:
-                if (
-                    isinstance(r.request_data, TextToSpeechRequestInput) or
-                    isinstance(r.request_data, SpeechEmbeddingRequestInput)
-                ):
-                    inputs.append(r.request_data)
-                else:
-                    raise ValueError(
-                        f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
-                        f"SpeechEmbeddingRequestInput")
-            return self._prepare_harmonyspeech_encoder_inputs(inputs)
-        elif model_type == "HarmonySpeechSynthesizer":
-            for r in requests_to_batch:
-                if (
-                    isinstance(r.request_data, TextToSpeechRequestInput) or
-                    isinstance(r.request_data, SynthesisRequestInput)
-                ):
-                    inputs.append(r.request_data)
-                else:
-                    raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput")
-            return self._prepare_harmonyspeech_synthesizer_inputs(inputs)
-        elif model_type == "HarmonySpeechVocoder":
-            for r in requests_to_batch:
-                if (
-                    isinstance(r.request_data, TextToSpeechRequestInput) or
-                    isinstance(r.request_data, VocodeRequestInput)
-                ):
-                    inputs.append(r.request_data)
-                else:
-                    raise ValueError(
-                        f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
-                        f"VocodeAudioRequestInput")
-            return self._prepare_harmonyspeech_vocoder_inputs(inputs)
-        else:
-            raise NotImplementedError(f"Cannot provide Inputs for model {model_type}")
+    def _execute_openvoice_tone_converter_encoder(self, inputs, requests_to_batch):
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
 
-    def _prepare_harmonyspeech_encoder_inputs(self, requests_to_batch: List[Union[
-        TextToSpeechRequestInput,
-        SpeechEmbeddingRequestInput
-    ]]):
-        # We're expecting audio in waveform format in the requests
-        def prepare(request):
-            # FIXME: This is not properly batched
-            # Make sure Audio is decoded from Base64
-            input_audio = base64.b64decode(request.input_audio)
-            preprocessed_audio = preprocess_wav(input_audio)
-            input_frames = get_input_frames(preprocessed_audio)
-            # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
-            return input_frames
+        # FIXME: This is not properly batched
+        def run_converter_encoder(input_params):
+            vad_audio_segments = input_params
 
-        with ThreadPoolExecutor() as executor:
-            inputs = list(executor.map(prepare, requests_to_batch))
+            gs = []
+            for audio_data in vad_audio_segments:
+                y = torch.FloatTensor(audio_data)
+                y = y.to(self.device)
+                y = y.unsqueeze(0)
+                y = spectrogram_torch(y, hf_config.data.filter_length,
+                                      hf_config.data.sampling_rate, hf_config.data.hop_length,
+                                      hf_config.data.win_length,
+                                      center=False).to(self.device)
+                with torch.no_grad():
+                    g = self.model.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
+                    gs.append(g.detach())
+            gs = torch.stack(gs).mean(0)
 
-        return inputs
+            # Save Embedding
+            with io.BytesIO() as handle:
+                torch.save(gs.cpu(), handle)
+                embedding_string = handle.getvalue()
+            encoded_embedding = base64.b64encode(embedding_string).decode('UTF-8')
+            return encoded_embedding
 
-    def _prepare_harmonyspeech_synthesizer_inputs(self, requests_to_batch: List[Union[
-        TextToSpeechRequestInput,
-        SynthesisRequestInput
-    ]]):
-        # We're recieving a text, a voice embedding and voice modifiers
-        def prepare(request):
-            input_text, input_embedding = prepare_synthesis_inputs(request.input_text, request.input_embedding)
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_converter_encoder(x)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            outputs.append(result)
+        return outputs
 
-            # Base Input modifiers for HS Forward Tacotron
-            speed_function = 1.0
-            pitch_function = lambda x: x
-            energy_function = lambda x: x
+    def _execute_openvoice_tone_converter(self, inputs, requests_to_batch):
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
 
-            if request.generation_options:
-                if request.generation_options.speed:
-                    speed_function = float(request.generation_options.speed)
-                if request.generation_options.pitch:
-                    pitch_function = lambda x: x * float(request.generation_options.pitch)
-                if request.generation_options.energy:
-                    energy_function = lambda x: x * float(request.generation_options.energy)
+        # FIXME: This is not properly batched
+        def run_converter_encoder(input_params):
+            audio_ref, input_embedding_ref, source_embedding_ref = input_params
 
-            return input_text, input_embedding, speed_function, pitch_function, energy_function
+            # Prepare conversion
+            target_embedding = torch.load(input_embedding_ref).to(self.device)
+            src_embedding = torch.load(source_embedding_ref).to(self.device)
+            audio = torch.tensor(audio_ref).float()
+            y = torch.FloatTensor(audio).to(self.device)
+            y = y.unsqueeze(0)
+            spec = spectrogram_torch(y, hf_config.data.filter_length,
+                                  hf_config.data.sampling_rate, hf_config.data.hop_length,
+                                  hf_config.data.win_length,
+                                  center=False).to(self.device)
+            spec_lengths = torch.LongTensor([spec.size(-1)]).to(self.device)
 
-        with ThreadPoolExecutor() as executor:
-            inputs = list(executor.map(prepare, requests_to_batch))
+            with torch.no_grad():
+                output_audio = self.model.voice_conversion(
+                    spec, spec_lengths, sid_src=src_embedding, sid_tgt=target_embedding, tau=0.3
+                )
+                output_audio = output_audio[0][0, 0].data.cpu().float().numpy()
 
-        return inputs
+                # Encode as WAV and return base64
+                with io.BytesIO() as handle:
+                    sf.write(handle, output_audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                    wav_string = handle.getvalue()
+                encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+                return encoded_wav
 
-    def _prepare_harmonyspeech_vocoder_inputs(self, requests_to_batch: List[Union[
-        TextToSpeechRequestInput,
-        VocodeRequestInput
-    ]]):
-        # We're expecting a synthesized mel spectogram and breaks
-        def prepare(request):
-            # TODO: Adapt this after optimizing synthesis step encoding
-            synthesis_input = json.loads(request.input_audio)
-            syn_mel = synthesis_input["mel"] if "mel" in synthesis_input else None
-            syn_breaks = synthesis_input["breaks"] if "breaks" in synthesis_input else None
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_converter_encoder(x)
+            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            outputs.append(result)
+        return outputs
 
-            # Decode input from base64
-            try:
-                # Theoretically, vocoder works without breaks
-                if syn_breaks is not None:
-                    syn_breaks = base64.b64decode(syn_breaks.encode('utf-8'))
-                    syn_breaks = json.loads(syn_breaks)
+    def _execute_faster_whisper_transcribe(self, inputs, requests_to_batch):
+        def run_batched_transcribe(input_params):
+            audio_ref = input_params
+            batched_model = BatchedInferencePipeline(model=self.model)
+            segments, info = batched_model.transcribe(audio_ref, batch_size=16)
+            segment_data = []
+            for segment in segments:
+                segment_data.append(segment._asdict())
 
-                syn_mel = base64.b64decode(syn_mel.encode('utf-8'))
-                syn_mel = json.loads(syn_mel)
-                syn_mel = np.array(syn_mel, dtype=np.float32)
-            except Exception as e:
-                logger.error(str(e))
+            response = {
+                "segments": base64.b64encode(json.dumps(segment_data).encode('utf-8')).decode('utf-8'),
+                "info": base64.b64encode(json.dumps(info).encode('utf-8')).decode('utf-8')
+            }
+            return json.dumps(response)
 
-            # Normalize mel for decoding
-            input_mel = syn_mel / 4.0  # Fixme: make this configurable
-            return input_mel, syn_breaks
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_batched_transcribe(x)
+            result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            outputs.append(result)
+        return outputs
 
-        with ThreadPoolExecutor() as executor:
-            inputs = list(executor.map(prepare, requests_to_batch))
+    def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
+        # FIXME: This is not properly batched
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
 
-        return inputs
+        def synthesize_text(input_params):
+            # Iterate over inputs and add data to list
+            audio_segment_list = []
+            text_normalized, speaker_id, speed_modifier = input_params
+            for text_element in text_normalized:
+                # Inference
+                with torch.no_grad():
+                    x_tst = text_element.unsqueeze(0).to(self.device)
+                    x_tst_lengths = torch.LongTensor([text_element.size(0)]).to(self.device)
+                    sid = torch.LongTensor([speaker_id]).to(self.device)
+                    audio = self.model.infer(x_tst, x_tst_lengths, sid=sid, noise_scale=0.667, noise_scale_w=0.6,
+                                             length_scale=1.0 / speed_modifier)[0][0, 0].data.cpu().float().numpy()
+                audio_segment_list.append(audio)
+
+            # Concat Output Audio
+            audio_segments = []
+            for segment_data in audio_segment_list:
+                audio_segments += segment_data.reshape(-1).tolist()
+                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
+            audio = np.array(audio_segments).astype(np.float32)
+
+            # Encode as WAV and return base64
+            with io.BytesIO() as handle:
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                wav_string = handle.getvalue()
+            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            return encoded_wav
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
+        # FIXME: This is not properly batched
+        # Get model flavour if applicable
+        flavour = get_model_flavour(self.model_config)
+        # Load config
+        hf_config = get_model_config(
+            self.model_config.model,
+            self.model_config.model_type,
+            self.model_config.revision,
+            flavour
+        )
+
+        def synthesize_text(input_params):
+            # Iterate over inputs and add data to list
+            audio_segment_list = []
+            inference_items, speaker_id, speed_modifier = input_params
+            for items in inference_items:
+                # rebuild items from tuple
+                bert, ja_bert, phones, tones, lang_ids = items
+
+                # Inference
+                with torch.no_grad():
+                    x_tst = phones.to(self.device).unsqueeze(0)
+                    tones = tones.to(self.device).unsqueeze(0)
+                    lang_ids = lang_ids.to(self.device).unsqueeze(0)
+                    bert = bert.to(self.device).unsqueeze(0)
+                    ja_bert = ja_bert.to(self.device).unsqueeze(0)
+                    x_tst_lengths = torch.LongTensor([phones.size(0)]).to(self.device)
+                    del phones
+                    speakers = torch.LongTensor([speaker_id]).to(self.device)
+                    audio = self.model.infer(
+                        x_tst,
+                        x_tst_lengths,
+                        speakers,
+                        tones,
+                        lang_ids,
+                        bert,
+                        ja_bert,
+                        sdp_ratio=0.2,
+                        noise_scale=0.6,
+                        noise_scale_w=0.8,
+                        length_scale=1.0 / speed_modifier
+                    )[0][0, 0].data.cpu().float().numpy()
+                    del x_tst, tones, lang_ids, bert, ja_bert, x_tst_lengths, speakers
+                audio_segment_list.append(audio)
+
+            # Concat Output Audio
+            audio_segments = []
+            for segment_data in audio_segment_list:
+                audio_segments += segment_data.reshape(-1).tolist()
+                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
+            audio = np.array(audio_segments).astype(np.float32)
+
+            # Encode as WAV and return base64
+            with io.BytesIO() as handle:
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                wav_string = handle.getvalue()
+            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            return encoded_wav
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            outputs.append(result)
+        return outputs

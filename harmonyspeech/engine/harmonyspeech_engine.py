@@ -7,11 +7,9 @@ from loguru import logger
 
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput, VocodeRequestInput, \
-    SynthesisRequestInput, TextToSpeechRequestInput
+from harmonyspeech.common.inputs import *
 from harmonyspeech.common.logger import setup_logger
-from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput, SpeechSynthesisRequestOutput, \
-    TextToSpeechRequestOutput
+from harmonyspeech.common.outputs import *
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import Stats, StatLogger
@@ -101,46 +99,173 @@ class HarmonySpeechEngine:
         #     model_cfg.verify_with_parallel_config(self.parallel_config)
         return None
 
+    def reroute_request_harmonyspeech(self, request: RequestInput):
+        if (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechSynthesizer":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VocodeRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for vocoder
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "HarmonySpeechVocoder":
+                    request.model = cfg.name
+                    break
+
+    def reroute_request_openvoice_v1(self, request: RequestInput):
+        """
+        OpenVoice V1 uses a multi-step-embedding process for improving accuracy.
+        This process involves retrieving VAD information for the provided audio if that's not provided.
+        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
+        provided in the OpenVoice repo.
+
+        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
+        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
+        3. TTS using base Synthesizer model
+        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
+        """
+        if (isinstance(request, SpeechTranscribeRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                # TODO: add switch for silero here using request.input_vad_mode
+                if cfg.model_type == "FasterWhisper":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SpeechEmbeddingRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  #
+                  request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
+                  request.input_embedding is None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1ToneConverterEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1Synthesizer" and cfg.language == request.language_id:
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VoiceConversionRequest) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV1ToneConverter":
+                    request.model = cfg.name
+                    break
+
+    def reroute_request_openvoice_v2(self, request: RequestInput):
+        """
+        OpenVoice V2 uses a multi-step-embedding process for improving accuracy.
+        This process involves retrieving VAD information for the provided audio if that's not provided.
+        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
+        provided in the OpenVoice repo.
+
+        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
+        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
+        3. TTS using Melo
+        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
+        """
+        if (isinstance(request, SpeechTranscribeRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                # TODO: add switch for silero here using request.input_vad_mode
+                if cfg.model_type == "FasterWhisper":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and  #
+                request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
+                request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV2ToneConverterEncoder":
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, SynthesisRequestInput) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is None and  # Removing Input audio after Embedding Step
+                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "MeloTTSSynthesizer" and cfg.language == request.language_id:
+                    request.model = cfg.name
+                    break
+        elif (isinstance(request, VoiceConversionRequest) or
+              (
+                  isinstance(request, TextToSpeechRequestInput) and
+                  request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
+                  request.input_embedding is not None
+              )
+        ):
+            for cfg in self.model_configs:
+                if cfg.model_type == "OpenVoiceV2ToneConverter":
+                    request.model = cfg.name
+                    break
+
     def check_reroute_request_to_model(self, request: RequestInput):
         # Harmonyspeech TTS Processing
         if request.requested_model == "harmonyspeech":
-            if (isinstance(request, SpeechEmbeddingRequestInput) or
-                (
-                    isinstance(request, TextToSpeechRequestInput) and
-                    request.input_audio is not None and  #
-                    request.input_embedding is None  # Output of Embedding becomes input for synthesis
-                )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechEncoder":
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, SynthesisRequestInput) or
-                    (
-                        isinstance(request, TextToSpeechRequestInput) and
-                        request.input_audio is None and  # Removing Input audio after Embedding Step
-                        request.input_embedding is not None  # Output of Embedding becomes input for synthesis
-                    )
-                ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechSynthesizer":
-                        request.model = cfg.name
-                        break
-            elif (isinstance(request, VocodeRequestInput) or
-                  (
-                      isinstance(request, TextToSpeechRequestInput) and
-                      request.input_audio is not None and  # Output of synthesis becomes Input for vocoder
-                      request.input_embedding is not None
-                  )
-            ):
-                for cfg in self.model_configs:
-                    if cfg.model_type == "HarmonySpeechVocoder":
-                        request.model = cfg.name
-                        break
-
+            self.reroute_request_harmonyspeech(request)
         # OpenVoice V1 TTS & VC Processing
-        # if request.requested_model == "openvoice_v1":
-
+        if request.requested_model == "openvoice_v1":
+            self.reroute_request_openvoice_v1(request)
+        # OpenVoice V2 TTS & VC Processing
+        if request.requested_model == "openvoice_v2":
+            self.reroute_request_openvoice_v2(request)
 
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED
@@ -153,14 +278,35 @@ class HarmonySpeechEngine:
                 break
 
         if returning_model_cfg == requested_model:
-            return new_status
+            return new_status, None
 
-        # Harmonyspeech TTS Processing
         forwarding_request = None
-        if requested_model == "harmonyspeech" and isinstance(input_data, TextToSpeechRequestInput):
+
+        # Multi-Step TTS Processing (Harmonyspeech, OpenVoice)
+        if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
+            "harmonyspeech",
+            "openvoice_v1",
+            "openvoice_v2"
+        ]:
             forwarding_request = input_data
 
-            if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+            if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
+                # Transcription results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Transcription Step Finished, provide VAD Result Data for Embedding Step
+                forwarding_request.input_vad_data = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
+            elif isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+                # Embedding results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as forwarded in scheduler
                 new_status = RequestStatus.FINISHED_FORWARDED
                 self.scheduler.update_request_status(result.request_id, new_status)
@@ -169,6 +315,11 @@ class HarmonySpeechEngine:
                 forwarding_request.input_embedding = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
             elif isinstance(result.result_data, SpeechSynthesisRequestOutput):
+                # Synthesis results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as forwarded in scheduler
                 new_status = RequestStatus.FINISHED_FORWARDED
                 self.scheduler.update_request_status(result.request_id, new_status)
@@ -176,6 +327,11 @@ class HarmonySpeechEngine:
                 forwarding_request.input_audio = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
             else:  # There should be only vocoder results here...
+                # Vocoding / Voice Conversion results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # - Harmony Speech
+
                 # Mark as finished in scheduler
                 new_status = RequestStatus.FINISHED_STOPPED
                 self.scheduler.update_request_status(result.request_id, new_status)
@@ -188,6 +344,8 @@ class HarmonySpeechEngine:
                     metrics=result.result_data.metrics if result.result_data.metrics else None
                 )
                 result.result_data = tts_result
+
+        # TODO: Post-Generation Processing
 
         return new_status, forwarding_request
 
@@ -376,8 +534,9 @@ class HarmonySpeechEngine:
             self.stat_logger.log(self._get_stats(scheduler_outputs=None))
 
     def _get_stats(
-            self,
-            scheduler_outputs: Optional[SchedulerOutputs]) -> Stats:
+        self,
+        scheduler_outputs: Optional[SchedulerOutputs]
+    ) -> Stats:
         """Get Stats to be Logged to Prometheus.
         Args:
             scheduler_outputs: Optional, used to populate metrics related to

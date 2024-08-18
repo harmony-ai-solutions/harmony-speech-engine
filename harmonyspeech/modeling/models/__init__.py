@@ -11,13 +11,17 @@ _MODELS = {
     # OpenVoice V1
     "OpenVoiceV1Synthesizer": ("openvoice", "SynthesizerTrn"),
     "OpenVoiceV1ToneConverter": ("openvoice", "SynthesizerTrn"),
+    "OpenVoiceV1ToneConverterEncoder": ("openvoice", "SynthesizerTrn"),
     # OpenVoice V2 / MeloTTS
     "MeloTTSSynthesizer": ("melo", "SynthesizerTrn"),
     "OpenVoiceV2ToneConverter": ("openvoice", "SynthesizerTrn"),
+    "OpenVoiceV2ToneConverterEncoder": ("openvoice", "SynthesizerTrn"),
     # HarmonySpeech
     "HarmonySpeechEncoder": ("harmonyspeech", "SpeakerEncoder"),
     "HarmonySpeechSynthesizer": ("harmonyspeech", "ForwardTacotron"),
     "HarmonySpeechVocoder": ("harmonyspeech", "MelGANGenerator"),
+    # Faster-Whisper
+    "FasterWhisper": ("faster-wisper", "native")
 }
 
 # Architecture -> type.
@@ -42,7 +46,7 @@ _ROCM_PARTIALLY_SUPPORTED_MODELS = {
 class ModelRegistry:
 
     @staticmethod
-    def load_model_cls(model_arch: str) -> Optional[Type[nn.Module]]:
+    def load_model_cls(model_arch: str):
         if model_arch in _OOT_MODELS:
             return _OOT_MODELS[model_arch]
         if model_arch not in _MODELS:
@@ -58,6 +62,11 @@ class ModelRegistry:
                     "by ROCm: " + _ROCM_PARTIALLY_SUPPORTED_MODELS[model_arch])
 
         module_name, model_cls_name = _MODELS[model_arch]
+
+        # Bailout for native models
+        if model_cls_name == "native":
+            return "native"
+
         module = importlib.import_module(
             f"harmonyspeech.modeling.models.{module_name}")
         return getattr(module, model_cls_name, None)

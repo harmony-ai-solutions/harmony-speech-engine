@@ -2,7 +2,8 @@ import re
 
 from transformers import AutoTokenizer
 
-from harmonyspeech.modeling.models.melo.text import symbols, spanish_bert
+from harmonyspeech.modeling.models.melo.text import spanish_bert
+from harmonyspeech.modeling.models.melo.text.symbols import symbols
 from harmonyspeech.modeling.models.melo.text.es_phonemizer import cleaner as es_cleaner
 from harmonyspeech.modeling.models.melo.text.es_phonemizer import es_to_ipa
 

@@ -1,9 +1,7 @@
 from dataclasses import dataclass
-from typing import Optional, List, Union
 
 from harmonyspeech.common.metrics import RequestMetrics
-from harmonyspeech.endpoints.openai.protocol import VoiceConversionRequest, TextToSpeechRequest, EmbedSpeakerRequest, \
-    VocodeAudioRequest, SynthesizeAudioRequest
+from harmonyspeech.endpoints.openai.protocol import *
 
 
 @dataclass
@@ -95,6 +93,8 @@ class TextToSpeechRequestInput(RequestInput):
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
         input_audio: Optional[str] = None,
+        input_vad_mode: Optional[str] = None,
+        input_vad_data: Optional[str] = None,
         input_embedding: Optional[str] = None,
         generation_options: Optional[TextToSpeechGenerationOptions] = None,
         output_options: Optional[TextToSpeechAudioOutputOptions] = None,
@@ -111,6 +111,8 @@ class TextToSpeechRequestInput(RequestInput):
         self.language_id = language_id
         self.voice_id = voice_id
         self.input_audio = input_audio
+        self.input_vad_mode = input_vad_mode
+        self.input_vad_data = input_vad_data
         self.input_embedding = input_embedding
         self.generation_options = generation_options
         self.output_options = output_options
@@ -126,6 +128,8 @@ class TextToSpeechRequestInput(RequestInput):
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
             input_audio=getattr(request, 'input_audio', None),
+            input_vad_mode=getattr(request, 'input_vad_mode', None),
+            input_vad_data=getattr(request, 'input_vad_data', None),
             input_embedding=getattr(request, 'input_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
             output_options=getattr(request, 'output_options', None),
@@ -144,6 +148,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_audio: Optional[str] = None,
+        input_vad_mode: Optional[str] = None,
+        input_vad_data: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -153,6 +159,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_audio = input_audio
+        self.input_vad_mode = input_vad_mode
+        self.input_vad_data = input_vad_data
 
     @classmethod
     def from_openai(cls, request_id: str, request: "EmbedSpeakerRequest"):
@@ -161,6 +169,8 @@ class SpeechEmbeddingRequestInput(RequestInput):
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
             input_audio=getattr(request, 'input_audio', None),
+            input_vad_mode=getattr(request, 'input_vad_mode', None),
+            input_vad_data=getattr(request, 'input_vad_data', None),
         )
 
 
@@ -177,7 +187,7 @@ class SynthesisRequestInput(RequestInput):
         input_text: str = "",
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
-        target_embedding: str = None,
+        input_embedding: str = None,
         generation_options: TextToSpeechGenerationOptions = None,
         metrics: Optional[RequestMetrics] = None,
     ):
@@ -190,7 +200,7 @@ class SynthesisRequestInput(RequestInput):
         self.input_text = input_text
         self.language_id = language_id
         self.voice_id = voice_id
-        self.target_embedding = target_embedding
+        self.input_embedding = input_embedding
         self.generation_options = generation_options
 
     @classmethod
@@ -202,7 +212,7 @@ class SynthesisRequestInput(RequestInput):
             input_text=getattr(request, 'input', ''),
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
-            target_embedding=getattr(request, 'target_embedding', None),
+            input_embedding=getattr(request, 'input_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
         )
 
@@ -235,4 +245,41 @@ class VocodeRequestInput(RequestInput):
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
             input_audio=getattr(request, 'input_audio', None),
+        )
+
+
+class SpeechTranscribeRequestInput(RequestInput):
+    """
+    The input data for a Speech Transcribe Request
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        requested_model: str,
+        model: str,
+        input_audio: Optional[str] = None,
+        get_language: Optional[bool] = False,
+        get_timestamps: Optional[bool] = False,
+        metrics: Optional[RequestMetrics] = None,
+    ):
+        super().__init__(
+            request_id=request_id,
+            requested_model=requested_model,
+            model=model,
+            metrics=metrics,
+        )
+        self.input_audio = input_audio
+        self.get_language = get_language
+        self.get_timestamps = get_timestamps
+
+    @classmethod
+    def from_openai(cls, request_id: str, request: "SpeechTranscribeRequest"):
+        return cls(
+            request_id=request_id,
+            requested_model=getattr(request, 'model', ''),
+            model=getattr(request, 'model', ''),
+            input_audio=getattr(request, 'input_audio', None),
+            get_language=getattr(request, 'get_language', False),
+            get_timestamps=getattr(request, 'get_timestamps', False),
         )
