@@ -286,7 +286,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             inference_result = run_converter_encoder(x)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
             outputs.append(result)
         return outputs
 
@@ -295,10 +295,12 @@ class ModelRunnerBase:
             audio_ref = input_params
             batched_model = BatchedInferencePipeline(model=self.model)
             segments, info = batched_model.transcribe(audio_ref, batch_size=16)
-            segments = list(segments)
+            segment_data = []
+            for segment in segments:
+                segment_data.append(segment._asdict())
 
             response = {
-                "segments": base64.b64encode(json.dumps(segments).encode('utf-8')).decode('utf-8'),
+                "segments": base64.b64encode(json.dumps(segment_data).encode('utf-8')).decode('utf-8'),
                 "info": base64.b64encode(json.dumps(info).encode('utf-8')).decode('utf-8')
             }
             return json.dumps(response)
@@ -328,12 +330,10 @@ class ModelRunnerBase:
             audio_segment_list = []
             text_normalized, speaker_id, speed_modifier = input_params
             for text_element in text_normalized:
-                # Get inputs
-                text_normalized, speaker_id = text_element
                 # Inference
                 with torch.no_grad():
-                    x_tst = text_normalized.unsqueeze(0).to(self.device)
-                    x_tst_lengths = torch.LongTensor([text_normalized.size(0)]).to(self.device)
+                    x_tst = text_element.unsqueeze(0).to(self.device)
+                    x_tst_lengths = torch.LongTensor([text_element.size(0)]).to(self.device)
                     sid = torch.LongTensor([speaker_id]).to(self.device)
                     audio = self.model.infer(x_tst, x_tst_lengths, sid=sid, noise_scale=0.667, noise_scale_w=0.6,
                                              length_scale=1.0 / speed_modifier)[0][0, 0].data.cpu().float().numpy()

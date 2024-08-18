@@ -97,7 +97,7 @@ def load_or_download_file(model_name_or_path: str, file_filename: str = "file.js
             filename=file_filename
         )
     # Read file via binary mode
-    with open(file_path, "rb", encoding="utf-8") as f:
+    with open(file_path, "rb") as f:
         data = f.read()
     return data
 

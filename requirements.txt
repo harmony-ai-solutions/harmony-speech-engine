@@ -34,3 +34,4 @@ pykakasi
 unidecode
 soundfile
 faster-whisper
+eng_to_ipa

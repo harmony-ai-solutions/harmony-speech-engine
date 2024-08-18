@@ -95,7 +95,7 @@ model_configs:
     model: "large-v3"
     model_type: "FasterWhisper"
     max_batch_size: 16
-    dtype: "float16"
+    dtype: "float32"
     device_config:
       device: "cuda:0"
 #

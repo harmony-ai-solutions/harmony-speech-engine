@@ -50,7 +50,8 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
             ):
                 inputs.append(r.request_data)
             else:
-                raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput")
+                raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                                 f"SynthesisRequestInput")
         return prepare_harmonyspeech_synthesizer_inputs(inputs)
     elif model_config.model_type == "HarmonySpeechVocoder":
         for r in requests_to_batch:
@@ -101,6 +102,17 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                     f"SpeechTranscribeRequestInput")
         return prepare_faster_whisper_inputs(inputs)
+    elif model_config.model_type == "OpenVoiceV1Synthesizer":
+        for r in requests_to_batch:
+            if (
+                isinstance(r.request_data, TextToSpeechRequestInput) or
+                isinstance(r.request_data, SynthesisRequestInput)
+            ):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                                 f"SynthesisRequestInput")
+        return prepare_openvoice_synthesizer_inputs(model_config, inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -208,6 +220,15 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
         input_audio = base64.b64decode(request.input_audio)
         input_vad_data = json.loads(request.input_vad_data)
         segments = input_vad_data["segments"] if "segments" in input_vad_data else []
+        info = input_vad_data["info"] if "info" in input_vad_data else None
+
+        # Decode Object Data
+        if len(segments) > 0:
+            segments = base64.b64decode(segments.encode('utf-8'))
+            segments = json.loads(segments)
+        if len(info) > 0:
+            info = base64.b64decode(info.encode('utf-8'))
+            info = json.loads(info)
 
         # Load Audio from BytesIO
         bytes_pointer = io.BytesIO(input_audio)
@@ -232,11 +253,11 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
         for k, segment in enumerate(segments):
             # process with the time
             if k == 0:
-                start_time = max(0, segment.start)
-            end_time = segment.end
+                start_time = max(0, segment["start"])
+            end_time = segment["end"]
 
             # clean text
-            text = segment.text.replace('...', '')
+            text = segment["text"].replace('...', '')
 
             # left 0.08s for each audio
             audio_seg = audio[int(start_time * 1000): min(max_len, int(end_time * 1000) + 80)]
@@ -254,6 +275,7 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
                 except Exception as e:
                     logger.error(str(e))
                 finally:
+                    tmp_file.close()
                     os.unlink(tmp_file.name)
 
             if k < len(segments) - 1:
@@ -300,7 +322,7 @@ def prepare_openvoice_tone_converter_inputs(model_config: ModelConfig, requests_
             model_config.model,
             model_config.model_type,
             model_config.revision,
-            model_config.language,
+            request.language_id,
             request.voice_id
         )
         source_embedding_ref = io.BytesIO(source_speaker_embedding_file)
@@ -321,8 +343,9 @@ def prepare_faster_whisper_inputs(requests_to_batch: List[Union[
         # Make sure Audio data is decoded from Base64
         input_audio = base64.b64decode(request.input_audio)
         input_audio_ref = io.BytesIO(input_audio)
+        audio_ref, _ = librosa.load(input_audio_ref, sr=16000)
         # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
-        return input_audio_ref
+        return audio_ref
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

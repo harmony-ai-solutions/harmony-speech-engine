@@ -138,7 +138,7 @@ def get_model_speaker(
         raise NotImplementedError(f"model type {model_type} has no language option.")
     if language not in _MODEL_SPEAKERS[model_type]:
         raise NotImplementedError(f"model language {language} for model {model_type} does not exist.")
-    if speaker not in _MODEL_SPEAKERS[model_type][speaker]:
+    if speaker not in _MODEL_SPEAKERS[model_type][language]:
         raise NotImplementedError(f"model speaker {speaker} for model {model_type} and language {language} does not exist.")
 
     # Get Speaker
