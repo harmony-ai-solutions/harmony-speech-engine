@@ -296,12 +296,15 @@ class ModelRunnerBase:
             batched_model = BatchedInferencePipeline(model=self.model)
             segments, info = batched_model.transcribe(audio_ref, batch_size=16)
             segment_data = []
+            text = ""
             for segment in segments:
+                text += segment.text
                 segment_data.append(segment._asdict())
 
             response = {
-                "segments": base64.b64encode(json.dumps(segment_data).encode('utf-8')).decode('utf-8'),
-                "info": base64.b64encode(json.dumps(info).encode('utf-8')).decode('utf-8')
+                "text": text,
+                "segments": segment_data,
+                "info": info._asdict()
             }
             return json.dumps(response)
 

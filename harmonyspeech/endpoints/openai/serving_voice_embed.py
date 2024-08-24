@@ -1,25 +1,27 @@
-import base64
 import copy
 import time
 from typing import List, Union, AsyncGenerator, AsyncIterator
 
 from fastapi import Request
-from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, SpeechEmbeddingRequestInput
-from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput, SpeechEmbeddingRequestOutput
+from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
+from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, TextToSpeechRequest, \
-    EmbedSpeakerRequest, EmbedSpeakerResponse
+from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, EmbedSpeakerRequest, \
+    EmbedSpeakerResponse
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
-
 # Add new model classes which allow handling Embedding Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
+_EMBEDDING_MODEL_TYPES = [
+    "HarmonySpeechEncoder"
+]
 _EMBEDDING_MODEL_GROUPS = {
-    "harmonyspeech": ["HarmonySpeechEncoder"]
+    "harmonyspeech": ["HarmonySpeechEncoder"],
+    "openvoice_v1": ["FasterWhisper", "OpenVoiceV1ToneConverterEncoder"],
+    "openvoice_v2": ["FasterWhisper", "OpenVoiceV2ToneConverterEncoder"]
 }
 
 
@@ -42,7 +44,9 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
                 if m.model_type in remaining_models:
                     check_dict[group_name].remove(m.model_type)
 
-        return [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
+        full_model_groups = [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
+        individual_models = [m.name for m in configured_models if m.model_type in _EMBEDDING_MODEL_TYPES]
+        return individual_models + full_model_groups
 
     async def create_voice_embedding(
         self, request: EmbedSpeakerRequest, raw_request: Request

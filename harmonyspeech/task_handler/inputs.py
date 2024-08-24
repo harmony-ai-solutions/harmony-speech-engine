@@ -234,14 +234,6 @@ def prepare_openvoice_tone_converter_encoder_inputs(model_config: ModelConfig, r
         segments = input_vad_data["segments"] if "segments" in input_vad_data else []
         info = input_vad_data["info"] if "info" in input_vad_data else None
 
-        # Decode Object Data
-        if len(segments) > 0:
-            segments = base64.b64decode(segments.encode('utf-8'))
-            segments = json.loads(segments)
-        if len(info) > 0:
-            info = base64.b64decode(info.encode('utf-8'))
-            info = json.loads(info)
-
         # Load Audio from BytesIO
         bytes_pointer = io.BytesIO(input_audio)
         audio_data, _ = librosa.load(bytes_pointer, sr=hf_config.data.sampling_rate)

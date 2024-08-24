@@ -189,7 +189,7 @@ class SpeechToTextResponse(BaseResponse):
     id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
     text: str = Field(default="", description="text retrieved from the input audio")
     language: Optional[str] = Field(default=None, description="tag of the detected language")
-    timestamps: Optional[List[str]] = Field(default_factory=list, description="list of the detected timestamps")
+    timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
 
 
 class EmbedSpeakerRequest(BaseRequest):

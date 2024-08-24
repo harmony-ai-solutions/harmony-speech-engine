@@ -1,7 +1,6 @@
 import copy
-import time
 from http import HTTPStatus
-from typing import List, Union, AsyncGenerator, AsyncIterator, Optional
+from typing import AsyncGenerator, AsyncIterator
 
 from fastapi import Request
 from loguru import logger
@@ -9,14 +8,16 @@ from loguru import logger
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
 from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
-from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, TextToSpeechRequest
+from harmonyspeech.endpoints.openai.protocol import *
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
-
 # Add new model classes which allow handling TTS Requests here
-# If multiple models need to be initialized to process request, add multiple to the list
+# If multiple models need to be initialized to process request, add them as a group
+_TTS_MODEL_TYPES = [
+    "OpenVoiceV1Synthesizer",
+    "MeloTTSSynthesizer"
+]
 _TTS_MODEL_GROUPS = {
     "harmonyspeech": ["HarmonySpeechSynthesizer", "HarmonySpeechVocoder"],
     "openvoice_v1": ["OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter"],
@@ -43,7 +44,9 @@ class OpenAIServingTextToSpeech(OpenAIServing):
                 if m.model_type in remaining_models:
                     check_dict[group_name].remove(m.model_type)
 
-        return [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
+        full_model_groups = [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
+        individual_models = [m.name for m in configured_models if m.model_type in _TTS_MODEL_TYPES]
+        return individual_models + full_model_groups
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request

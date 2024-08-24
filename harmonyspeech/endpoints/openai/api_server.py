@@ -4,7 +4,6 @@ import inspect
 import os
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Optional
 
 import fastapi
 import uvicorn
@@ -17,8 +16,10 @@ import harmonyspeech
 from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
-from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest, ErrorResponse, EmbedSpeakerRequest
+from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
@@ -31,8 +32,8 @@ engine: Optional[AsyncHarmonySpeech] = None
 engine_args: Optional[AsyncEngineArgs] = None
 engine_config: Optional[EngineConfig] = None
 openai_serving_tts: OpenAIServingTextToSpeech = None
-# TODO: STT
-# TODO: VC
+openai_serving_stt: OpenAIServingSpeechToText = None
+openai_serving_vc: OpenAIServingVoiceConversion = None
 openai_serving_embedding: OpenAIServingVoiceEmbedding = None
 
 router = APIRouter()
@@ -80,13 +81,13 @@ async def create_speech(request: TextToSpeechRequest,
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
-    if request.output_options and request.output_options.stream:
-        return StreamingResponse(content=generator, media_type="text/event-stream")
+    # if request.output_options and request.output_options.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
     else:
         return JSONResponse(content=generator.model_dump())
 
 
-@router.get("/v1/audio/models")
+@router.get("/v1/audio/speech/models")
 async def show_available_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
@@ -108,6 +109,45 @@ async def create_embedding(request: EmbedSpeakerRequest,
 @router.get("/v1/embed/models")
 async def show_available_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_embedding.show_available_models()
+    return JSONResponse(content=models.model_dump())
+
+
+# Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
+@router.post("/v1/audio/transcriptions")
+async def create_speech(request: SpeechTranscribeRequest,
+                        raw_request: Request,
+                        x_api_key: Optional[str] = Header(None)):
+    generator = await openai_serving_stt.create_transcription(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    # if request.output_options and request.output_options.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.get("/v1/audio/transcriptions/models")
+async def show_available_models(x_api_key: Optional[str] = Header(None)):
+    models = await openai_serving_stt.show_available_models()
+    return JSONResponse(content=models.model_dump())
+
+
+@router.post("/v1/voice/convert")
+async def create_speech(request: VoiceConversionRequest,
+                        raw_request: Request,
+                        x_api_key: Optional[str] = Header(None)):
+    generator = await openai_serving_vc.convert_voice(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    # if request.output_options and request.output_options.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.get("/v1/voice/convert/models")
+async def show_available_models(x_api_key: Optional[str] = Header(None)):
+    models = await openai_serving_vc.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
@@ -181,7 +221,11 @@ def run_server(args):
 
     logger.debug(f"args: {args}")
 
-    global engine, engine_args, engine_config, openai_serving_tts, openai_serving_embedding
+    global engine, engine_args, engine_config
+    global openai_serving_tts
+    global openai_serving_embedding
+    global openai_serving_stt
+    global openai_serving_vc
     # TODO: Add other Endpoint serving classes here
 
     if args.config_file_path is not None:
@@ -201,6 +245,14 @@ def run_server(args):
     openai_serving_embedding = OpenAIServingVoiceEmbedding(
         engine,
         OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+    )
+    openai_serving_stt = OpenAIServingSpeechToText(
+        engine,
+        OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
+    )
+    openai_serving_vc = OpenAIServingVoiceConversion(
+        engine,
+        OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
 
