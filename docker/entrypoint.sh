@@ -4,7 +4,7 @@ echo 'Starting Harmony Speech Engine API server...'
 
 CMD="python3 -m harmonyspeech.endpoints.openai.api_server
              --host 0.0.0.0
-             --port 7860
+             --port 12080
              --download-dir ${HF_HOME:?}/hub
              ${CMD_ADDITIONAL_ARGUMENTS}"
 

@@ -88,7 +88,7 @@ async def create_speech(request: TextToSpeechRequest,
 
 
 @router.get("/v1/audio/speech/models")
-async def show_available_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_speech_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
 
@@ -107,14 +107,14 @@ async def create_embedding(request: EmbedSpeakerRequest,
 
 
 @router.get("/v1/embed/models")
-async def show_available_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_embedding_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_embedding.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
 @router.post("/v1/audio/transcriptions")
-async def create_speech(request: SpeechTranscribeRequest,
+async def create_transcription(request: SpeechTranscribeRequest,
                         raw_request: Request,
                         x_api_key: Optional[str] = Header(None)):
     generator = await openai_serving_stt.create_transcription(request, raw_request)
@@ -127,13 +127,13 @@ async def create_speech(request: SpeechTranscribeRequest,
 
 
 @router.get("/v1/audio/transcriptions/models")
-async def show_available_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_transcription_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_stt.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/voice/convert")
-async def create_speech(request: VoiceConversionRequest,
+async def convert_voice(request: VoiceConversionRequest,
                         raw_request: Request,
                         x_api_key: Optional[str] = Header(None)):
     generator = await openai_serving_vc.convert_voice(request, raw_request)
@@ -146,7 +146,7 @@ async def create_speech(request: VoiceConversionRequest,
 
 
 @router.get("/v1/voice/convert/models")
-async def show_available_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_voice_conversion_models(x_api_key: Optional[str] = Header(None)):
     models = await openai_serving_vc.show_available_models()
     return JSONResponse(content=models.model_dump())
 
@@ -179,7 +179,7 @@ def build_app(args):
 
         @app.middleware("http")
         async def authentication(request: Request, call_next):
-            excluded_paths = ["/api"]
+            excluded_paths = ["/api.md"]
             if any(
                     request.url.path.startswith(path)
                     for path in excluded_paths):
@@ -195,7 +195,7 @@ def build_app(args):
                 return await call_next(request)
 
             auth_header = request.headers.get("Authorization")
-            api_key_header = request.headers.get("x-api-key")
+            api_key_header = request.headers.get("x-api.md-key")
 
             if auth_header != "Bearer " + token and api_key_header != token:
                 return JSONResponse(content={"error": "Unauthorized"},

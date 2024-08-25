@@ -26,7 +26,7 @@ def make_arg_parser(parser=None):
                         default=["*"],
                         help="allowed headers")
     parser.add_argument(
-        "--api-keys",
+        "--api.md-keys",
         type=str,
         default=None,
         help=
