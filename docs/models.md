@@ -31,7 +31,9 @@ Supports Local model path or Huggingface-Resolving by Model Name as described in
 name of the desired model into the `model` field of the configuration.
 
 Implementation Type: Native / Third-Party
-<br>Link: [Github](https://github.com/SYSTRAN/faster-whisper)
+
+Links: 
+- [Github](https://github.com/SYSTRAN/faster-whisper)
 
 ##### YAML Config Example
 ```
@@ -44,6 +46,8 @@ model_configs:
     device_config:
       device: "cuda:0"
 ```
+
+---
 
 ## TTS Frameworks
 
@@ -61,7 +65,9 @@ Harmony Speech V1 model weights are being released under the Apache License.
 Supports Local model path or Huggingface-Resolving by Model Name.
 
 Implementation Type: Adapted
-<br>Link: [Huggingface](https://huggingface.co/harmony-ai/harmony-speech-v1)
+
+Links: 
+- [Huggingface](https://huggingface.co/harmony-ai/harmony-speech-v1)
 
 ##### YAML Config Example
 ```
@@ -90,9 +96,170 @@ model_configs:
     device_config:
       device: "cpu"
 ```
+(Speaker Encoder is only needed if you want to create new embeddings or do a full voice clone)
 
+---
 
 ### OpenVoice V1
+OpenVoice is a TTS Framework created by MyShell AI.
+V1 focuses on voice cloning for English and Chinese language.
+Also it supports emotional voice styles for English.
 
+It consists of 2 Models:
+- Speaker Encoder & Voice Conversion Model
+- Single Speaker TTS Model
+
+The Voice conversion model is trained to convert Voices between two Speakers using Vocal alignment. Technically, it is
+possible to do that between arbitrary speakers, but best results can be achieved when using the Single Speaker TTS
+model outputs.
+
+Additionaly, the embedding step requires a VAD / ASR model like Whisper to function.
+
+Supports Local model path or Huggingface-Resolving by Model Name.
+
+Implementation Type: Adapted
+
+| Supported Language Tags |                           Supported Voice IDs / Styles                            |
+|:-----------------------:|:---------------------------------------------------------------------------------:|
+|           EN            | default, whispering, shouting, excited, cheerful, terrified, angry, sad, friendly |
+|           ZH            |                                      default                                      |
+
+Links: 
+- [Github](https://github.com/myshell-ai/OpenVoice)
+- [Huggingface](https://huggingface.co/myshell-ai/OpenVoice)
+
+##### YAML Config Example
+```
+model_configs:
+  - name: "ov1-synthesizer-en"
+    model: "models/myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "EN"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-synthesizer-zh"
+    model: "models/myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "ZH"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-tone-converter"
+    model: "models/myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverter"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-tone-converter-encoder"
+    model: "models/myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "faster-whisper"
+    model: "large-v3"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+```
+(For best performance, Harmony Speech Engine runs OpenVoice models "task-based", which means we define different model
+types for Encoding and Voice Conversion, despite it's the same weights. Since the TTS model weights differ per language,
+we need to load all languages we want to support in parallel.)
+
+---
 
 ### OpenVoice V2
+OpenVoice is a TTS Framework created by MyShell AI.
+V2 focuses on voice cloning for multiple languages, building on top of a new TTS System called MeloTTS
+Also it supports multiple dialect styles for English.
+
+It consists of 2 Models:
+- Speaker Encoder & Voice Conversion Model
+- Single Speaker TTS Model
+
+The Voice conversion model is trained to convert Voices between two Speakers using Vocal alignment. Technically, it is
+possible to do that between arbitrary speakers, but best results can be achieved when using the Single Speaker TTS
+model outputs.
+
+Additionaly, the embedding step requires a VAD / ASR model like Whisper to function.
+
+Supports Local model path or Huggingface-Resolving by Model Name.
+
+Implementation Type: Adapted
+
+| Model Name         | Supported Language Tags |       Supported Voice IDs / Styles        |
+|--------------------|:-----------------------:|:-----------------------------------------:|
+| MeloTTS-English    |      EN (English)       | EN-Default, EN-US, EN-BR, EN-INDIA, EN-AU |
+| MeloTTS-English-v2 |      EN (English)       |       EN-US, EN-BR, EN-INDIA, EN-AU       |
+| MeloTTS-English-v3 |      EN (English)       |                 EN-Newest                 |
+| MeloTTS-Chinese    |      ZH (Chinese)       |                  default                  |
+| MeloTTS-Spanish    |      ES (Spanish)       |                  default                  |
+| MeloTTS-French     |       FR (French)       |                  default                  |
+| MeloTTS-Japanese   |      JP (Japanese)      |                  default                  |
+| MeloTTS-Korean     |       KR (Korean)       |                  default                  |
+
+Links: 
+- [Github](https://github.com/myshell-ai/OpenVoice)
+- [Huggingface](https://huggingface.co/myshell-ai/OpenVoiceV2)
+
+##### YAML Config Example
+ATTENTION: Only one model per language is currently supported; you can NOT route to English-v3 and English-v2 at the
+same time currently.
+```
+model_configs:
+  - name: "ov2-synthesizer-en"
+    model: "models/myshell-ai/MeloTTS-English-v3"
+    model_type: "MeloTTSSynthesizer"
+    language: "EN"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-zh"
+    model: "models/myshell-ai/MeloTTS-Chinese"
+    model_type: "MeloTTSSynthesizer"
+    language: "ZH"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-tone-converter"
+    model: "models/myshell-ai/openvoice_v2"
+    model_type: "OpenVoiceV2ToneConverter"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-tone-converter-encoder"
+    model: "models/myshell-ai/openvoice_v2"
+    model_type: "OpenVoiceV2ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "faster-whisper"
+    model: "large-v3"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+```
+(For best performance, Harmony Speech Engine runs OpenVoice models "task-based", which means we define different model
+types for Encoding and Voice Conversion, despite it's the same weights. Since the TTS model weights differ per language,
+we need to load all languages we want to support in parallel.)

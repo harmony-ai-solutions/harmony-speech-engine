@@ -129,8 +129,8 @@ _MODEL_SPEAKERS = {
             "EN-Newest": "base_speakers/ses/en-newest.pth",
             "EN-US": "base_speakers/ses/en-us.pth",
             "EN-BR": "base_speakers/ses/en-br.pth",
-            "EN_INDIA": "base_speakers/ses/en-india.pth",
-            "EN_AU": "base_speakers/ses/en-au.pth",
+            "EN-INDIA": "base_speakers/ses/en-india.pth",
+            "EN-AU": "base_speakers/ses/en-au.pth",
             "EN-Default": "base_speakers/ses/en-default.pth",
         },
         "ES": {
