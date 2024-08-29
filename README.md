@@ -10,7 +10,9 @@ It's designed to serve as the backbone for providing Project Harmony.AI's Speech
 
 ## Open ToDo's & things that require work
 - Documentation
-  - [ ] Availiable Models and Features
+  - [ ] Secondary Features: 
+    - [ ] Pre-/Post-Processing
+    - [ ] Output Formats
   - [ ] API Documentation
   - [ ] Internal Re-Routing mechanics
 - Models and Features
@@ -19,15 +21,17 @@ It's designed to serve as the backbone for providing Project Harmony.AI's Speech
   - [ ] Vall-E-X
   - [ ] EmotiVoice
   - [ ] Silero VAD
-  - [ ] Post-Processing / Output Filtering Overlays
+  - [ ] Input Pre-Processing
+  - [ ] Post-Processing / Overlays
+  - [ ] Output Format Customization
   - [ ] Batching behaviour
   - [ ] TTS-Streaming
   - [ ] More comprehensive approach to internal Re-Routing of Requests 
 - Testing & Operation
   - [ ] Unit Testing & Test mocking for Key Components
   - [ ] API Integration Tests
-  - [ ] Audio File Format Support & Compatibility Testing for all APIs and Models
-  - 
+  - [ ] Input Audio File Format Support
+  - [ ] Compatibility Testing for all APIs and Models
 
 ## Goals & Features
 The goal of this engine is to provide a reliable and easy-to-maintain service which can be used for deploying Open Source

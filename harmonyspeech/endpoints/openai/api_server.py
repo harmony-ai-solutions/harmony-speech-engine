@@ -179,7 +179,7 @@ def build_app(args):
 
         @app.middleware("http")
         async def authentication(request: Request, call_next):
-            excluded_paths = ["/api.md"]
+            excluded_paths = ["/api"]
             if any(
                     request.url.path.startswith(path)
                     for path in excluded_paths):
@@ -195,7 +195,7 @@ def build_app(args):
                 return await call_next(request)
 
             auth_header = request.headers.get("Authorization")
-            api_key_header = request.headers.get("x-api.md-key")
+            api_key_header = request.headers.get("x-api-key")
 
             if auth_header != "Bearer " + token and api_key_header != token:
                 return JSONResponse(content={"error": "Unauthorized"},

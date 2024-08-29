@@ -16,7 +16,7 @@ please make sure to use the proper endpoint instead.
 
 ### Swagger UI
 
-Swagger UI is available at:
+Swagger UI is available at, also Providing OpenAPI Spec for client generation:
 
 http://127.0.0.1:12080/docs
 

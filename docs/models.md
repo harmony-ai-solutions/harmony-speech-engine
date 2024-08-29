@@ -198,16 +198,16 @@ Supports Local model path or Huggingface-Resolving by Model Name.
 
 Implementation Type: Adapted
 
-| Model Name         | Supported Language Tags |       Supported Voice IDs / Styles        |
-|--------------------|:-----------------------:|:-----------------------------------------:|
-| MeloTTS-English    |      EN (English)       | EN-Default, EN-US, EN-BR, EN-INDIA, EN-AU |
-| MeloTTS-English-v2 |      EN (English)       |       EN-US, EN-BR, EN-INDIA, EN-AU       |
-| MeloTTS-English-v3 |      EN (English)       |                 EN-Newest                 |
-| MeloTTS-Chinese    |      ZH (Chinese)       |                  default                  |
-| MeloTTS-Spanish    |      ES (Spanish)       |                  default                  |
-| MeloTTS-French     |       FR (French)       |                  default                  |
-| MeloTTS-Japanese   |      JP (Japanese)      |                  default                  |
-| MeloTTS-Korean     |       KR (Korean)       |                  default                  |
+| Model Name                                                                 | Supported Language Tags |       Supported Voice IDs / Styles        |
+|----------------------------------------------------------------------------|:-----------------------:|:-----------------------------------------:|
+| [MeloTTS-English](https://huggingface.co/myshell-ai/MeloTTS-English)       |      EN (English)       | EN-Default, EN-US, EN-BR, EN-INDIA, EN-AU |
+| [MeloTTS-English-v2](https://huggingface.co/myshell-ai/MeloTTS-English-v2) |      EN (English)       |       EN-US, EN-BR, EN-INDIA, EN-AU       |
+| [MeloTTS-English-v3](https://huggingface.co/myshell-ai/MeloTTS-English-v3) |      EN (English)       |                 EN-Newest                 |
+| [MeloTTS-Chinese](https://huggingface.co/myshell-ai/MeloTTS-Chinese)       |      ZH (Chinese)       |                  default                  |
+| [MeloTTS-Spanish](https://huggingface.co/myshell-ai/MeloTTS-Spanish)       |      ES (Spanish)       |                  default                  |
+| [MeloTTS-French](https://huggingface.co/myshell-ai/MeloTTS-French)         |       FR (French)       |                  default                  |
+| [MeloTTS-Japanese](https://huggingface.co/myshell-ai/MeloTTS-Japanese)     |      JP (Japanese)      |                  default                  |
+| [MeloTTS-Korean](https://huggingface.co/myshell-ai/MeloTTS-Korean)         |       KR (Korean)       |                  default                  |
 
 Links: 
 - [Github](https://github.com/myshell-ai/OpenVoice)
