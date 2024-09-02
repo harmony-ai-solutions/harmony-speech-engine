@@ -9,8 +9,9 @@ docker run --rm \
   -v ${PWD}:/local openapitools/openapi-generator-cli generate \
   -i /local/openapi.json \
   -g go \
-  -disallowAdditionalPropertiesIfNotPresent false \
-  -packageName harmonyspeech \
-  -packageVersion v0.0.1 \
+  -p disallowAdditionalPropertiesIfNotPresent=false \
+  -p packageName=harmonyspeech \
+  -p packageVersion=v0.0.1 \
   -o /local/goclient \
-  --git-repo-id harmony-speech-engine-client-go --git-user-id harmony-ai-solutions
+  --git-repo-id harmony-speech-engine-client-go \
+  --git-user-id harmony-ai-solutions
