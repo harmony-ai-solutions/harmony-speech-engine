@@ -1,0 +1,1099 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Harmony Speech Engine API",
+    "description": "API for the Harmony Speech Engine.",
+    "version": "0.1.0",
+    "x-go-client-name": "HarmonySpeechAPI",
+    "x-go-package": "harmonyspeech"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Health check endpoint to verify the status of all engine serving objects.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Show Version",
+        "description": "Fetch the Harmony Speech Engine version.",
+        "operationId": "show_version_version_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Show Version Version Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/speech": {
+      "post": {
+        "summary": "Create Speech",
+        "description": "Generate speech Audio from text.",
+        "operationId": "create_speech_v1_audio_speech_post",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextToSpeechRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextToSpeechResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/speech/models": {
+      "get": {
+        "summary": "Show Available Speech Models",
+        "description": "Show available speech models.",
+        "operationId": "show_available_speech_models_v1_audio_speech_models_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/embed/speaker": {
+      "post": {
+        "summary": "Create Embedding",
+        "description": "Create a speaker embedding.",
+        "operationId": "create_embedding_v1_embed_speaker_post",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbedSpeakerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbedSpeakerResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/embed/models": {
+      "get": {
+        "summary": "Show Available Embedding Models",
+        "description": "Show available embedding models.",
+        "operationId": "show_available_embedding_models_v1_embed_models_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "summary": "Create Transcription",
+        "description": "Create a transcription from audio.",
+        "operationId": "create_transcription_v1_audio_transcriptions_post",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpeechTranscribeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechToTextResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions/models": {
+      "get": {
+        "summary": "Show Available Transcription Models",
+        "description": "Show available transcription models.",
+        "operationId": "show_available_transcription_models_v1_audio_transcriptions_models_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/voice/convert": {
+      "post": {
+        "summary": "Convert Voice",
+        "description": "Convert the voice in an audio file or stream to a desired target voice.",
+        "operationId": "convert_voice_v1_voice_convert_post",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceConversionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceConversionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/voice/convert/models": {
+      "get": {
+        "summary": "Show Available Voice Conversion Models",
+        "description": "Show available voice conversion models.",
+        "operationId": "show_available_voice_conversion_models_v1_voice_convert_models_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AudioOutputOptions": {
+        "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format",
+            "default": "wav"
+          },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Rate"
+          },
+          "stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AudioOutputOptions"
+      },
+      "EmbedSpeakerRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "input_audio": {
+            "type": "string",
+            "title": "Input Audio",
+            "description": "Binary audio data to be processed, encoded in base64"
+          }
+        },
+        "type": "object",
+        "title": "EmbedSpeakerRequest",
+        "description": "EmbedSpeakerRequest\nUsed to create a Speaker Embedding form a provided audio, which can later be re-used for Text-to-Speech or\nVoice Conversion functionality.\nPlease refer to the documentation whether an embedding is compatible between different models."
+      },
+      "EmbedSpeakerResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "data": {
+            "type": "string",
+            "title": "Data",
+            "description": "Speaker embedding data for the audio provided in the initial request, encoded in base64"
+          }
+        },
+        "type": "object",
+        "title": "EmbedSpeakerResponse",
+        "description": "EmbedSpeakerResult\nResult Speaker Embedding"
+      },
+      "GenerationOptions": {
+        "properties": {
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed"
+          },
+          "style": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          },
+          "pitch": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitch"
+          },
+          "energy": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Energy"
+          }
+        },
+        "type": "object",
+        "title": "GenerationOptions"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ModelCard": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "object": {
+            "type": "string",
+            "title": "Object",
+            "default": "model"
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "owned_by": {
+            "type": "string",
+            "title": "Owned By",
+            "default": "harmony-ai-solutions"
+          },
+          "root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "ModelCard"
+      },
+      "ModelList": {
+        "properties": {
+          "object": {
+            "type": "string",
+            "title": "Object",
+            "default": "list"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ModelCard"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "title": "ModelList"
+      },
+      "SpeechToTextResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "description": "text retrieved from the input audio",
+            "default": ""
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "tag of the detected language"
+          },
+          "timestamps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamps",
+            "description": "list of the detected timestamps"
+          }
+        },
+        "type": "object",
+        "title": "SpeechToTextResponse",
+        "description": "SpeechToTextResponse\nResult text determined from audio and optional language tag"
+      },
+      "SpeechTranscribeRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "input_audio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Audio",
+            "description": "Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+          },
+          "get_language": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Get Language",
+            "description": "whether to return the source language tag. Check model description if supported.",
+            "default": false
+          },
+          "get_timestamps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Get Timestamps",
+            "description": "whether to return the word timestamps. Check model description if supported.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "SpeechTranscribeRequest",
+        "description": "SpeechTranscribeRequest\nUsed to apply ASR on a provided audio file\nDepending on model selection, the caller may need to provide additional params.\nBased on OpenAI STT API; extended for Harmony Speech Engine features."
+      },
+      "TextToSpeechRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "input": {
+            "type": "string",
+            "title": "Input",
+            "description": "the text to synthesize",
+            "default": ""
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "description": "language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable."
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice",
+            "description": "ID of the voice to synthesize. Only if the model supports voice IDs. Please refer to the model's documentation for which values are availiable."
+          },
+          "input_audio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Audio",
+            "description": "Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+          },
+          "input_vad_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Vad Mode",
+            "description": "VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
+          },
+          "input_vad_data": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Vad Data",
+            "description": "result data from VAD step to be processed in follow-up TTS or VC steps"
+          },
+          "input_embedding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Embedding",
+            "description": "Binary embedding of the reference speaker for synthesizing the text, encoded in base64. Faster than providing a target audio file"
+          },
+          "generation_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Options for generating a speech request, see documentation for possible values"
+          },
+          "output_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AudioOutputOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Options for returning the generated audio, see documentation for possible values"
+          },
+          "post_generation_filters": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/VoiceConversionRequest"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Generation Filters",
+            "description": "List of Post-Generation filters to apply to the generated audio."
+          }
+        },
+        "type": "object",
+        "title": "TextToSpeechRequest",
+        "description": "TextToSpeechRequest\nUsed to trigger a speech generation for the provided text input using the specified model.\nDepending on model selection, the caller may need to provide additional params.\nBased on OpenAI TTS API; extended for Harmony Speech Engine features."
+      },
+      "TextToSpeechResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "data": {
+            "type": "string",
+            "title": "Data",
+            "description": "Audio Bytes in requested format of the initial request"
+          }
+        },
+        "type": "object",
+        "title": "TextToSpeechResponse",
+        "description": "TextToSpeechResponse\nExtends AudioDataResponse with a request specific ID"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VoiceConversionRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "source_audio": {
+            "type": "string",
+            "title": "Source Audio",
+            "description": "Binary audio data to be processed, encoded in base64"
+          },
+          "target_audio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Audio",
+            "description": "Binary audio data of the reference speaker for converting the source, encoded in base64"
+          },
+          "target_embedding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Embedding",
+            "description": "Binary embedding of the reference speaker for converting the source, encoded in base64. Faster than providing a target audio file"
+          },
+          "generation_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenerationOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Options for generating a speech request, see documentation for possible values"
+          },
+          "output_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AudioOutputOptions"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Options for returning the generated audio, see documentation for possible values"
+          }
+        },
+        "type": "object",
+        "title": "VoiceConversionRequest",
+        "description": "VoiceConversionRequest\nUsed to convert the tone or nature of a voice in a specific way.\nDepending on model selection, the caller may need to provide additional params."
+      },
+      "VoiceConversionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "data": {
+            "type": "string",
+            "title": "Data",
+            "description": "Audio Bytes in requested format of the initial request"
+          }
+        },
+        "type": "object",
+        "title": "VoiceConversionResponse",
+        "description": "VoiceConversionResponse\nExtends AudioDataResponse with a request specific ID"
+      }
+    }
+  }
+}

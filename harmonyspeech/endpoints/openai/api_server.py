@@ -57,27 +57,58 @@ metrics_app = make_asgi_app()
 router.mount("/metrics", metrics_app)
 
 
-@router.get("/health")
-async def health() -> Response:
-    """Health check."""
-    await openai_serving_tts.engine.check_health()
-    # TODO: STT
-    # TODO: VC
-    # TODO: Embed
-    return Response(status_code=200)
+@router.get("/health", response_model=dict)
+async def health() -> JSONResponse:
+    """Health check endpoint to verify the status of all engine serving objects."""
+    health_status = {
+        "text_to_speech": "unknown",
+        "speech_to_text": "unknown",
+        "voice_conversion": "unknown",
+        "voice_embedding": "unknown"
+    }
+
+    try:
+        await openai_serving_tts.engine.check_health()
+        health_status["text_to_speech"] = "healthy"
+    except Exception as e:
+        health_status["text_to_speech"] = f"unhealthy: {str(e)}"
+
+    try:
+        await openai_serving_stt.engine.check_health()
+        health_status["speech_to_text"] = "healthy"
+    except Exception as e:
+        health_status["speech_to_text"] = f"unhealthy: {str(e)}"
+
+    try:
+        await openai_serving_vc.engine.check_health()
+        health_status["voice_conversion"] = "healthy"
+    except Exception as e:
+        health_status["voice_conversion"] = f"unhealthy: {str(e)}"
+
+    try:
+        await openai_serving_embedding.engine.check_health()
+        health_status["voice_embedding"] = "healthy"
+    except Exception as e:
+        health_status["voice_embedding"] = f"unhealthy: {str(e)}"
+
+    return JSONResponse(content=health_status)
 
 
-@router.get("/version", description="Fetch the Harmony Speech Engine version.")
+@router.get("/version", description="Fetch the Harmony Speech Engine version.", response_model=dict)
 async def show_version(x_api_key: Optional[str] = Header(None)):
+    """Fetch the Harmony Speech Engine version."""
     ver = {"version": harmonyspeech.__version__}
     return JSONResponse(content=ver)
 
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createSpeech
-@router.post("/v1/audio/speech")
-async def create_speech(request: TextToSpeechRequest,
-                        raw_request: Request,
-                        x_api_key: Optional[str] = Header(None)):
+@router.post("/v1/audio/speech", response_model=TextToSpeechResponse)
+async def create_speech(
+    request: TextToSpeechRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Generate speech Audio from text."""
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -87,16 +118,22 @@ async def create_speech(request: TextToSpeechRequest,
         return JSONResponse(content=generator.model_dump())
 
 
-@router.get("/v1/audio/speech/models")
-async def show_available_speech_models(x_api_key: Optional[str] = Header(None)):
+@router.get("/v1/audio/speech/models", response_model=ModelList)
+async def show_available_speech_models(
+    x_api_key: Optional[str] = Header(None)
+):
+    """Show available speech models."""
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/embed/speaker")
-async def create_embedding(request: EmbedSpeakerRequest,
-                        raw_request: Request,
-                        x_api_key: Optional[str] = Header(None)):
+@router.post("/v1/embed/speaker", response_model=EmbedSpeakerResponse)
+async def create_embedding(
+    request: EmbedSpeakerRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Create a speaker embedding."""
     generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -106,17 +143,21 @@ async def create_embedding(request: EmbedSpeakerRequest,
         return JSONResponse(content=generator.model_dump())
 
 
-@router.get("/v1/embed/models")
+@router.get("/v1/embed/models", response_model=ModelList)
 async def show_available_embedding_models(x_api_key: Optional[str] = Header(None)):
+    """Show available embedding models."""
     models = await openai_serving_embedding.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
-@router.post("/v1/audio/transcriptions")
-async def create_transcription(request: SpeechTranscribeRequest,
-                        raw_request: Request,
-                        x_api_key: Optional[str] = Header(None)):
+@router.post("/v1/audio/transcriptions", response_model=SpeechToTextResponse)
+async def create_transcription(
+    request: SpeechTranscribeRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Create a transcription from audio."""
     generator = await openai_serving_stt.create_transcription(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -126,16 +167,20 @@ async def create_transcription(request: SpeechTranscribeRequest,
         return JSONResponse(content=generator.model_dump())
 
 
-@router.get("/v1/audio/transcriptions/models")
+@router.get("/v1/audio/transcriptions/models", response_model=ModelList)
 async def show_available_transcription_models(x_api_key: Optional[str] = Header(None)):
+    """Show available transcription models."""
     models = await openai_serving_stt.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/voice/convert")
-async def convert_voice(request: VoiceConversionRequest,
-                        raw_request: Request,
-                        x_api_key: Optional[str] = Header(None)):
+@router.post("/v1/voice/convert", response_model=VoiceConversionResponse)
+async def convert_voice(
+    request: VoiceConversionRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Convert the voice in an audio file or stream to a desired target voice."""
     generator = await openai_serving_vc.convert_voice(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -147,14 +192,33 @@ async def convert_voice(request: VoiceConversionRequest,
 
 @router.get("/v1/voice/convert/models")
 async def show_available_voice_conversion_models(x_api_key: Optional[str] = Header(None)):
+    """Show available voice conversion models."""
     models = await openai_serving_vc.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 def build_app(args):
-    app = fastapi.FastAPI(lifespan=lifespan)
+    app = fastapi.FastAPI(
+        title="Harmony Speech Engine API",
+        description="API for the Harmony Speech Engine.",
+        lifespan=lifespan
+    )
     app.include_router(router)
     app.root_path = args.root_path
+
+    # Custom OpenAPI schema generation for Official clients
+    default_schema = app.openapi
+
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        openapi_schema = default_schema()
+        openapi_schema["info"]["x-go-client-name"] = "HarmonySpeechAPI"
+        openapi_schema["info"]["x-go-package"] = "harmonyspeech"
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
 
     app.add_middleware(
         CORSMiddleware,
