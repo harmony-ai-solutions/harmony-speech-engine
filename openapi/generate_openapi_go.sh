@@ -5,7 +5,7 @@
 # https://github.com/OpenAPITools/openapi-generator/blob/master/docs/generators/go.md
 # https://stackoverflow.com/questions/75405511/the-line-import-openapiclient-github-com-git-user-id-git-repo-id-is-added-when
 
-mkdir goclient
+mkdir -p goclient
 
 docker run --rm \
   -v ${PWD}:/local openapitools/openapi-generator-cli generate \

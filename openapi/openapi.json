@@ -839,7 +839,14 @@
             "default": ""
           },
           "language": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Language",
             "description": "language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable."
           },

@@ -90,7 +90,7 @@ class TextToSpeechRequest(BaseRequest):
     Based on OpenAI TTS API; extended for Harmony Speech Engine features.
     """
     input: str = Field(default="", description="the text to synthesize")
-    language: str = Field(
+    language: Optional[str] = Field(
         default=None,
         description="language to synthesize. Only if the model supports language IDs. "
                     "Please refer to the model's documentation for which values are availiable.")
