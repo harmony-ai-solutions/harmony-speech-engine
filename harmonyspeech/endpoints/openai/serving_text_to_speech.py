@@ -30,23 +30,17 @@ class OpenAIServingTextToSpeech(OpenAIServing):
     def __init__(
         self,
         engine: AsyncHarmonySpeech,
-        available_models: List[str],
+        available_models: List[ModelCard],
     ):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
     def models_from_config(configured_models: List[ModelConfig]):
-        check_dict = copy.deepcopy(_TTS_MODEL_GROUPS)
-        for m in configured_models:
-            for group_name, remaining_models in check_dict.items():
-                if len(remaining_models) == 0:
-                    continue
-                if m.model_type in remaining_models:
-                    check_dict[group_name].remove(m.model_type)
-
-        full_model_groups = [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
-        individual_models = [m.name for m in configured_models if m.model_type in _TTS_MODEL_TYPES]
-        return individual_models + full_model_groups
+        return OpenAIServing.model_cards_from_config_groups(
+            configured_models,
+            _TTS_MODEL_TYPES,
+            _TTS_MODEL_GROUPS
+        )
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request
@@ -55,14 +49,6 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         error_check_model = await self._check_model(request)
         if error_check_model is not None:
             return error_check_model
-
-        error_check_language = await self._check_language(request)
-        if error_check_language is not None:
-            return error_check_language
-
-        error_check_speaker = await self._check_speaker(request)
-        if error_check_speaker is not None:
-            return error_check_speaker
 
         # TODO: Basic checks for TTS Generate request
 
@@ -117,46 +103,5 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         )
 
         return response
-
-    async def _check_language(self, request) -> Optional[ErrorResponse]:
-        # General Check for Language parameter
-        if request.model in [
-            "openvoice_v1",
-            "openvoice_v2",
-            "OpenVoiceV1Synthesizer",
-            "MeloTTSSynthesizer"
-        ] and request.language is None:
-            return self.create_error_response(
-                message=f"The model `{request.model}` requires a language parameter.",
-                err_type="BadRequestError",
-                status_code=HTTPStatus.BAD_REQUEST)
-
-        # Detail Check OpenVoice V1
-        if request.model in ["openvoice_v1", "OpenVoiceV1Synthesizer"] and request.language not in ["EN", "ZH"]:
-            return self.create_error_response(
-                message=f"The model `{request.model}` does not support language {request.language}.",
-                err_type="BadRequestError",
-                status_code=HTTPStatus.BAD_REQUEST)
-
-    async def _check_speaker(self, request) -> Optional[ErrorResponse]:
-        # General Check for Language parameter
-        if request.model in [
-            "openvoice_v1",
-            "openvoice_v2",
-            "OpenVoiceV1Synthesizer",
-            "MeloTTSSynthesizer"
-        ] and request.voice is None:
-            return self.create_error_response(
-                message=f"The model `{request.model}` requires a voice parameter.",
-                err_type="BadRequestError",
-                status_code=HTTPStatus.BAD_REQUEST)
-
-        # Detail Check OpenVoice V1
-        # if request.model in ["openvoice_v1", "OpenVoiceV1Synthesizer"] and request.voice not in ["EN", "ZH"]:
-        #     return self.create_error_response(
-        #         message=f"The model `{request.model}` does not support language {request.language}.",
-        #         err_type="BadRequestError",
-        #         status_code=HTTPStatus.BAD_REQUEST)
-
 
 

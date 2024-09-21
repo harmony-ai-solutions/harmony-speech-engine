@@ -652,6 +652,31 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LanguageOptions": {
+        "properties": {
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "default"
+          },
+          "voices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/VoiceOptions"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voices"
+          }
+        },
+        "type": "object",
+        "title": "LanguageOptions"
+      },
       "ModelCard": {
         "properties": {
           "id": {
@@ -671,6 +696,20 @@
             "type": "string",
             "title": "Owned By",
             "default": "harmony-ai-solutions"
+          },
+          "languages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/LanguageOptions"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Languages"
           },
           "root": {
             "anyOf": [
@@ -782,14 +821,7 @@
             "default": ""
           },
           "input_audio": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Input Audio",
             "description": "Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
           },
@@ -1100,6 +1132,31 @@
         "type": "object",
         "title": "VoiceConversionResponse",
         "description": "VoiceConversionResponse\nExtends AudioDataResponse with a request specific ID"
+      },
+      "VoiceOptions": {
+        "properties": {
+          "voice": {
+            "type": "string",
+            "title": "Voice",
+            "default": "default"
+          },
+          "styles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Styles"
+          }
+        },
+        "type": "object",
+        "title": "VoiceOptions"
       }
     }
   }

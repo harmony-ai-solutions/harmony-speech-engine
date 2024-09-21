@@ -27,6 +27,7 @@ model_configs:
     model: "models/myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "EN"
+    voices: ["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"]
     max_batch_size: 10
     dtype: "float32"
     device_config:
@@ -36,6 +37,7 @@ model_configs:
     model: "models/myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "ZH"
+    voices: ["default"]
     max_batch_size: 10
     dtype: "float32"
     device_config:
@@ -61,6 +63,7 @@ model_configs:
     model: "models/myshell-ai/MeloTTS-English-v3"
     model_type: "MeloTTSSynthesizer"
     language: "EN"
+    voices: ["EN-Newest"]
     max_batch_size: 10
     dtype: "float32"
     device_config:
@@ -70,6 +73,7 @@ model_configs:
     model: "models/myshell-ai/MeloTTS-Chinese"
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
+    voices: ["default"]
     max_batch_size: 10
     dtype: "float32"
     device_config:

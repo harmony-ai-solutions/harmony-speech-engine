@@ -1,5 +1,5 @@
 # Protocol Definition for OpenAI-Like Endpoint
-# Inspiration taken from PygmalionAI / Aphrodite Engine
+# Inspiration taken from PygmalionAI / Aphrodite Engine & OpenAI API definitions
 
 import time
 from typing import Dict, Literal, Optional, Union, List
@@ -18,11 +18,22 @@ class ErrorResponse(BaseModel):
     code: int
 
 
+class VoiceOptions(BaseModel):
+    voice: str = "default"
+    styles: Optional[List[str]] = Field(default_factory=list)
+
+
+class LanguageOptions(BaseModel):
+    language: str = "default"
+    voices: Optional[List[VoiceOptions]] = Field(default_factory=list)
+
+
 class ModelCard(BaseModel):
     id: str
     object: str = "model"
     created: int = Field(default_factory=lambda: int(time.time()))
     owned_by: str = "harmony-ai-solutions"
+    languages: Optional[List[LanguageOptions]] = Field(default_factory=list)
     root: Optional[str] = None
     parent: Optional[str] = None
     # permission: List[ModelPermission] = Field(default_factory=list)
@@ -167,7 +178,7 @@ class SpeechTranscribeRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
-    input_audio: Optional[str] = Field(
+    input_audio: str = Field(
         default=None,
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )

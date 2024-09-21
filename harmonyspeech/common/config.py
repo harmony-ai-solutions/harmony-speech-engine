@@ -52,6 +52,7 @@ class ModelConfig:
         max_batch_size: int,
         device_config: DeviceConfig,
         language: Optional[str] = None,
+        voices: Optional[List[str]] = None,
         trust_remote_code: Optional[bool] = False,
         download_dir: Optional[str] = None,
         load_format: Optional[str] = "auto",
@@ -67,6 +68,7 @@ class ModelConfig:
         self.max_batch_size = max_batch_size
         self.device_config = device_config
         self.language = language
+        self.voices = voices
         self.trust_remote_code = trust_remote_code
         self.download_dir = download_dir
         self.load_format = load_format

@@ -8,8 +8,7 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.protocol import TextToSpeechResponse, ErrorResponse, EmbedSpeakerRequest, \
-    EmbedSpeakerResponse
+from harmonyspeech.endpoints.openai.protocol import *
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -30,23 +29,17 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
     def __init__(
         self,
         engine: AsyncHarmonySpeech,
-        available_models: List[str],
+        available_models: List[ModelCard],
     ):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
     def models_from_config(configured_models: List[ModelConfig]):
-        check_dict = copy.deepcopy(_EMBEDDING_MODEL_GROUPS)
-        for m in configured_models:
-            for group_name, remaining_models in check_dict.items():
-                if len(remaining_models) == 0:
-                    continue
-                if m.model_type in remaining_models:
-                    check_dict[group_name].remove(m.model_type)
-
-        full_model_groups = [group_name for group_name, remaining_models in check_dict.items() if not remaining_models]
-        individual_models = [m.name for m in configured_models if m.model_type in _EMBEDDING_MODEL_TYPES]
-        return individual_models + full_model_groups
+        return OpenAIServing.model_cards_from_config_groups(
+            configured_models,
+            _EMBEDDING_MODEL_TYPES,
+            _EMBEDDING_MODEL_GROUPS
+        )
 
     async def create_voice_embedding(
         self, request: EmbedSpeakerRequest, raw_request: Request
@@ -102,5 +95,3 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
         )
 
         return response
-
-
