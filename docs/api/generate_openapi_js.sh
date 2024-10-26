@@ -13,7 +13,8 @@ docker run --rm \
   -g javascript \
   -p disallowAdditionalPropertiesIfNotPresent=false \
   -p projectName=harmonyspeech \
-  -p projectVersion=0.0.4 \
+  -p projectVersion=0.0.7 \
+  -p usePromises=true \
   -o /local/jsclient \
   --git-repo-id harmony-speech-engine-client-js \
   --git-user-id harmony-ai-solutions

@@ -34,12 +34,13 @@ Implementation Type: Native / Third-Party
 
 Links: 
 - [Github](https://github.com/SYSTRAN/faster-whisper)
+- [Availiable Model Tags+Sizes](https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/utils.py#L12)
 
 ##### YAML Config Example
 ```
 model_configs:
   - name: "faster-whisper"
-    model: "large-v3"
+    model: "large-v3-turbo"
     model_type: "FasterWhisper"
     max_batch_size: 16
     dtype: "float32"

@@ -8,7 +8,7 @@ By default, the API is accessible at:
 
 http://127.0.0.1:12080
 
-If you decidef to use a different port or you're hosting the API,
+If you decide to use a different port or you're hosting the API,
 please make sure to use the proper endpoint instead.
 
 
@@ -29,3 +29,9 @@ http://127.0.0.1:12080/redoc
 
 
 Both Swagger UI and ReDoc provide interactive documentation for exploring and testing the API endpoints.
+
+
+## Helpful Resources
+
+A recently generated OpenAPI definition file and scripts to generate our Golang and JavaScript clients can be found
+in [docs/api](api)

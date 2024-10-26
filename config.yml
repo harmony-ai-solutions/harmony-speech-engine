@@ -96,7 +96,7 @@ model_configs:
       device: "cpu"
 
   - name: "faster-whisper"
-    model: "large-v3"
+    model: "large-v3-turbo"
     model_type: "FasterWhisper"
     max_batch_size: 16
     dtype: "float32"
