@@ -95,14 +95,14 @@ model_configs:
     device_config:
       device: "cpu"
 
-#  - name: "faster-whisper"
-#    model: "large-v3-turbo"
-#    model_type: "FasterWhisper"
-#    max_batch_size: 16
-#    dtype: "float32"
-#    device_config:
-#      device: "cuda:0"
-#
+  - name: "faster-whisper"
+    model: "tiny"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
 #  - name: "hs1-vocoder"
 #    model: "models/harmony-ai-solutions/harmonyspeech/vocoder"
 #    model_type: "HarmonySpeechVocoder"

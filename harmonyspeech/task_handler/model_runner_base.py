@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import time
+from dataclasses import asdict
 from typing import List
 
 import numpy as np
@@ -299,12 +300,12 @@ class ModelRunnerBase:
             text = ""
             for segment in segments:
                 text += segment.text
-                segment_data.append(segment._asdict())
+                segment_data.append(asdict(segment))
 
             response = {
                 "text": text,
                 "segments": segment_data,
-                "info": info._asdict()
+                "info": asdict(info)
             }
             return json.dumps(response)
 
