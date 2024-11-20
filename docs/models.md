@@ -82,7 +82,7 @@ model_configs:
       device: "cpu"
 
   - name: "hs1-synthesizer"
-    model: "models/harmony-ai-solutions/harmonyspeech"
+    model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechSynthesizer"
     max_batch_size: 10
     dtype: "float32"
@@ -90,7 +90,7 @@ model_configs:
       device: "cpu"
 
   - name: "hs1-vocoder"
-    model: "models/harmony-ai-solutions/harmonyspeech"
+    model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechVocoder"
     max_batch_size: 10
     dtype: "float32"
@@ -133,7 +133,7 @@ Links:
 ```
 model_configs:
   - name: "ov1-synthesizer-en"
-    model: "models/myshell-ai/openvoice"
+    model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "EN"
     max_batch_size: 10
@@ -142,7 +142,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov1-synthesizer-zh"
-    model: "models/myshell-ai/openvoice"
+    model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "ZH"
     max_batch_size: 10
@@ -151,7 +151,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov1-tone-converter"
-    model: "models/myshell-ai/openvoice"
+    model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverter"
     max_batch_size: 10
     dtype: "float32"
@@ -159,7 +159,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov1-tone-converter-encoder"
-    model: "models/myshell-ai/openvoice"
+    model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverterEncoder"
     max_batch_size: 10
     dtype: "float32"
@@ -220,7 +220,7 @@ same time currently.
 ```
 model_configs:
   - name: "ov2-synthesizer-en"
-    model: "models/myshell-ai/MeloTTS-English-v3"
+    model: "myshell-ai/MeloTTS-English-v3"
     model_type: "MeloTTSSynthesizer"
     language: "EN"
     max_batch_size: 10
@@ -229,7 +229,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov2-synthesizer-zh"
-    model: "models/myshell-ai/MeloTTS-Chinese"
+    model: "myshell-ai/MeloTTS-Chinese"
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
     max_batch_size: 10
@@ -238,7 +238,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov2-tone-converter"
-    model: "models/myshell-ai/openvoice_v2"
+    model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverter"
     max_batch_size: 10
     dtype: "float32"
@@ -246,7 +246,7 @@ model_configs:
       device: "cpu"
 
   - name: "ov2-tone-converter-encoder"
-    model: "models/myshell-ai/openvoice_v2"
+    model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverterEncoder"
     max_batch_size: 10
     dtype: "float32"

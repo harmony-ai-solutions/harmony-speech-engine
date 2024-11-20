@@ -34,14 +34,14 @@ def _get_model_cls(model_config: ModelConfig) -> Type[nn.Module]:
 _MODEL_CONFIGS = {
     # OpenVoice V1
     "OpenVoiceV1Synthesizer": {
-        "EN": "base_speakers/EN/config.json",
-        "ZH": "base_speakers/ZH/config.json",
+        "EN": "checkpoints/base_speakers/EN/config.json",
+        "ZH": "checkpoints/base_speakers/ZH/config.json",
     },
     "OpenVoiceV1ToneConverter": {
-        "default": "converter/config.json",
+        "default": "checkpoints/converter/config.json",
     },
     "OpenVoiceV1ToneConverterEncoder": {
-        "default": "converter/config.json",
+        "default": "checkpoints/converter/config.json",
     },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
@@ -72,14 +72,14 @@ _MODEL_CONFIGS = {
 _MODEL_WEIGHTS = {
     # OpenVoice V1
     "OpenVoiceV1Synthesizer": {
-        "EN": "base_speakers/EN/checkpoint.pth",
-        "ZH": "base_speakers/ZH/checkpoint.pth",
+        "EN": "checkpoints/base_speakers/EN/checkpoint.pth",
+        "ZH": "checkpoints/base_speakers/ZH/checkpoint.pth",
     },
     "OpenVoiceV1ToneConverter": {
-        "default": "converter/checkpoint.pth",
+        "default": "checkpoints/converter/checkpoint.pth",
     },
     "OpenVoiceV1ToneConverterEncoder": {
-        "default": "converter/checkpoint.pth",
+        "default": "checkpoints/converter/checkpoint.pth",
     },
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
     "MeloTTSSynthesizer": {
@@ -110,18 +110,18 @@ _MODEL_WEIGHTS = {
 _MODEL_SPEAKERS = {
     "OpenVoiceV1ToneConverter": {
         "EN": {
-            "default": "base_speakers/EN/en_default_se.pth",
-            "whispering": "base_speakers/EN/en_style_se.pth",
-            "shouting": "base_speakers/EN/en_style_se.pth",
-            "excited": "base_speakers/EN/en_style_se.pth",
-            "cheerful": "base_speakers/EN/en_style_se.pth",
-            "terrified": "base_speakers/EN/en_style_se.pth",
-            "angry": "base_speakers/EN/en_style_se.pth",
-            "sad": "base_speakers/EN/en_style_se.pth",
-            "friendly": "base_speakers/EN/en_style_se.pth",
+            "default": "checkpoints/base_speakers/EN/en_default_se.pth",
+            "whispering": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "shouting": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "excited": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "cheerful": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "terrified": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "angry": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "sad": "checkpoints/base_speakers/EN/en_style_se.pth",
+            "friendly": "checkpoints/base_speakers/EN/en_style_se.pth",
         },
         "ZH": {
-            "default": "base_speakers/ZH/zh_default_se.pth"
+            "default": "checkpoints/base_speakers/ZH/zh_default_se.pth"
         },
     },
     "OpenVoiceV2ToneConverter": {

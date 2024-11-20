@@ -4,6 +4,7 @@ uvicorn
 loguru
 prometheus_client
 torch
+torchaudio
 psutil
 packaging
 numpy
@@ -33,6 +34,7 @@ unidic-lite
 pykakasi
 unidecode
 soundfile
-faster-whisper
+#faster-whisper # Currently not up to date with release tags
+git+https://github.com/SYSTRAN/faster-whisper.git@bcd8ce0fc72d1fa4e42bdf5fd34d5d17bae680c2
 eng_to_ipa
 fugashi
