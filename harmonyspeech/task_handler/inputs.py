@@ -94,6 +94,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
     elif model_config.model_type == "FasterWhisper":
         for r in requests_to_batch:
             if (
+                isinstance(r.request_data, SpeechEmbeddingRequestInput) or
                 isinstance(r.request_data, TextToSpeechRequestInput) or
                 isinstance(r.request_data, SpeechTranscribeRequestInput)
             ):
@@ -101,7 +102,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
-                    f"SpeechTranscribeRequestInput")
+                    f"SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput")
         return prepare_faster_whisper_inputs(inputs)
     elif model_config.model_type == "OpenVoiceV1Synthesizer":
         for r in requests_to_batch:

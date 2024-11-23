@@ -141,7 +141,7 @@ class HarmonySpeechEngine:
         The default variant is to use whisper for this Process; however there's also a SileroTTS variant
         provided in the OpenVoice repo.
 
-        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        When processing OpenVoice V2 Embedding or TTS requests, the routing rule is the following:
         1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
         2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
         3. TTS using base Synthesizer model
@@ -153,6 +153,10 @@ class HarmonySpeechEngine:
                 request.input_audio is not None and  #
                 request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            ) or (
+                isinstance(request, SpeechEmbeddingRequestInput) and
+                request.input_audio is not None and  #
+                request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
             )
         ):
             for cfg in self.model_configs:
@@ -202,7 +206,7 @@ class HarmonySpeechEngine:
         The default variant is to use whisper for this Process; however there's also a SileroTTS variant
         provided in the OpenVoice repo.
 
-        When processing OpenVoice V2 Embedding or TTS requests, the rouding rule is the following:
+        When processing OpenVoice V2 Embedding or TTS requests, the routing rule is the following:
         1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
         2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
         3. TTS using Melo
@@ -214,6 +218,10 @@ class HarmonySpeechEngine:
                 request.input_audio is not None and  #
                 request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            ) or (
+                isinstance(request, SpeechEmbeddingRequestInput) and
+                request.input_audio is not None and  #
+                request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
             )
         ):
             for cfg in self.model_configs:
@@ -281,6 +289,24 @@ class HarmonySpeechEngine:
             return new_status, None
 
         forwarding_request = None
+
+        # Multi-Step Embedding Processing (OpenVoice)
+        if isinstance(input_data, SpeechEmbeddingRequestInput) and requested_model in [
+            "openvoice_v1",
+            "openvoice_v2"
+        ]:
+            forwarding_request = input_data
+
+            if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
+                # Transcription results used By:
+                # - OpenVoice V1
+                # - OpenVoice V2
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Transcription Step Finished, provide VAD Result Data for Embedding Step
+                forwarding_request.input_vad_data = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
 
         # Multi-Step TTS Processing (Harmonyspeech, OpenVoice)
         if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
