@@ -870,6 +870,12 @@
             "description": "the text to synthesize",
             "default": ""
           },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "description": "the operation mode for the model to process the request",
+            "default": ""
+          },
           "language": {
             "anyOf": [
               {

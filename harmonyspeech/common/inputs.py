@@ -90,6 +90,7 @@ class TextToSpeechRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_text: str,
+        mode: str,
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
         input_audio: Optional[str] = None,
@@ -108,6 +109,7 @@ class TextToSpeechRequestInput(RequestInput):
             metrics=metrics,
         )
         self.input_text = input_text
+        self.mode = mode
         self.language_id = language_id
         self.voice_id = voice_id
         self.input_audio = input_audio
@@ -125,6 +127,7 @@ class TextToSpeechRequestInput(RequestInput):
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
             input_text=getattr(request, 'input', ''),
+            mode=getattr(request, 'mode', ''),
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
             input_audio=getattr(request, 'input_audio', None),

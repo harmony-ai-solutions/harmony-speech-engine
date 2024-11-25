@@ -150,6 +150,7 @@ class HarmonySpeechEngine:
         if (isinstance(request, SpeechTranscribeRequestInput) or
             (
                 isinstance(request, TextToSpeechRequestInput) and
+                request.mode == "voice_cloning" and  # Only required when voice cloning
                 request.input_audio is not None and  #
                 request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
@@ -167,6 +168,7 @@ class HarmonySpeechEngine:
         elif (isinstance(request, SpeechEmbeddingRequestInput) or
               (
                   isinstance(request, TextToSpeechRequestInput) and
+                  request.mode == "voice_cloning" and  # Only required when voice cloning
                   request.input_audio is not None and  #
                   request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
                   request.input_embedding is None  # Output of Embedding becomes input for synthesis
@@ -180,7 +182,10 @@ class HarmonySpeechEngine:
               (
                   isinstance(request, TextToSpeechRequestInput) and
                   request.input_audio is None and  # Removing Input audio after Embedding Step
-                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                  (
+                      request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                      or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
+                  )
               )
         ):
             for cfg in self.model_configs:
@@ -190,6 +195,7 @@ class HarmonySpeechEngine:
         elif (isinstance(request, VoiceConversionRequest) or
               (
                   isinstance(request, TextToSpeechRequestInput) and
+                  request.mode == "voice_cloning" and  # Only required when voice cloning
                   request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
                   request.input_embedding is not None
               )
@@ -215,6 +221,7 @@ class HarmonySpeechEngine:
         if (isinstance(request, SpeechTranscribeRequestInput) or
             (
                 isinstance(request, TextToSpeechRequestInput) and
+                request.mode == "voice_cloning" and  # Only required when voice cloning
                 request.input_audio is not None and  #
                 request.input_vad_data is None and  # VAD Data not set, key condition for Transcribe Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
@@ -232,6 +239,7 @@ class HarmonySpeechEngine:
         elif (isinstance(request, SpeechEmbeddingRequestInput) or
             (
                 isinstance(request, TextToSpeechRequestInput) and
+                request.mode == "voice_cloning" and  # Only required when voice cloning
                 request.input_audio is not None and  #
                 request.input_vad_data is not None and  # VAD Data set, key condition for Embedding Action
                 request.input_embedding is None  # Output of Embedding becomes input for synthesis
@@ -245,7 +253,10 @@ class HarmonySpeechEngine:
               (
                   isinstance(request, TextToSpeechRequestInput) and
                   request.input_audio is None and  # Removing Input audio after Embedding Step
-                  request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                  (
+                      request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                      or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
+                  )
               )
         ):
             for cfg in self.model_configs:
@@ -255,6 +266,7 @@ class HarmonySpeechEngine:
         elif (isinstance(request, VoiceConversionRequest) or
               (
                   isinstance(request, TextToSpeechRequestInput) and
+                  request.mode == "voice_cloning" and  # Only required when voice cloning
                   request.input_audio is not None and  # Output of synthesis becomes Input for voice converter
                   request.input_embedding is not None
               )
@@ -285,6 +297,7 @@ class HarmonySpeechEngine:
                 returning_model_cfg = cfg
                 break
 
+        # Explicit model selected, no forwarding needed
         if returning_model_cfg == requested_model:
             return new_status, None
 
@@ -340,7 +353,10 @@ class HarmonySpeechEngine:
                 forwarding_request.input_audio = None
                 forwarding_request.input_embedding = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
-            elif isinstance(result.result_data, SpeechSynthesisRequestOutput):
+            elif (
+                isinstance(result.result_data, SpeechSynthesisRequestOutput)
+                and (not hasattr(input_data, 'mode') or input_data.mode == "voice_cloning")
+            ):
                 # Synthesis results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
@@ -352,8 +368,8 @@ class HarmonySpeechEngine:
                 # Embedding step finished, update input data and continue with synthesis step
                 forwarding_request.input_audio = result.result_data.output
                 self.add_request(result.request_id, forwarding_request)
-            else:  # There should be only vocoder results here...
-                # Vocoding / Voice Conversion results used By:
+            else:  # There should be only final processing results here...
+                # Vocoding / Voice Conversion / Single Speaker TTS results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
                 # - Harmony Speech
