@@ -1,4 +1,5 @@
 import asyncio
+import http
 import importlib
 import inspect
 import os
@@ -67,31 +68,36 @@ async def health() -> JSONResponse:
         "voice_embedding": "unknown"
     }
 
+    status_code = http.HTTPStatus.OK
     try:
         await openai_serving_tts.engine.check_health()
         health_status["text_to_speech"] = "healthy"
     except Exception as e:
         health_status["text_to_speech"] = f"unhealthy: {str(e)}"
+        status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
         await openai_serving_stt.engine.check_health()
         health_status["speech_to_text"] = "healthy"
     except Exception as e:
         health_status["speech_to_text"] = f"unhealthy: {str(e)}"
+        status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
         await openai_serving_vc.engine.check_health()
         health_status["voice_conversion"] = "healthy"
     except Exception as e:
         health_status["voice_conversion"] = f"unhealthy: {str(e)}"
+        status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
         await openai_serving_embedding.engine.check_health()
         health_status["voice_embedding"] = "healthy"
     except Exception as e:
         health_status["voice_embedding"] = f"unhealthy: {str(e)}"
+        status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
-    return JSONResponse(content=health_status)
+    return JSONResponse(content=health_status, status_code=status_code)
 
 
 @router.get("/version", description="Fetch the Harmony Speech Engine version.", response_model=dict)
