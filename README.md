@@ -2,7 +2,7 @@
 ![Harmony Speech Engine Logo](docs/images/Harmony-Speech-Engine.png)
 ---
 
-Harmony.AI's Speech Engine is a high performance Inference Engine for Open Source Speech AI.
+Harmony.AI's Speech Engine is a high performance inference engine for Open Source Speech AI.
 
 It's goal is to serve as the backbone for cost-efficient local and self-hosted AI Speech Services, supporting
 a variety of Speech-related model architectures for Text-To-Speech, Speech-To-Text and Voice Conversion.

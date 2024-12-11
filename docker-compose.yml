@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  harmonyspeech-ui:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: harmonyspeech-ui
+    ports:
+      - "8080:80"
+    depends_on:
+      - harmonyspeech-engine
+
+  harmonyspeech-engine:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: harmonyspeech-engine
+    volumes:
+      - ./config.yml:/app/harmony-speech-engine/config.yml
+      - ~/.cache/huggingface:/app/harmony-speech-engine/.cache/huggingface
+    ports:
+      - "12080:12080"
