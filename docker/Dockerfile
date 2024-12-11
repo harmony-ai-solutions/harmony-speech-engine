@@ -22,10 +22,9 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 RUN python3 -m pip install --no-cache-dir --upgrade pip
 
 # Clone Repo and install requirements
-RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git /tmp/harmony-speech-engine \
-    && mv /tmp/harmony-speech-engine/* . \
-    && rm -fr /tmp/harmony-speech-engine \
+RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
     && chmod +x docker/entrypoint.sh
+RUN pip3 install -r requirements.txt
 
 # Allow build servers to limit ninja build jobs. For reference
 # see https://github.com/PygmalionAI/aphrodite-engine/wiki/1.-Installation#build-from-source

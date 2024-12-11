@@ -34,7 +34,6 @@ unidic-lite
 pykakasi
 unidecode
 soundfile
-#faster-whisper # Currently not up to date with release tags
-git+https://github.com/SYSTRAN/faster-whisper.git@v1.1.0
+faster-whisper>=1.1.0
 eng_to_ipa
 fugashi
