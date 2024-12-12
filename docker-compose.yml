@@ -16,7 +16,7 @@ services:
 #      HF_TOKEN: YOUR_HUGGINGFACE_TOKEN
     volumes:
       - ./config.yml:/app/harmony-speech-engine/config.yml
-      # - ~/.cache:/app/harmony-speech-engine/.cache
-      - .cache:/app/harmony-speech-engine/.cache
+      - ~/.cache:/app/harmony-speech-engine/.cache
+      # - .cache:/app/harmony-speech-engine/.cache => To store downloaded hub files locally within repo
     ports:
       - "12080:12080"
