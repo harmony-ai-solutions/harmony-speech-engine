@@ -35,6 +35,7 @@ ENV MAX_JOBS=${MAX_JOBS}
 ENV CUDA_HOME=/usr/local/cuda
 
 # Set Hugging Face cache directory
+RUN mkdir -p /app/harmony-speech-engine/.cache
 ENV HF_HOME=/app/harmony-speech-engine/.cache
 
 ENV NUMBA_CACHE_DIR=$HF_HOME/numba_cache
