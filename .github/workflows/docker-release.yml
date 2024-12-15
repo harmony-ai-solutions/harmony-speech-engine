@@ -1,6 +1,7 @@
 name: Build and Push Docker Images
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - '*'
@@ -10,6 +11,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Frees up additional disk space on GHA runner for building the image
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-docker-images: 'true'
+
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -27,11 +37,15 @@ jobs:
         with:
           context: ./docker
           push: true
-          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ github.ref_name }}
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ github.ref_name }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:latest
 
       - name: Build and push harmonyspeech-ui image
         uses: docker/build-push-action@v3
         with:
           context: ./frontend
           push: true
-          tags: ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:${{ github.ref_name }}
+          tags: |
+            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:${{ github.ref_name }}
+            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:latest
