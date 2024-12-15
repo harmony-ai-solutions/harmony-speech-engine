@@ -39,5 +39,5 @@ jobs:
           context: ./frontend
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:${{ github.ref_name }}
-            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:${{ github.ref_name }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:latest
