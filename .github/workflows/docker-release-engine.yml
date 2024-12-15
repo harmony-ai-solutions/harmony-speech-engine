@@ -1,4 +1,4 @@
-name: Build and Push Docker Images
+name: Build and Push Harmony Speech Engine Docker Image
 
 on:
   workflow_dispatch:
@@ -41,12 +41,3 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ github.ref_name }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:latest
-
-      - name: Build and push harmonyspeech-ui image
-        uses: docker/build-push-action@v3
-        with:
-          context: ./frontend
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:${{ github.ref_name }}
-            ${{ secrets.DOCKER_HUB_PASSWORD }}/harmonyspeech-ui:latest
