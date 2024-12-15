@@ -11,16 +11,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Frees up additional disk space on GHA runner for building the image
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 30000
-          swap-size-mb: 1024
-          remove-dotnet: 'true'
-          remove-docker-images: 'true'
-          remove-android: 'true'
-
       - name: Checkout repository
         uses: actions/checkout@v3
 
