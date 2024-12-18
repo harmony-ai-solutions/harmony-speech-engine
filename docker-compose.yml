@@ -2,16 +2,16 @@ version: '3.8'
 
 services:
   harmonyspeech-ui:
-    build: ./frontend
-    image: harmonyspeech-ui
+#    build: ./frontend
+    image: harmonyai/harmonyspeech-ui:latest
     ports:
       - "8080:80"
     depends_on:
       - harmonyspeech-engine
 
   harmonyspeech-engine:
-    build: ./docker
-    image: harmonyspeech-engine
+#    build: ./docker
+    image: harmonyai/harmonyspeech-engine:latest
 #    environment:
 #      HF_TOKEN: YOUR_HUGGINGFACE_TOKEN
     volumes:
