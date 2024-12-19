@@ -35,8 +35,8 @@ ENV MAX_JOBS=${MAX_JOBS}
 ENV CUDA_HOME=/usr/local/cuda
 
 # Set Hugging Face cache directory
-RUN mkdir -p /app/harmony-speech-engine/.cache
-ENV HF_HOME=/app/harmony-speech-engine/.cache
+RUN mkdir -p /app/harmony-speech-engine/cache
+ENV HF_HOME=/app/harmony-speech-engine/cache
 
 ENV NUMBA_CACHE_DIR=$HF_HOME/numba_cache
 ENV TORCH_CUDA_ARCH_LIST="6.1 7.0 7.5 8.0 8.6 8.9 9.0+PTX"
@@ -48,12 +48,8 @@ RUN python3 -m pip install --no-cache-dir -e .
 
 # Entrypoint exec form doesn't do variable substitution automatically ($HOME)
 ENTRYPOINT ["/app/harmony-speech-engine/docker/entrypoint.sh"]
-
 EXPOSE 12080
 
 # Service UID needs write access to $HOME to create temporary folders, see #458
 RUN chown 1000:1000 ${HOME}
-
 USER 1000:0
-
-VOLUME ["/app/harmony-speech-engine/.cache"]
