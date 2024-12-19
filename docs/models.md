@@ -33,7 +33,7 @@ name of the desired model into the `model` field of the configuration.
 Implementation Type: Native / Third-Party
 
 Links: 
-- [Github](https://github.com/SYSTRAN/faster-whisper)
+- [Github: Code, Model Overview, Benchmarks](https://github.com/SYSTRAN/faster-whisper)
 - [Availiable Model Tags+Sizes](https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/utils.py#L12)
 
 ##### YAML Config Example

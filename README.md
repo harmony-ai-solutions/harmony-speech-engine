@@ -24,6 +24,13 @@ a variety of Speech-related model architectures for Text-To-Speech, Speech-To-Te
 ---
 
 ## Quickstart
+
+### Running with Docker
+
+For instructions on how to set up and run Harmony Speech Engine using Docker, please refer to the [Docker Setup Guide](docs/docker.md).
+
+### Running locally 
+#### 1. Set up the base environment
 <details>
 <summary>
 Instructions for Setting up the base environment 
@@ -63,9 +70,9 @@ npm -i
 ```
 </details>
 
-#### 1. Check `config.yml` is correctly set up for the models you want to use (See [Models](docs/models.md)).
+#### 2. Check `config.yml` is correctly set up for the models you want to use (See [Models](docs/models.md)).
 
-#### 2. Run Harmony Speech Engine from repo base directory:
+#### 3. Run Harmony Speech Engine from repo base directory:
 ```
 python harmonyspeech/endpoints/cli.py run --host 0.0.0.0 --port 12080
 ```
@@ -73,14 +80,14 @@ Once started, you can access the API via http://127.0.0.1:12080. [Swagger](http:
 
 For more details about the API & generating OpenAPI clients, please check our [API Documentation](docs/api.md).
 
-#### 3. Run the Frontend
+#### 4. Run the Frontend
 ```
 cd frontend
 npm run dev
 ```
 This will start a vite server accessible via http://localhost:5173/
 
-#### 4. If you encounter any bugs, please create a Github Issue describing the problems you're facing. We're happy to help. :-) 
+#### 5. If you encounter any bugs, please create a Github Issue describing the problems you're facing. We're happy to help. :-) 
 
 ---
 

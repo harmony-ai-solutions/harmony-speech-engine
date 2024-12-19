@@ -14,7 +14,13 @@ services:
     image: harmonyai/harmonyspeech-engine:latest
     env_file: ./.env
     volumes:
-      - ./config.yml:/app/harmony-speech-engine/config.yml
+      - ./config.nvidia.yml:/app/harmony-speech-engine/config.yml
       - ./cache:/app/harmony-speech-engine/cache
     ports:
       - "12080:12080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [ gpu ]
