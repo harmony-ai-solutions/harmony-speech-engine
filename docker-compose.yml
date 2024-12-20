@@ -2,6 +2,7 @@ services:
   harmonyspeech-ui:
 #    build: ./frontend
     image: harmonyai/harmonyspeech-ui:latest
+    pull_policy: always
     ports:
       - "8080:80"
     depends_on:
@@ -10,6 +11,7 @@ services:
   harmonyspeech-engine:
 #    build: ./docker
     image: harmonyai/harmonyspeech-engine:latest
+    pull_policy: always
     env_file: ./.env
     volumes:
       - ./config.yml:/app/harmony-speech-engine/config.yml
