@@ -73,7 +73,7 @@ model_configs:
     model: "myshell-ai/MeloTTS-Chinese"
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
-    voices: ["default"]
+    voices: ["ZH"]
     max_batch_size: 10
     dtype: "float32"
     device_config:
