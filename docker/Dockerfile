@@ -26,6 +26,9 @@ RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git 
     && chmod +x docker/entrypoint.sh
 RUN pip3 install -r requirements.txt
 
+# Download NLTK modules required by OpenVoice
+RUN python -m nltk.downloader all
+
 # Allow build servers to limit ninja build jobs. For reference
 # see https://github.com/PygmalionAI/aphrodite-engine/wiki/1.-Installation#build-from-source
 ARG MAX_JOBS
