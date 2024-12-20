@@ -38,3 +38,5 @@ faster-whisper>=1.1.0
 eng_to_ipa
 fugashi
 nltk
+# Downgrade ctranslate, see: https://github.com/SYSTRAN/faster-whisper/issues/1086
+ctranslate2<=4.4.0
