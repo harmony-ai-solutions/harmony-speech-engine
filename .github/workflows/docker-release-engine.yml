@@ -1,10 +1,14 @@
 name: Build and Push Harmony Speech Engine Docker Image
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - '*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number for the build'
+        default: 'v0.0.0-dev'
 
 jobs:
   build-and-push:
@@ -24,6 +28,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Set VERSION variable
+        shell: pwsh
+        run: |
+          $inputsVersion = '${{ github.event.inputs.version }}'
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
+            $env:VERSION = $inputsVersion
+          } else {
+            $env:VERSION = 'v0.0.0-dev'
+          }
+          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
@@ -39,5 +56,5 @@ jobs:
           context: ./docker
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ github.ref_name }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${VERSION}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:latest
