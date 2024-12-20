@@ -46,5 +46,5 @@ jobs:
           context: ./frontend
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:${{ VERSION }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:latest

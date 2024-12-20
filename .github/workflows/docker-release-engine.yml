@@ -56,5 +56,5 @@ jobs:
           context: ./docker
           push: true
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ VERSION }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine:latest
