@@ -139,36 +139,36 @@ def get_bert_feature(text, word2ph, device='cuda'):
     return japanese_bert.get_bert_feature(text, word2ph, device=device, model_id=model_id)
 
 
-if __name__ == "__main__":
-    # tokenizer = AutoTokenizer.from_pretrained("./bert/bert-base-japanese-v3")
-    from text.symbols import symbols
-    text = "전 제 일의 가치와 폰타인 대중들이 한 일의 의미를 잘 압니다. 앞으로도 전 제 일에 자부심을 갖고 살아갈 겁니다"
-    import json
-
-    # genshin_data = json.load(open('/data/zwl/workspace/StarRail_Datasets/Index & Scripts/Index/1.3/Korean.json'))
-    genshin_data = json.load(open('/data/zwl/workspace/Genshin_Datasets/Index & Script/AI Hobbyist Version/Index/4.1/KR_output.json'))
-    from tqdm import tqdm
-    new_symbols = []
-    for key, item in tqdm(genshin_data.items()):
-        texts = item.get('voiceContent', '')
-        if isinstance(texts, list):
-            texts = ','.join(texts)
-        if texts is None:
-            continue
-        if len(texts) == 0:
-            continue
-
-        text = text_normalize(text)
-        phones, tones, word2ph = g2p(text)
-        bert = get_bert_feature(text, word2ph)
-        import  pdb; pdb.set_trace()
-        for ph in phones:
-            if ph not in symbols and ph not in new_symbols:
-                new_symbols.append(ph)
-                print('update!, now symbols:')
-                print(new_symbols)
-                with open('korean_symbol.txt', 'w') as f:
-                    f.write(f'{new_symbols}')
+# if __name__ == "__main__":
+#     # tokenizer = AutoTokenizer.from_pretrained("./bert/bert-base-japanese-v3")
+#     from text.symbols import symbols
+#     text = "전 제 일의 가치와 폰타인 대중들이 한 일의 의미를 잘 압니다. 앞으로도 전 제 일에 자부심을 갖고 살아갈 겁니다"
+#     import json
+#
+#     # genshin_data = json.load(open('/data/zwl/workspace/StarRail_Datasets/Index & Scripts/Index/1.3/Korean.json'))
+#     genshin_data = json.load(open('/data/zwl/workspace/Genshin_Datasets/Index & Script/AI Hobbyist Version/Index/4.1/KR_output.json'))
+#     from tqdm import tqdm
+#     new_symbols = []
+#     for key, item in tqdm(genshin_data.items()):
+#         texts = item.get('voiceContent', '')
+#         if isinstance(texts, list):
+#             texts = ','.join(texts)
+#         if texts is None:
+#             continue
+#         if len(texts) == 0:
+#             continue
+#
+#         text = text_normalize(text)
+#         phones, tones, word2ph = g2p(text)
+#         bert = get_bert_feature(text, word2ph)
+#         import  pdb; pdb.set_trace()
+#         for ph in phones:
+#             if ph not in symbols and ph not in new_symbols:
+#                 new_symbols.append(ph)
+#                 print('update!, now symbols:')
+#                 print(new_symbols)
+#                 with open('korean_symbol.txt', 'w') as f:
+#                     f.write(f'{new_symbols}')
 
         
 

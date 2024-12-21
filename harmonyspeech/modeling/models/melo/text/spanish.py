@@ -108,14 +108,14 @@ def g2p(text, pad_start_end=True, tokenized=None):
 def get_bert_feature(text, word2ph, device=None):
     return spanish_bert.get_bert_feature(text, word2ph, device=device)
 
-if __name__ == "__main__":
-    text = "en nuestros tiempos estos dos pueblos ilustres empiezan a curarse, gracias sólo a la sana y vigorosa higiene de 1789."
-    # print(text)
-    text = text_normalize(text)
-    print(text)
-    phones, tones, word2ph = g2p(text)
-    bert = get_bert_feature(text, word2ph)
-    print(phones)
-    print(len(phones), tones, sum(word2ph), bert.shape)
+# if __name__ == "__main__":
+#     text = "en nuestros tiempos estos dos pueblos ilustres empiezan a curarse, gracias sólo a la sana y vigorosa higiene de 1789."
+#     # print(text)
+#     text = text_normalize(text)
+#     print(text)
+#     phones, tones, word2ph = g2p(text)
+#     bert = get_bert_feature(text, word2ph)
+#     print(phones)
+#     print(len(phones), tones, sum(word2ph), bert.shape)
 
 

@@ -262,16 +262,16 @@ def g2p(text, pad_start_end=True, tokenized=None):
 def get_bert_feature(text, word2ph, device=None):
     return english_bert.get_bert_feature(text, word2ph, device=device)
 
-if __name__ == "__main__":
-    # print(get_dict())
-    # print(eng_word_to_phoneme("hello"))
-    text = "In this paper, we propose 1 DSPGAN, a N-F-T GAN-based universal vocoder."
-    text = text_normalize(text)
-    phones, tones, word2ph = g2p(text)
-    import pdb; pdb.set_trace()
-    bert = get_bert_feature(text, word2ph)
-    
-    print(phones, tones, word2ph, bert.shape)
+# if __name__ == "__main__":
+#     # print(get_dict())
+#     # print(eng_word_to_phoneme("hello"))
+#     text = "In this paper, we propose 1 DSPGAN, a N-F-T GAN-based universal vocoder."
+#     text = text_normalize(text)
+#     phones, tones, word2ph = g2p(text)
+#     import pdb; pdb.set_trace()
+#     bert = get_bert_feature(text, word2ph)
+#
+#     print(phones, tones, word2ph, bert.shape)
 
     # all_phones = set()
     # for k, syllables in eng_dict.items():

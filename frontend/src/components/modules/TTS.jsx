@@ -220,6 +220,12 @@ const TTS = ({initialSettings}) => {
             setModelOptions(newModelOptions);
             setModelLanguageOptions(newModelLanguageOptions);
             setModelVoiceOptions(newModelVoiceOptions);
+
+            // Refresh UI
+            if(!newModelOptions.some((modelOption) => modelOption.value === currentVoiceConfig.model)) {
+                handleModelSelectionChange(newModelOptions[0].value);
+            }
+
         });
     }
 
@@ -300,6 +306,55 @@ const TTS = ({initialSettings}) => {
         setConfirmModalYes(() => saveVoiceConfiguration);
         setConfirmModalNo(() => cancelSaveVoiceConfiguration);
         showConfirmModal("Please enter a name for the configuration", true, "Save voice configuration");
+    };
+
+    const handleVoiceSelectionChange = (selectedVoiceId) => {
+        // Ensure selected voice is valid
+        let voice = selectedVoiceId;
+        if (!modelVoiceOptions[currentVoiceConfig.model] || !modelVoiceOptions[currentVoiceConfig.model][currentVoiceConfig.language] || modelVoiceOptions[currentVoiceConfig.model][currentVoiceConfig.language].length === 0) {
+            // Model has no defined voices
+            voice = "";
+        } else if (!modelVoiceOptions[currentVoiceConfig.model][currentVoiceConfig.language].some((voiceOption) => voiceOption.value === voice)) {
+            // Model has voices, but selected one is not a valid one
+            voice = modelVoiceOptions[currentVoiceConfig.model][currentVoiceConfig.language][0].value;
+        }
+
+        // Update config
+        const newConfig = {
+            ...currentVoiceConfig,
+            voice: voice,
+        };
+        setCurrentVoiceConfig(newConfig);
+    };
+
+    const handleLanguageSelectionChange = (selectedLanguageId) => {
+        // Ensure selected language is valid
+        let language = selectedLanguageId;
+        if (!modelLanguageOptions[currentVoiceConfig.model] || modelLanguageOptions[currentVoiceConfig.model].length === 0) {
+            // Model has no valid languages
+            language = ""
+        } else if (!modelLanguageOptions[currentVoiceConfig.model].some((langOption) => langOption.value === language)) {
+            // Model has languages, but selected one is not a valid one
+            language = modelLanguageOptions[currentVoiceConfig.model][0].value;
+        }
+
+        // Ensure selected voice is valid
+        let voice = currentVoiceConfig.voice;
+        if (!modelVoiceOptions[currentVoiceConfig.model] || !modelVoiceOptions[currentVoiceConfig.model][language] || modelVoiceOptions[currentVoiceConfig.model][language].length === 0) {
+            // Model has no defined voices
+            voice = "";
+        } else if (!modelVoiceOptions[currentVoiceConfig.model][language].some((voiceOption) => voiceOption.value === voice)) {
+            // Model has voices, but selected one is not a valid one
+            voice = modelVoiceOptions[currentVoiceConfig.model][language][0].value;
+        }
+
+        // Update config
+        const newConfig = {
+            ...currentVoiceConfig,
+            language: language,
+            voice: voice,
+        };
+        setCurrentVoiceConfig(newConfig);
     };
 
     const handleModelSelectionChange = (selectedModelId) => {
@@ -665,10 +720,7 @@ const TTS = ({initialSettings}) => {
                             </label>
                             <select
                                 value={currentVoiceConfig.language}
-                                onChange={(e) =>
-                                    // FIXME: This does not update OperationMode dynamically
-                                    setCurrentVoiceConfig({...currentVoiceConfig, language: e.target.value})
-                                }
+                                onChange={(e) => handleLanguageSelectionChange(e.target.value)}
                                 className="block w-1/2 bg-neutral-800 shadow-sm focus:outline-none focus:border-orange-400 border border-neutral-600 text-neutral-100"
                             >
                                 {modelLanguageOptions[currentVoiceConfig.model] ? (
@@ -693,9 +745,7 @@ const TTS = ({initialSettings}) => {
                             </label>
                             <select
                                 value={currentVoiceConfig.voice}
-                                onChange={(e) =>
-                                    setCurrentVoiceConfig({...currentVoiceConfig, voice: e.target.value})
-                                }
+                                onChange={(e) => handleVoiceSelectionChange(e.target.value)}
                                 className="block w-1/2 bg-neutral-800 shadow-sm focus:outline-none focus:border-orange-400 border border-neutral-600 text-neutral-100"
                             >
                                 {modelVoiceOptions[currentVoiceConfig.model] && modelVoiceOptions[currentVoiceConfig.model][currentVoiceConfig.language] ? (
@@ -716,6 +766,8 @@ const TTS = ({initialSettings}) => {
                             <div className="w-1/2">
                                 <input
                                     type="number"
+                                    min="0"
+                                    step="1"
                                     name="seed"
                                     className="mt-1 block w-full bg-neutral-800 shadow-sm focus:outline-none focus:border-orange-400 border border-neutral-600 text-neutral-100"
                                     placeholder="Seed"
@@ -736,6 +788,8 @@ const TTS = ({initialSettings}) => {
                             <div className="w-1/2">
                                 <input
                                     type="number"
+                                    min="0"
+                                    step="1"
                                     name="style"
                                     className="mt-1 block w-full bg-neutral-800 shadow-sm focus:outline-none focus:border-orange-400 border border-neutral-600 text-neutral-100"
                                     placeholder="Style"

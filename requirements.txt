@@ -16,7 +16,7 @@ scipy
 librosa
 h5py
 inflect
-gruut
+gruut[de,es,fr]
 cn2an
 pypinyin
 jieba
