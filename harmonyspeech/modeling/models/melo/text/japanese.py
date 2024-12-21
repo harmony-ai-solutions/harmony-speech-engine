@@ -541,21 +541,21 @@ def replace_punctuation(text):
 # Commented out until this is fixed:
 # https://youtrack.jetbrains.com/issue/PY-65289/Pytestddtrace-crashes-with-python-3.12-and-2023.3
 
-# from pykakasi import kakasi
-# # Initialize kakasi object
-# kakasi = kakasi()
-# # Set options for converting Chinese characters to Katakana
-# kakasi.setMode("J", "K")  # Chinese to Katakana
-# kakasi.setMode("H", "K")  # Hiragana to Katakana
-# # Convert Chinese characters to Katakana
-# conv = kakasi.getConverter()
+from pykakasi import kakasi
+# Initialize kakasi object
+kakasi = kakasi()
+# Set options for converting Chinese characters to Katakana
+kakasi.setMode("J", "K")  # Chinese to Katakana
+kakasi.setMode("H", "K")  # Hiragana to Katakana
+# Convert Chinese characters to Katakana
+conv = kakasi.getConverter()
 
 def text_normalize(text):
     res = unicodedata.normalize("NFKC", text)
     res = japanese_convert_numbers_to_words(res)
     res = "".join([i for i in res if is_japanese_character(i)])
     res = replace_punctuation(res)
-    # res = conv.do(res) <------------------------------------------------------ THIS AS WELL (PY-65289)
+    res = conv.do(res) # <------------------------------------------------------ THIS AS WELL (PY-65289)
     return res
 
 

@@ -207,7 +207,7 @@ Implementation Type: Adapted
 | [MeloTTS-Chinese](https://huggingface.co/myshell-ai/MeloTTS-Chinese)       |      ZH (Chinese)       |                    ZH                     |
 | [MeloTTS-Spanish](https://huggingface.co/myshell-ai/MeloTTS-Spanish)       |      ES (Spanish)       |                    ES                     |
 | [MeloTTS-French](https://huggingface.co/myshell-ai/MeloTTS-French)         |       FR (French)       |                    FR                     |
-| [MeloTTS-Japanese](https://huggingface.co/myshell-ai/MeloTTS-Japanese)     |      JA (Japanese)      |                    JP                     |
+| [MeloTTS-Japanese](https://huggingface.co/myshell-ai/MeloTTS-Japanese)     |      JP (Japanese)      |                    JP                     |
 | [MeloTTS-Korean](https://huggingface.co/myshell-ai/MeloTTS-Korean)         |       KR (Korean)       |                    KR                     |
 
 Links: 

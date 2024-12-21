@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 
@@ -70,8 +71,16 @@ def g2p(text):
     pattern = r"(?<=[{0}])\s*".format("".join(punctuation))
     sentences = [i for i in re.split(pattern, text) if i.strip() != ""]
     phones, tones, word2ph = _g2p(sentences)
-    assert sum(word2ph) == len(phones)
-    assert len(word2ph) == len(text)  # Sometimes it will crash,you can add a try-catch.
+
+    try:
+        assert sum(word2ph) == len(phones)
+    except AssertionError:
+        logging.warning("Sum of word2ph does not equal length of phones.")
+    try:
+        assert len(word2ph) == len(text)  # Sometimes it will crash, you can add a try-catch.
+    except AssertionError:
+        logging.warning("Length of word2ph does not equal length of text.")
+
     phones = ["_"] + phones + ["_"]
     tones = [0] + tones + [0]
     word2ph = [1] + word2ph + [1]

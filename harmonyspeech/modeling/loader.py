@@ -134,19 +134,19 @@ _MODEL_SPEAKERS = {
             "EN-Default": "base_speakers/ses/en-default.pth",
         },
         "ES": {
-            "default": "base_speakers/ses/es.pth"
+            "ES": "base_speakers/ses/es.pth"
         },
         "FR": {
-            "default": "base_speakers/ses/fr.pth"
+            "FR": "base_speakers/ses/fr.pth"
         },
         "JP": {
-            "default": "base_speakers/ses/jp.pth"
+            "JP": "base_speakers/ses/jp.pth"
         },
         "KR": {
-            "default": "base_speakers/ses/kr.pth"
+            "KR": "base_speakers/ses/kr.pth"
         },
         "ZH": {
-            "default": "base_speakers/ses/zh.pth"
+            "ZH": "base_speakers/ses/zh.pth"
         },
     }
 }

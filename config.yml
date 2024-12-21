@@ -79,6 +79,46 @@ model_configs:
     device_config:
       device: "cpu"
 
+  - name: "ov2-synthesizer-es"
+    model: "myshell-ai/MeloTTS-Spanish"
+    model_type: "MeloTTSSynthesizer"
+    language: "ES"
+    voices: [ "ES" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-fr"
+    model: "myshell-ai/MeloTTS-French"
+    model_type: "MeloTTSSynthesizer"
+    language: "FR"
+    voices: [ "FR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-jp"
+    model: "myshell-ai/MeloTTS-Japanese"
+    model_type: "MeloTTSSynthesizer"
+    language: "JP"
+    voices: [ "JP" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-kr"
+    model: "myshell-ai/MeloTTS-Korean"
+    model_type: "MeloTTSSynthesizer"
+    language: "KR"
+    voices: [ "KR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverter"

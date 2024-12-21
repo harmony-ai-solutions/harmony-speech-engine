@@ -3,7 +3,7 @@ import re
 from harmonyspeech.modeling.models.melo.utils import get_text_for_tts_infer
 from harmonyspeech.modeling.models.melo.split_utils import split_sentence
 
-_supported_languages = ['EN', 'ZH', 'ZH_MIX_EN', 'FR', 'ES', 'SP', 'JA', 'KR']
+_supported_languages = ['EN', 'ZH', 'ZH_MIX_EN', 'FR', 'ES', 'SP', 'JP', 'KR']
 
 
 def split_sentences_into_pieces(text, language_str):

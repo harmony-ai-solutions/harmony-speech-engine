@@ -63,7 +63,7 @@ model_configs:
     model: "myshell-ai/MeloTTS-English-v3"
     model_type: "MeloTTSSynthesizer"
     language: "EN"
-    voices: ["EN-Newest"]
+    voices: [ "EN-Newest" ]
     max_batch_size: 10
     dtype: "float32"
     device_config:
@@ -73,7 +73,37 @@ model_configs:
     model: "myshell-ai/MeloTTS-Chinese"
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
-    voices: ["ZH"]
+    voices: [ "ZH" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
+
+  - name: "ov2-synthesizer-es"
+    model: "myshell-ai/MeloTTS-Spanish"
+    model_type: "MeloTTSSynthesizer"
+    language: "ES"
+    voices: [ "ES" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
+
+  - name: "ov2-synthesizer-fr"
+    model: "myshell-ai/MeloTTS-French"
+    model_type: "MeloTTSSynthesizer"
+    language: "FR"
+    voices: [ "FR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
+
+  - name: "ov2-synthesizer-ja"
+    model: "myshell-ai/MeloTTS-Japanese"
+    model_type: "MeloTTSSynthesizer"
+    language: "JA"
+    voices: [ "JP" ]
     max_batch_size: 10
     dtype: "float32"
     device_config:
