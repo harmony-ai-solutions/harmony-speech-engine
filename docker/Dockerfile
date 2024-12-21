@@ -14,7 +14,7 @@ RUN set -eux; \
     export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y bzip2 g++ git make python3-pip tzdata libeigen3-dev gcc curl libsndfile1 zlib1g-dev ffmpeg libcudnn8 \
+    && apt-get install -y bzip2 g++ git make python3-pip tzdata libeigen3-dev gcc curl libsndfile1 zlib1g-dev ffmpeg libcudnn8 libmecab-dev \
     && rm -fr /var/lib/apt/lists/*
 
 # Alias python3 to python and upgrade pip
