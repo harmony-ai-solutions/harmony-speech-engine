@@ -1,4 +1,6 @@
-docker/Dockerfile
+docker/amd/Dockerfile
+docker/cpu/Dockerfile
+docker/nvidia/Dockerfile
 README.md
 *.pyc
 *.pyo

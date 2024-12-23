@@ -9,12 +9,18 @@ services:
       - harmonyspeech-engine
 
   harmonyspeech-engine:
-#    build: ./docker/cpu
+#    build: ./docker/amd
     image: harmonyai/harmonyspeech-engine:latest
     pull_policy: always
     env_file: ./.env
     volumes:
-      - ./config.yml:/app/harmony-speech-engine/config.yml
+      - ./config.gpu.yml:/app/harmony-speech-engine/config.yml
       - ./cache:/app/harmony-speech-engine/cache
     ports:
       - "12080:12080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [ gpu ]

@@ -3,8 +3,6 @@ fastapi
 uvicorn
 loguru
 prometheus_client
-torch
-torchaudio
 psutil
 packaging
 numpy

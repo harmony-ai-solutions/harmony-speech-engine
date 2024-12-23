@@ -414,29 +414,25 @@ def get_requirements() -> List[str]:
         return resolved_requirements
 
     if _no_device() or _is_windows():
-        # requirements = _read_requirements("requirements-cuda.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-cuda.txt")
     elif _is_cuda():
-        # requirements = _read_requirements("requirements-cuda.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-cuda.txt")
     elif _is_hip():
-        # requirements = _read_requirements("requirements-rocm.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-rocm.txt")
     elif _is_neuron():
         # requirements = _read_requirements("requirements-neuron.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-common.txt")
     elif _is_openvino():
         # requirements = _read_requirements("requirements-openvino.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-common.txt")
     elif _is_tpu():
         # requirements = _read_requirements("requirements-tpu.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-common.txt")
     elif _is_cpu():
-        # requirements = _read_requirements("requirements-cpu.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-cpu.txt")
     elif _is_xpu():
         # requirements = _read_requirements("requirements-xpu.txt")
-        requirements = _read_requirements("requirements.txt")
+        requirements = _read_requirements("requirements-common.txt")
     else:
         raise ValueError(
             "Unsupported platform, please use CUDA, ROCm, Neuron, CPU or "
