@@ -1,3 +1,7 @@
+# Torch
+torch
+torchaudio
+# General Stuff
 pydantic
 fastapi
 uvicorn

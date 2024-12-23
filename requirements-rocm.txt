@@ -2,5 +2,3 @@
 -r requirements-common.txt
 
 # Requirements for AMD GPUs
-torch
-torchaudio

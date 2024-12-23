@@ -1,6 +1,6 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM rocm/pytorch:rocm6.3_ubuntu22.04_py3.10_pytorch_release_2.4.0
+FROM rocm/pytorch:rocm6.2.3_ubuntu22.04_py3.10_pytorch_release_2.3.0
 
 # Default ROCm ARCHes to build Harmony Speech Engine for.
 ARG PYTORCH_ROCM_ARCH="gfx908;gfx90a;gfx942;gfx1100"
@@ -27,7 +27,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip
 # Clone Repo and install requirements
 RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
     && chmod +x docker/entrypoint.sh
-RUN pip3 install -r requirements-rocm.txt
+RUN pip3 install -r requirements-rocm.txt --extra-index-url https://download.pytorch.org/whl/rocm6.2
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all

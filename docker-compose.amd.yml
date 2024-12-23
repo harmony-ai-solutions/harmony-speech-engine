@@ -10,17 +10,18 @@ services:
 
   harmonyspeech-engine:
 #    build: ./docker/amd
-    image: harmonyai/harmonyspeech-engine:latest
+    image: harmonyai/harmonyspeech-engine-amd:latest
     pull_policy: always
-    env_file: ./.env
+    env_file: ./.env-amd
     volumes:
+#     Comment in the lines below for usage with WSL
+#      - type: bind
+#        source: /usr/lib/wsl
+#        target: /usr/lib/wsl
       - ./config.gpu.yml:/app/harmony-speech-engine/config.yml
       - ./cache:/app/harmony-speech-engine/cache
     ports:
       - "12080:12080"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [ gpu ]
+    tty: true
+    devices:
+      - /dev/dxg

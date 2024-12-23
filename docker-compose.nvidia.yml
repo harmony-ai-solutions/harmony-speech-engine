@@ -10,7 +10,7 @@ services:
 
   harmonyspeech-engine:
 #    build: ./docker/nvidia
-    image: harmonyai/harmonyspeech-engine:latest
+    image: harmonyai/harmonyspeech-engine-nvidia:latest
     pull_policy: always
     env_file: ./.env
     volumes:

@@ -10,7 +10,7 @@ services:
 
   harmonyspeech-engine:
 #    build: ./docker/cpu
-    image: harmonyai/harmonyspeech-engine:latest
+    image: harmonyai/harmonyspeech-engine-cpu:latest
     pull_policy: always
     env_file: ./.env
     volumes:
