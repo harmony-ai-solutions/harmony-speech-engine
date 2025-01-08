@@ -5,6 +5,7 @@ import inspect
 import os
 from contextlib import asynccontextmanager
 from http import HTTPStatus
+from threading import Thread
 
 import fastapi
 import uvicorn
@@ -26,6 +27,11 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from fastapi.responses import (HTMLResponse, JSONResponse, Response, StreamingResponse)
 from prometheus_client import make_asgi_app
+
+# Harmony Auth
+from auth.apikeys import ApiKeyCacheManager
+
+SERVICE_NAME = os.environ.get("SERVICE_NAME", "harmony-speech-engine")
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
@@ -203,6 +209,15 @@ async def show_available_voice_conversion_models(x_api_key: Optional[str] = Head
     return JSONResponse(content=models.model_dump())
 
 
+# Register event with Rate limiting backend
+# Use separate thread to not interfere with request processing
+def register_event(api_key, event_name, client_ip):
+    register_thread = Thread(
+        target=ApiKeyCacheManager.register_rate_limiting_event,
+        args=(api_key, SERVICE_NAME, event_name, client_ip))
+    register_thread.start()
+
+
 def build_app(args):
     app = fastapi.FastAPI(
         title="Harmony Speech Engine API",
@@ -265,11 +280,26 @@ def build_app(args):
                 return await call_next(request)
 
             auth_header = request.headers.get("Authorization")
-            api_key_header = request.headers.get("x-api-key")
+            api_key_header = request.headers.get('Api-Key')
 
-            if auth_header != "Bearer " + token and api_key_header != token:
-                return JSONResponse(content={"error": "Unauthorized"},
-                                    status_code=401)
+            # If Harmony Auth Key is set, this takes precedence
+            if api_key_header and api_key_header != token:
+                harmony_auth_valid, error = ApiKeyCacheManager.check_request_allowed_by_rate_limit(api_key=api_key_header, service=SERVICE_NAME)
+                if not harmony_auth_valid:
+                    return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
+
+                # Log event to rate limiting
+                client_ip = request.client.host
+                client_source_ip = request.headers.get("X-Real-Ip")
+                if client_source_ip:
+                    client_ip = client_source_ip
+                register_event(api_key=api_key_header, event_name=request.url.path, client_ip=client_ip)
+            else:
+                # Default API Key for local instance - make sure to also set this if using harmony auth;
+                # to ensure Access is blocked if client does not send an API key
+                if api_key_header != token or auth_header != f"Bearer {token}":
+                    return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
+
             return await call_next(request)
 
     for middleware in args.middleware:
