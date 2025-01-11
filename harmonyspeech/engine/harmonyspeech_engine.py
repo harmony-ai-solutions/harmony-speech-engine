@@ -355,7 +355,7 @@ class HarmonySpeechEngine:
                 self.add_request(result.request_id, forwarding_request)
             elif (
                 isinstance(result.result_data, SpeechSynthesisRequestOutput)
-                and (not hasattr(input_data, 'mode') or input_data.mode == "voice_cloning")
+                and input_data.mode == "voice_cloning"
             ):
                 # Synthesis results used By:
                 # - OpenVoice V1
