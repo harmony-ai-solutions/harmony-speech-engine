@@ -242,7 +242,7 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         )
 
     async def check_health_async(self) -> None:
-        for model_executor in self.model_executors:
+        for model_executor in self.model_executors.values():
             model_executor.check_health()
 
 
