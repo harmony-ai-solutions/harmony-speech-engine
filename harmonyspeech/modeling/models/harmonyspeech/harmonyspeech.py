@@ -744,4 +744,4 @@ class MelGANGenerator(torch.nn.Module):
         if hf_config and "out_channels" in hf_config["model"] and hf_config["model"]["out_channels"] > 1:
             self.pqmf = PQMF(
                 subbands=hf_config["model"]["out_channels"],
-            )
+            ).to(next(self.parameters()).device)
