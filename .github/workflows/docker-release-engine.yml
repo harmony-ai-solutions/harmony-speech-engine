@@ -56,7 +56,7 @@ jobs:
       - name: Build and push harmonyspeech-engine image
         uses: docker/build-push-action@v3
         with:
-          context: ./docker
+          context: ./docker/cpu
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-cpu:${{ env.VERSION }}
@@ -107,7 +107,7 @@ jobs:
       - name: Build and push harmonyspeech-engine image
         uses: docker/build-push-action@v3
         with:
-          context: ./docker
+          context: ./docker/amd
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-amd:${{ env.VERSION }}
