@@ -73,6 +73,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.convertVoiceV1VoiceConvertPost(voiceConversionRequest, options);
         } catch (error) {
@@ -93,6 +96,9 @@ class HarmonySpeechEnginePlugin {
         }
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
+        }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
         }
         try {
             return await this.defaultApi.createEmbeddingV1EmbedSpeakerPost(embedSpeakerRequest, options);
@@ -115,6 +121,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.createSpeechV1AudioSpeechPost(textToSpeechRequest, options);
         } catch (error) {
@@ -136,6 +145,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.createTranscriptionV1AudioTranscriptionsPost(speechTranscribeRequest, options);
         } catch (error) {
@@ -152,6 +164,9 @@ class HarmonySpeechEnginePlugin {
     async checkHealth(options = {}) {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
+        }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
         }
         try {
             return await this.defaultApi.healthHealthGet(options);
@@ -170,6 +185,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.showAvailableEmbeddingModelsV1EmbedModelsGet(options);
         } catch (error) {
@@ -186,6 +204,9 @@ class HarmonySpeechEnginePlugin {
     async showAvailableSpeechModels(options = {}) {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
+        }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
         }
         try {
             return await this.defaultApi.showAvailableSpeechModelsV1AudioSpeechModelsGet(options);
@@ -204,6 +225,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.showAvailableTranscriptionModelsV1AudioTranscriptionsModelsGet(options);
         } catch (error) {
@@ -221,6 +245,9 @@ class HarmonySpeechEnginePlugin {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
         }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
+        }
         try {
             return await this.defaultApi.showAvailableVoiceConversionModelsV1VoiceConvertModelsGet(options);
         } catch (error) {
@@ -237,6 +264,9 @@ class HarmonySpeechEnginePlugin {
     async showVersion(options = {}) {
         if (this.apiKey && (options['xApiKey'] === undefined || options['xApiKey'] === null)) {
             options['xApiKey'] = this.apiKey;
+        }
+        if (this.apiKey && (options['apiKey'] === undefined || options['apiKey'] === null)) {
+            options['apiKey'] = this.apiKey;
         }
         try {
             return await this.defaultApi.showVersionVersionGet(options);

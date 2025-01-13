@@ -49,6 +49,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
           }
         ],
         "responses": {
@@ -96,6 +112,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
             }
           }
         ],
@@ -154,6 +186,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
           }
         ],
         "responses": {
@@ -200,6 +248,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
             }
           }
         ],
@@ -258,6 +322,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
           }
         ],
         "responses": {
@@ -304,6 +384,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
             }
           }
         ],
@@ -362,6 +458,22 @@
               ],
               "title": "X-Api-Key"
             }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
           }
         ],
         "responses": {
@@ -408,6 +520,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
             }
           }
         ],
@@ -465,6 +593,22 @@
                 }
               ],
               "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
             }
           }
         ],
