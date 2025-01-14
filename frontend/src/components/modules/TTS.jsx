@@ -103,7 +103,7 @@ const TTS = ({initialSettings}) => {
     const [currentVoiceConfig, setCurrentVoiceConfig] = useState({
         // Basic Settings
         model: "harmonyspeech",
-        operationMode: "voice_cloning",
+        operation_mode: "voice_cloning",
         language: "",
         voice: "",
         style: 0,
@@ -132,7 +132,7 @@ const TTS = ({initialSettings}) => {
     // Validation Functions
     const validateEndpointAndUpdate = (value) => {
         const urlRegex = /^(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?([a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,5}|localhost|\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3})(:[0-9]{1,5})?(\/.*)?$/;
-        if (urlRegex.test(value) === false) {
+        if ((moduleSettings.endpoint.length > 0 && value.length === 0) || (value.length > 0 && urlRegex.test(value) === false)) {
             showModal("Endpoint URL must be a valid URL.");
             setEndpoint(moduleSettings.endpoint);
             return false;
@@ -225,7 +225,6 @@ const TTS = ({initialSettings}) => {
             if(!newModelOptions.some((modelOption) => modelOption.value === currentVoiceConfig.model)) {
                 handleModelSelectionChange(newModelOptions[0].value);
             }
-
         });
     }
 
@@ -359,8 +358,8 @@ const TTS = ({initialSettings}) => {
 
     const handleModelSelectionChange = (selectedModelId) => {
         // Ensure selected OperationMode is valid
-        let operationMode = currentVoiceConfig.operationMode;
-        if (!modelOperationModes[selectedModelId].some((mode) => mode.value === currentVoiceConfig.operationMode)) {
+        let operationMode = currentVoiceConfig.operation_mode;
+        if (!modelOperationModes[selectedModelId].some((mode) => mode.value === currentVoiceConfig.operation_mode)) {
             operationMode = modelOperationModes[selectedModelId][0].value;
         }
 
@@ -388,7 +387,7 @@ const TTS = ({initialSettings}) => {
         const newConfig = {
             ...currentVoiceConfig,
             model: selectedModelId,
-            operationMode: operationMode,
+            operation_mode: operationMode,
             language: language,
             voice: voice,
             target_embedding: "",
@@ -401,7 +400,7 @@ const TTS = ({initialSettings}) => {
     const handleOperationModeChange = (selectedOperationMode) => {
         setCurrentVoiceConfig({
             ...currentVoiceConfig,
-            operationMode: selectedOperationMode,
+            operation_mode: selectedOperationMode,
             target_embedding: "",
         });
         setEmbeddingStatus(embeddingStatusNone);
@@ -462,7 +461,7 @@ const TTS = ({initialSettings}) => {
             showModal("Please enter text to synthesize.");
             return;
         }
-        if (currentVoiceConfig.operationMode === "voice_cloning" && !currentVoiceConfig.target_embedding) {
+        if (currentVoiceConfig.operation_mode === "voice_cloning" && !currentVoiceConfig.target_embedding) {
             showModal("Please generate an embedding for voice cloning first");
             return;
         }
@@ -475,7 +474,7 @@ const TTS = ({initialSettings}) => {
                 // Basic config
                 model: currentVoiceConfig.model,
                 input: generationText,
-                mode: currentVoiceConfig.operationMode,
+                mode: currentVoiceConfig.operation_mode,
                 language: currentVoiceConfig.language,
                 voice: currentVoiceConfig.voice,
                 input_embedding: currentVoiceConfig.target_embedding ? currentVoiceConfig.target_embedding : null,
@@ -592,7 +591,7 @@ const TTS = ({initialSettings}) => {
                                     </SettingsTooltip>
                                 </label>
                                 <select
-                                    value={currentVoiceConfig.operationMode}
+                                    value={currentVoiceConfig.operation_mode}
                                     onChange={(e) => handleOperationModeChange(e.target.value)}
                                     className="block w-1/2 bg-neutral-800 shadow-sm focus:outline-none focus:border-orange-400 border border-neutral-600 text-neutral-100"
                                 >
@@ -608,7 +607,7 @@ const TTS = ({initialSettings}) => {
                                 </select>
                             </div>
                         </div>
-                        {currentVoiceConfig.operationMode === "voice_cloning" && (
+                        {currentVoiceConfig.operation_mode === "voice_cloning" && (
                             <div className="w-full">
                                 <div className="flex items-center mb-2 w-full">
                                     <h2 className="text-l font-bold text-gray-300">
