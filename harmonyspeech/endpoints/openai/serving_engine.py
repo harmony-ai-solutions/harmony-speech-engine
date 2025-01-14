@@ -71,7 +71,7 @@ class OpenAIServing:
         return None
 
     async def _check_model(self, request) -> Optional[ErrorResponse]:
-        if request.mode not in ["voice_cloning", "single_speaker_tts"]:
+        if isinstance(request, TextToSpeechRequest) and request.mode not in ["voice_cloning", "single_speaker_tts"]:
             # TODO: Evaluate this based on model toolchain capability
             return self.create_error_response(
                 message=f"Parameter `mode` must either be 'single_speaker_tts' or 'voice_cloning'.",
