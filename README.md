@@ -116,7 +116,7 @@ Support and Ideas for Improving this Project are very welcome.
 The following Technologies and Features are planned to be supported.
 May change over time as new models and frameworks are being developed.
 
-- [ ] Zero-Shot Voice Conversion
+- [x] Zero-Shot Voice Conversion
   - [ ] NaturalSpeech3 Voice Converter
   - [x] OpenVoice V1 Tone Converter
   - [x] OpenVoice V2 Tone Converter
@@ -125,12 +125,13 @@ May change over time as new models and frameworks are being developed.
   - [ ] RVC (Retrieval-base-Voice-Conversion)
 - [ ] Multi-Shot Voice Cloning
   - [ ] StyleTTS 2
-- [ ] Zero-Shot Voice Cloning
+- [x] Zero-Shot Voice Cloning
   - [x] Harmony Speech V1 (english)
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 (English, Spanish, French, Chinese, Japanese and Korean)
   - [ ] Vall-E-X (Multilingual)
   - [ ] XTTS V2 (Multilingual)
+  - [ ] CosyVoice (Multilingual)
 - [x] Generic High Quality Single-Speaker TTS
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 / MeloTTS (English, Spanish, French, Chinese, Japanese and Korean)
@@ -139,9 +140,10 @@ May change over time as new models and frameworks are being developed.
 - [ ] Adaptive Voice Cloning
   - [ ] Basic Overlays (TTS + Voice Conversion)
   - [ ] Embedding Vector Matching (Convenience Feature)
-- [ ] Automatic Speech Recognition & Language Detection
+- [x] Automatic Speech Recognition & Language Detection
   - [x] Faster-Whisper / Faster-Distil-Whisper
   - [ ] Silero VAD
+  - [ ] SenseVoice
 
 ## Open ToDo's & things that require work
 - Documentation
