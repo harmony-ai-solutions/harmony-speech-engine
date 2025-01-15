@@ -286,3 +286,37 @@ class SpeechTranscribeRequestInput(RequestInput):
             get_language=getattr(request, 'get_language', False),
             get_timestamps=getattr(request, 'get_timestamps', False),
         )
+
+
+class DetectVoiceActivityRequestInput(RequestInput):
+    """
+    The input data for a VAD Request
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        requested_model: str,
+        model: str,
+        input_audio: Optional[str] = None,
+        get_timestamps: Optional[bool] = False,
+        metrics: Optional[RequestMetrics] = None,
+    ):
+        super().__init__(
+            request_id=request_id,
+            requested_model=requested_model,
+            model=model,
+            metrics=metrics,
+        )
+        self.input_audio = input_audio
+        self.get_timestamps = get_timestamps
+
+    @classmethod
+    def from_openai(cls, request_id: str, request: "DetectVoiceActivityRequest"):
+        return cls(
+            request_id=request_id,
+            requested_model=getattr(request, 'model', ''),
+            model=getattr(request, 'model', ''),
+            input_audio=getattr(request, 'input_audio', None),
+            get_timestamps=getattr(request, 'get_timestamps', False),
+        )

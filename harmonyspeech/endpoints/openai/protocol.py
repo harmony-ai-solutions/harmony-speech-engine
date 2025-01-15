@@ -204,6 +204,32 @@ class SpeechToTextResponse(BaseResponse):
     timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
 
 
+class DetectVoiceActivityRequest(BaseRequest):
+    """
+    DetectVoiceActivityRequest
+    Used to check for human speech in a provided audio file
+    Depending on model selection, the caller may need to provide additional params.
+    """
+    input_audio: str = Field(
+        default=None,
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+    )
+    get_timestamps: Optional[bool] = Field(
+        default=False,
+        description="whether to return the word timestamps. Check model description if supported."
+    )
+
+
+class DetectVoiceActivityResponse(BaseResponse):
+    """
+    DetectVoiceActivityResponse
+    Result text determined from audio and optional language tag
+    """
+    id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
+    speech_activity: bool = Field(default=False, description="whether speech activity was detected")
+    timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
+
+
 class EmbedSpeakerRequest(BaseRequest):
     """
     EmbedSpeakerRequest

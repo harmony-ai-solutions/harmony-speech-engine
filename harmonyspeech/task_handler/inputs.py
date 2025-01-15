@@ -96,13 +96,15 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
             if (
                 isinstance(r.request_data, SpeechEmbeddingRequestInput) or
                 isinstance(r.request_data, TextToSpeechRequestInput) or
-                isinstance(r.request_data, SpeechTranscribeRequestInput)
+                isinstance(r.request_data, SpeechTranscribeRequestInput) or
+                isinstance(r.request_data, DetectVoiceActivityRequestInput)
             ):
                 inputs.append(r.request_data)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
-                    f"SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput")
+                    f"SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput or"
+                    f"DetectVoiceActivityRequestInput")
         return prepare_faster_whisper_inputs(inputs)
     elif model_config.model_type == "OpenVoiceV1Synthesizer":
         for r in requests_to_batch:
@@ -342,7 +344,8 @@ def prepare_openvoice_tone_converter_inputs(model_config: ModelConfig, requests_
 
 def prepare_faster_whisper_inputs(requests_to_batch: List[Union[
     TextToSpeechRequestInput,
-    SpeechTranscribeRequestInput
+    SpeechTranscribeRequestInput,
+    DetectVoiceActivityRequestInput
 ]]):
     def prepare(request):
         # Make sure Audio data is decoded from Base64

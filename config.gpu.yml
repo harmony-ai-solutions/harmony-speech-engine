@@ -132,3 +132,11 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda"
+
+  - name: "faster-whisper-tiny"
+    model: "tiny"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cuda"

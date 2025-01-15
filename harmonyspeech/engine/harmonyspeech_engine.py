@@ -36,8 +36,9 @@ class HarmonySpeechEngine:
         logger.info(
             f"Initializing Harmony Speech Engine (v{harmonyspeech.__version__}) "
             "with the following config:\n"
-            f"Preloaded Models = "
-            f"Available Models = "
+            "Preloaded Models = \n"
+            # TODO
+            # f"Available Models = "
             # f"Device = {device_config.device}\n"
         )
 

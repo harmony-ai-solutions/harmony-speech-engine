@@ -23,6 +23,7 @@ from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingS
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from fastapi.responses import (HTMLResponse, JSONResponse, Response, StreamingResponse)
@@ -42,6 +43,7 @@ openai_serving_tts: OpenAIServingTextToSpeech = None
 openai_serving_stt: OpenAIServingSpeechToText = None
 openai_serving_vc: OpenAIServingVoiceConversion = None
 openai_serving_embedding: OpenAIServingVoiceEmbedding = None
+openai_serving_vad: OpenAIServingVoiceActivityDetection = None
 
 router = APIRouter()
 
@@ -101,6 +103,13 @@ async def health() -> JSONResponse:
         health_status["voice_embedding"] = "healthy"
     except Exception as e:
         health_status["voice_embedding"] = f"unhealthy: {str(e)}"
+        status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        
+    try:
+        await openai_serving_vad.engine.check_health()
+        health_status["voice_activity_detection"] = "healthy"
+    except Exception as e:
+        health_status["voice_activity_detection"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     return JSONResponse(content=health_status, status_code=status_code)
@@ -209,6 +218,29 @@ async def show_available_voice_conversion_models(x_api_key: Optional[str] = Head
     return JSONResponse(content=models.model_dump())
 
 
+@router.post("/v1/audio/vad", response_model=DetectVoiceActivityResponse)
+async def create_vad(
+    request: DetectVoiceActivityRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Create a vad from audio."""
+    generator = await openai_serving_vad.check_voice_activity(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    # if request.output_options and request.output_options.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.get("/v1/audio/vad/models", response_model=ModelList)
+async def show_available_vad_models(x_api_key: Optional[str] = Header(None)):
+    """Show available vad models."""
+    models = await openai_serving_vad.show_available_models()
+    return JSONResponse(content=models.model_dump())
+
+
 # Register event with Rate limiting backend
 # Use separate thread to not interfere with request processing
 def register_event(api_key, event_name, client_ip):
@@ -286,7 +318,7 @@ def build_app(args):
             if api_key_header and api_key_header != token:
                 harmony_auth_valid, error = ApiKeyCacheManager.check_request_allowed_by_rate_limit(api_key=api_key_header, service=SERVICE_NAME)
                 if not harmony_auth_valid:
-                    return JSONResponse(content={"error": "Unauthorized"}, status_code=401)
+                    return JSONResponse(content={"error": error}, status_code=401)
 
                 # Log event to rate limiting
                 client_ip = request.client.host
@@ -326,6 +358,7 @@ def run_server(args):
     global openai_serving_embedding
     global openai_serving_stt
     global openai_serving_vc
+    global openai_serving_vad
     # TODO: Add other Endpoint serving classes here
 
     if args.config_file_path is not None:
@@ -353,6 +386,10 @@ def run_server(args):
     openai_serving_vc = OpenAIServingVoiceConversion(
         engine,
         OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
+    )
+    openai_serving_vad = OpenAIServingVoiceActivityDetection(
+        engine,
+        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
 

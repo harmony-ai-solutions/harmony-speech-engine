@@ -12,6 +12,7 @@ import torch
 from faster_whisper import BatchedInferencePipeline
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.common.inputs import *
 from harmonyspeech.common.outputs import *
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
@@ -73,7 +74,7 @@ class ModelRunnerBase:
         elif model_type == "MeloTTSSynthesizer":
             outputs = self._execute_melotts_synthesizer(inputs, requests_to_batch)
         elif model_type == "FasterWhisper":
-            outputs = self._execute_faster_whisper_transcribe(inputs, requests_to_batch)
+            outputs = self._execute_faster_whisper(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
@@ -291,7 +292,7 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
-    def _execute_faster_whisper_transcribe(self, inputs, requests_to_batch):
+    def _execute_faster_whisper(self, inputs, requests_to_batch):
         def run_batched_transcribe(input_params):
             audio_ref = input_params
             batched_model = BatchedInferencePipeline(model=self.model)

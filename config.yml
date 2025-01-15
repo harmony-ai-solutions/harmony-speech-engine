@@ -136,6 +136,14 @@ model_configs:
       device: "cpu"
 
   - name: "faster-whisper"
+    model: "medium"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "faster-whisper-tiny"
     model: "tiny"
     model_type: "FasterWhisper"
     max_batch_size: 16
