@@ -13,7 +13,7 @@ docker run --rm \
   -g go \
   -p disallowAdditionalPropertiesIfNotPresent=false \
   -p packageName=harmonyspeech \
-  -p packageVersion=v0.1.0 \
+  -p packageVersion=v0.1.0a \
   -o /local/goclient \
   --git-repo-id harmony-speech-engine-client-go \
   --git-user-id harmony-ai-solutions
