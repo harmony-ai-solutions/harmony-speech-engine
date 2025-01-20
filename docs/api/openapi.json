@@ -633,6 +633,142 @@
           }
         }
       }
+    },
+    "/v1/audio/vad": {
+      "post": {
+        "summary": "Create Vad",
+        "description": "Create a vad from audio.",
+        "operationId": "create_vad_v1_audio_vad_post",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DetectVoiceActivityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectVoiceActivityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/audio/vad/models": {
+      "get": {
+        "summary": "Show Available Vad Models",
+        "description": "Show available vad models.",
+        "operationId": "show_available_vad_models_v1_audio_vad_models_get",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -677,6 +813,79 @@
         },
         "type": "object",
         "title": "AudioOutputOptions"
+      },
+      "DetectVoiceActivityRequest": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "input_audio": {
+            "type": "string",
+            "title": "Input Audio",
+            "description": "Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+          },
+          "get_timestamps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Get Timestamps",
+            "description": "whether to return the word timestamps. Check model description if supported.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DetectVoiceActivityRequest",
+        "description": "DetectVoiceActivityRequest\nUsed to check for human speech in a provided audio file\nDepending on model selection, the caller may need to provide additional params."
+      },
+      "DetectVoiceActivityResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "description": "the name of the model",
+            "default": ""
+          },
+          "created": {
+            "type": "integer",
+            "title": "Created"
+          },
+          "speech_activity": {
+            "type": "boolean",
+            "title": "Speech Activity",
+            "description": "whether speech activity was detected",
+            "default": false
+          },
+          "timestamps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamps",
+            "description": "list of the detected timestamps"
+          }
+        },
+        "type": "object",
+        "title": "DetectVoiceActivityResponse",
+        "description": "DetectVoiceActivityResponse\nResult text determined from audio and optional language tag"
       },
       "EmbedSpeakerRequest": {
         "properties": {
