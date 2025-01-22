@@ -135,7 +135,7 @@ model_configs:
     device_config:
       device: "cpu"
 
-  - name: "faster-whisper"
+  - name: "faster-whisper-medium"
     model: "medium"
     model_type: "FasterWhisper"
     max_batch_size: 16
