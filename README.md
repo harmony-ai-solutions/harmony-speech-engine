@@ -91,6 +91,9 @@ This will start a vite server accessible via http://localhost:5173/
 
 ---
 
+## Harmony Speech Engine - Technical Breakdown
+![Harmony Speech Engine Technical overview](docs/images/Harmony-Speech-Engine.Rev1.drawio.png)
+
 ## Introduction
 The goal of this engine is to provide a reliable and easy-to-maintain service which can be used for deploying Open Source
 AI Speech technologies. Each of these Technologies have different setup requirements and pre-conditions, so the goal of

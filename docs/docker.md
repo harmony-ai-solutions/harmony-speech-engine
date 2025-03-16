@@ -7,7 +7,7 @@ Harmony Speech Engine can be easily set up and run using Docker. This allows you
 - **Docker**: Make sure Docker is installed on your system. You can download it from [Docker's official website](https://www.docker.com/get-started).
 - **Docker Compose**: Ensure Docker Compose is installed. It usually comes with Docker Desktop installations.
 
-For GPU support:
+For Nvidia GPU support:
 
 - **NVIDIA GPU Drivers**: Required if you plan to use GPU acceleration.
 - **NVIDIA Container Toolkit**: Install from [NVIDIA Container Toolkit documentation](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
