@@ -63,6 +63,13 @@ _MODEL_CONFIGS = {
     "HarmonySpeechVocoder": {
         "default": "vocoder/config.json"
     },
+    # VoiceFixer
+    "VoiceFixerRestorer": {
+        "default": "native"
+    },
+    "VoiceFixerVocoder": {
+        "default": "native"
+    },
     # Faster-Whisper
     "FasterWhisper": {
         "default": "native"
@@ -100,6 +107,13 @@ _MODEL_WEIGHTS = {
     },
     "HarmonySpeechVocoder": {
         "default": "vocoder/vocoder.pt"
+    },
+    # VoiceFixer
+    "VoiceFixerRestorer": {
+        "default": "vf.ckpt"
+    },
+    "VoiceFixerVocoder": {
+        "default": "model.ckpt-1490000_trimed.pt"
     },
     # Faster-Whisper
     "FasterWhisper": {
@@ -234,8 +248,11 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     model = WhisperModel(model_config.model)
                     return model
 
+            # Handle VoiceFixer models (native / fixed config but not native class)
+            if hf_config == "native" and model_config.model_type in ["VoiceFixerRestorer", "VoiceFixerVocoder"]:
+                model = model_class()
             # Initialize the model using config
-            if hasattr(hf_config, "model"):
+            elif hasattr(hf_config, "model"):
                 # Model class initialization for Harmony Speech Models and OpenVoice
                 if model_config.model_type in [
                     "OpenVoiceV1Synthesizer",

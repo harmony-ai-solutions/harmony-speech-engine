@@ -20,6 +20,9 @@ _MODELS = {
     "HarmonySpeechEncoder": ("harmonyspeech", "SpeakerEncoder"),
     "HarmonySpeechSynthesizer": ("harmonyspeech", "ForwardTacotron"),
     "HarmonySpeechVocoder": ("harmonyspeech", "MelGANGenerator"),
+    # VoiceFixer
+    "VoiceFixerRestorer": ("voicefixer", "VoiceFixerRestorer"),
+    "VoiceFixerVocoder": ("voicefixer", "VoiceFixerVocoder"),
     # Faster-Whisper
     "FasterWhisper": ("faster-wisper", "native")
 }

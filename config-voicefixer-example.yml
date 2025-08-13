@@ -1,0 +1,22 @@
+# Example configuration for VoiceFixer models in Harmony Speech Engine
+# This demonstrates how to configure VoiceFixer models for audio restoration
+
+model_configs:
+  # VoiceFixer Restorer - for audio denoising and enhancement
+  - name: "voicefixer-restorer"
+    model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
+    model_type: "VoiceFixerRestorer"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda"  # or "cpu"
+
+  # VoiceFixer Vocoder - for mel-spectrogram to audio conversion
+  - name: "voicefixer-vocoder"
+    model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
+    model_type: "VoiceFixerVocoder"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda"  # or "cpu"
+

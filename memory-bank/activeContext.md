@@ -29,6 +29,7 @@
 - ✅ OpenVoice V1 (Synthesizer EN/ZH, Tone Converter, Encoder)
 - ✅ OpenVoice V2/MeloTTS (Multilingual synthesis: EN, ZH, ES, FR, JP, KR)
 - ✅ Faster-Whisper (Speech recognition and VAD: tiny, medium, large-v3-turbo)
+- ✅ VoiceFixer (Audio restoration: Restorer, Vocoder)
 
 **Model Integration Patterns:**
 - Standardized model configuration via YAML
@@ -66,9 +67,8 @@
 
 ## Current Work Focus
 
-### Immediate Priorities (Next 2-4 weeks)
-
 **1. Model Integration Completion**
+- [*] VoiceFixer integration for audio restoration
 - [ ] StyleTTS 2 integration for advanced voice cloning
 - [ ] XTTS V2 multilingual support
 - [ ] Vall-E-X zero-shot voice cloning
@@ -86,21 +86,19 @@
 - [ ] Performance benchmarking and optimization
 - [ ] API compatibility testing
 
-### Medium-term Goals (1-3 months)
-
-**1. Advanced Features**
+**4. Advanced Features**
 - [ ] TTS streaming capabilities for real-time applications
+- [ ] Input filters / pre-processing pipelines
 - [ ] Voice conversion post-processing pipelines
-- [ ] Custom model plugin architecture
 - [ ] Advanced audio format support
 
-**2. Production Readiness**
+**5. Production Readiness**
 - [ ] Comprehensive monitoring and logging
 - [ ] Health check endpoints and diagnostics
 - [ ] Horizontal scaling capabilities
 - [ ] Production deployment guides
 
-**3. Community and Ecosystem**
+**6. Community and Ecosystem**
 - [ ] Community model contribution guidelines
 - [ ] Third-party integration examples
 - [ ] Performance optimization documentation
