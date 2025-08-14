@@ -48,7 +48,7 @@ def save_wave(wav: np.ndarray, fname: str, sample_rate: int = 44100):
 def read_wave(fname: str, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
     """Read waveform from file using librosa."""
     wav, sr = librosa.load(fname, sr=sample_rate)
-    return wav, sr
+    return wav, int(sr)
 
 
 class FDomainHelper(nn.Module):
@@ -75,29 +75,66 @@ class FDomainHelper(nn.Module):
         else:
             raise NotImplementedError(f"Window {window} not implemented")
     
-    def wav_to_spectrogram_phase(self, wav: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Convert waveform to spectrogram with phase information."""
-        # STFT
+    def spectrogram_phase(self, input: torch.Tensor, eps: float = 1e-8) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Compute spectrogram with phase information for single channel."""
+        # STFT - input should be [batch, samples]
+        # Ensure we get the right number of frequency bins (n_fft//2 + 1 = 1025 for n_fft=2048)
         stft = torch.stft(
-            wav.squeeze(1),
-            n_fft=self.window_size,
-            hop_length=self.hop_size,
-            win_length=self.window_size,
+            input,
+            n_fft=self.window_size,  # 2048
+            hop_length=self.hop_size,  # 441
+            win_length=self.window_size,  # 2048
             window=self.window_tensor,
             center=self.center,
             pad_mode=self.pad_mode,
             return_complex=True
         )
         
+        # stft shape should be [batch, freq_bins, time_steps] where freq_bins = n_fft//2 + 1 = 1025
         # Get magnitude and phase
-        magnitude = torch.abs(stft)
-        phase = torch.angle(stft)
+        real = stft.real
+        imag = stft.imag
+        mag = torch.clamp(real**2 + imag**2, eps, np.inf) ** 0.5
+        cos = real / (mag + eps)
+        sin = imag / (mag + eps)
         
-        # Add channel dimension and transpose to match expected format
-        magnitude = magnitude.unsqueeze(1).transpose(-1, -2)
-        phase = phase.unsqueeze(1).transpose(-1, -2)
+        return mag, cos, sin
+    
+    def wav_to_spectrogram_phase(self, input: torch.Tensor, eps: float = 1e-8) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Waveform to spectrogram with phase information.
         
-        return magnitude, phase, stft
+        Args:
+            input: (batch_size, channels_num, segment_samples)
+        
+        Outputs:
+            sps: (batch_size, channels_num, time_steps, freq_bins)
+            coss: (batch_size, channels_num, time_steps, freq_bins) 
+            sins: (batch_size, channels_num, time_steps, freq_bins)
+        """
+        sp_list = []
+        cos_list = []
+        sin_list = []
+        channels_num = input.shape[1]
+        
+        for channel in range(channels_num):
+            mag, cos, sin = self.spectrogram_phase(input[:, channel, :], eps=eps)
+            # Add channel dimension: [batch, freq, time] -> [batch, 1, freq, time]
+            sp_list.append(mag.unsqueeze(1))
+            cos_list.append(cos.unsqueeze(1))
+            sin_list.append(sin.unsqueeze(1))
+
+        # Concatenate along channel dimension: [batch, channels, freq, time]
+        sps = torch.cat(sp_list, dim=1)
+        coss = torch.cat(cos_list, dim=1)
+        sins = torch.cat(sin_list, dim=1)
+        
+        # Transpose to get [batch, channels, time, freq] format
+        sps = sps.transpose(-1, -2)
+        coss = coss.transpose(-1, -2)
+        sins = sins.transpose(-1, -2)
+        
+        return sps, coss, sins
 
 
 class MelScale(nn.Module):
@@ -118,18 +155,31 @@ class MelScale(nn.Module):
         self.register_buffer('mel_basis', torch.from_numpy(mel_basis).float())
     
     def forward(self, spectrogram: torch.Tensor) -> torch.Tensor:
-        """Convert spectrogram to mel-scale."""
-        # spectrogram shape: [batch, channels, time, freq]
-        batch_size, channels, time_steps, freq_bins = spectrogram.shape
+        """Convert spectrogram to mel-scale.
         
-        # Reshape for matrix multiplication
-        spec_flat = spectrogram.view(-1, freq_bins)
+        Args:
+            spectrogram: Input spectrogram [batch, channels, freq, time] (after permute in VoiceFixer)
+        Returns:
+            mel: Mel spectrogram [batch, channels, freq, time] -> [batch, channels, n_mels, time]
+        """
+        # spectrogram shape: [batch, channels, freq, time] (after permute operation)
+        batch_size, channels, freq_bins, time_steps = spectrogram.shape
         
-        # Apply mel transformation
+        # Ensure we have the expected number of frequency bins
+        if freq_bins != self.n_stft:
+            raise ValueError(f"Expected {self.n_stft} frequency bins, got {freq_bins}")
+        
+        # Reshape for matrix multiplication: [batch*channels*time, freq]
+        # Need to transpose to get [batch, channels, time, freq] first
+        spec_transposed = spectrogram.transpose(-1, -2)  # [batch, channels, time, freq]
+        spec_flat = spec_transposed.contiguous().view(-1, freq_bins)
+        
+        # Apply mel transformation: [batch*channels*time, n_mels]
         mel = torch.matmul(spec_flat, self.mel_basis.T)
         
-        # Reshape back
+        # Reshape back to [batch, channels, time, n_mels] then transpose to [batch, channels, n_mels, time]
         mel = mel.view(batch_size, channels, time_steps, self.n_mels)
+        mel = mel.transpose(-1, -2)  # [batch, channels, n_mels, time]
         
         return mel
 

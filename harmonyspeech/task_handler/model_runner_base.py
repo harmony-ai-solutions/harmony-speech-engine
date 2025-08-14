@@ -75,6 +75,10 @@ class ModelRunnerBase:
             outputs = self._execute_melotts_synthesizer(inputs, requests_to_batch)
         elif model_type == "FasterWhisper":
             outputs = self._execute_faster_whisper(inputs, requests_to_batch)
+        elif model_type == "VoiceFixerRestorer":
+            outputs = self._execute_voicefixer_restorer(inputs, requests_to_batch)
+        elif model_type == "VoiceFixerVocoder":
+            outputs = self._execute_voicefixer_vocoder(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
@@ -431,5 +435,72 @@ class ModelRunnerBase:
             initial_request = requests_to_batch[i]
             inference_result = synthesize_text(x)
             result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_voicefixer_restorer(self, inputs, requests_to_batch):
+        """Execute VoiceFixerRestorer model to enhance audio quality."""
+
+        def restore_audio(audio_tensor):
+            # Ensure tensor has batch dimension: [channels, samples] -> [batch, channels, samples]
+            if audio_tensor.dim() == 2:
+                audio_tensor = audio_tensor.unsqueeze(0)
+            
+            # Move tensor to device
+            audio_tensor = audio_tensor.to(self.device)
+
+            # Run the VoiceFixerRestorer model
+            with torch.no_grad():
+                enhanced_mel = self.model(audio_tensor)
+
+            # Convert enhanced mel spectrogram to JSON format for forwarding
+            # enhanced_mel shape: [batch, channels, time, n_mels]
+            enhanced_mel_np = enhanced_mel.detach().cpu().numpy()
+            mel_json = json.dumps(enhanced_mel_np.tolist())
+
+            # Encode as base64 for transport
+            encoded_mel = base64.b64encode(mel_json.encode('utf-8')).decode('utf-8')
+            return encoded_mel
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = restore_audio(x)
+            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_voicefixer_vocoder(self, inputs, requests_to_batch):
+        """Execute VoiceFixerVocoder model to convert mel spectrogram to audio."""
+
+        def vocode_mel(mel_tensor):
+            # Move tensor to device
+            mel_tensor = mel_tensor.to(self.device)
+
+            # Run the VoiceFixerVocoder model
+            with torch.no_grad():
+                audio_output = self.model(mel_tensor)
+
+            # Convert to numpy and normalize
+            audio_np = audio_output.detach().cpu().numpy()
+            if audio_np.ndim > 1:
+                audio_np = audio_np.squeeze()
+
+            # Normalize audio
+            if np.abs(audio_np).max() > 0:
+                audio_np = audio_np / np.abs(audio_np).max() * 0.97
+
+            # Encode as WAV and return base64
+            with io.BytesIO() as handle:
+                sf.write(handle, audio_np, samplerate=44100, format='wav')
+                wav_string = handle.getvalue()
+            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            return encoded_wav
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = vocode_mel(x)
+            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
             outputs.append(result)
         return outputs

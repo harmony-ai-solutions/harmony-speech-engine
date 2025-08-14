@@ -15,131 +15,7 @@ from .utils import (
     check_cuda_availability, try_tensor_cuda, tensor2numpy, 
     from_log, to_log, FDomainHelper, MelScale, EPS
 )
-
-
-class BN_GRU(nn.Module):
-    """Batch normalized GRU layer."""
-    
-    def __init__(self, input_dim: int, hidden_dim: int, layer: int = 1, 
-                 bidirectional: bool = False, batchnorm: bool = True, dropout: float = 0.0):
-        super().__init__()
-        self.batchnorm = batchnorm
-        if batchnorm:
-            self.bn = nn.BatchNorm2d(1)
-        self.gru = nn.GRU(
-            input_size=input_dim,
-            hidden_size=hidden_dim,
-            num_layers=layer,
-            bidirectional=bidirectional,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.init_weights()
-
-    def init_weights(self):
-        for m in self.modules():
-            if type(m) in [nn.GRU, nn.LSTM, nn.RNN]:
-                for name, param in m.named_parameters():
-                    if "weight_ih" in name:
-                        torch.nn.init.xavier_uniform_(param.data)
-                    elif "weight_hh" in name:
-                        torch.nn.init.orthogonal_(param.data)
-                    elif "bias" in name:
-                        param.data.fill_(0)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        # (batch, 1, seq, feature)
-        if self.batchnorm:
-            inputs = self.bn(inputs)
-        out, _ = self.gru(inputs.squeeze(1))
-        return out.unsqueeze(1)
-
-
-class UNetResComplex_100Mb(nn.Module):
-    """UNet architecture for complex spectrogram processing."""
-    
-    def __init__(self, channels: int = 2):
-        super().__init__()
-        self.channels = channels
-        
-        # Encoder
-        self.enc1 = nn.Sequential(
-            nn.Conv2d(channels, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
-        )
-        self.enc2 = nn.Sequential(
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True)
-        )
-        self.enc3 = nn.Sequential(
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
-        )
-        
-        # Bottleneck
-        self.bottleneck = nn.Sequential(
-            nn.Conv2d(128, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True)
-        )
-        
-        # Decoder
-        self.dec3 = nn.Sequential(
-            nn.ConvTranspose2d(256 + 128, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
-        )
-        self.dec2 = nn.Sequential(
-            nn.ConvTranspose2d(128 + 64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True)
-        )
-        self.dec1 = nn.Sequential(
-            nn.ConvTranspose2d(64 + 32, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
-        )
-        
-        # Output layer
-        self.output = nn.Conv2d(32, channels, 3, padding=1)
-        
-        # Pooling
-        self.pool = nn.MaxPool2d(2)
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-    
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        # Encoder
-        e1 = self.enc1(x)
-        e1_pool = self.pool(e1)
-        
-        e2 = self.enc2(e1_pool)
-        e2_pool = self.pool(e2)
-        
-        e3 = self.enc3(e2_pool)
-        e3_pool = self.pool(e3)
-        
-        # Bottleneck
-        b = self.bottleneck(e3_pool)
-        
-        # Decoder with skip connections
-        d3 = self.upsample(b)
-        d3 = torch.cat([d3, e3], dim=1)
-        d3 = self.dec3(d3)
-        
-        d2 = self.upsample(d3)
-        d2 = torch.cat([d2, e2], dim=1)
-        d2 = self.dec2(d2)
-        
-        d1 = self.upsample(d2)
-        d1 = torch.cat([d1, e1], dim=1)
-        d1 = self.dec1(d1)
-        
-        output = self.output(d1)
-        
-        return {"mel": output}
+from .modules import UNetResComplex_100Mb, BN_GRU
 
 
 class VoiceFixerGenerator(nn.Module):
@@ -181,7 +57,7 @@ class VoiceFixerGenerator(nn.Module):
             nn.Sigmoid(),
         )
         
-        # UNet for enhancement
+        # UNet for enhancement - use the proper original architecture
         self.unet = UNetResComplex_100Mb(channels=channels)
 
     def forward(self, sp: torch.Tensor, mel_orig: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -327,9 +203,24 @@ class VoiceFixerRestorer(nn.Module):
         self.register_buffer('mel_weight_tensor', self.mel_weight_44k_128[None, None, None, ...])
     
     def _pre(self, input_wav: torch.Tensor) -> tuple:
-        """Preprocessing: convert audio to mel spectrogram."""
+        """
+        Preprocessing: convert audio to mel spectrogram.
+        Uses the original VoiceFixer preprocessing logic with strategic permute operations.
+        """
+        # Get spectrogram - this returns [batch, channels, time, freq] format from the corrected FDomainHelper
         sp, _, _ = self.f_helper.wav_to_spectrogram_phase(input_wav)
-        mel_orig = self.mel(sp.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)
+        
+        # Apply strategic permute operations as in original VoiceFixer
+        # Original: mel_orig = self.mel(sp.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)
+        # sp is [batch, channels, time, freq] -> permute to [batch, channels, freq, time] for mel conversion
+        # The MelScale now handles the permute internally and returns [batch, channels, n_mels, time]
+        mel_orig = self.mel(sp.permute(0, 1, 3, 2))
+        
+        # Convert sp to the format expected by UNet: [batch, channels, time, freq] -> [batch, channels, freq, time]
+        sp = sp.permute(0, 1, 3, 2)  # [batch, channels, freq, time]
+        
+        # mel_orig is already [batch, channels, n_mels, time] from MelScale
+        
         return sp, mel_orig
     
     def _trim_center(self, est: torch.Tensor, ref: torch.Tensor) -> tuple:
@@ -355,7 +246,7 @@ class VoiceFixerRestorer(nn.Module):
         Args:
             audio_tensor: Input audio tensor [batch, channels, samples]
         Returns:
-            Enhanced audio tensor [batch, channels, samples]
+            Enhanced mel spectrogram tensor [batch, channels, freq, time]
         """
         # Process audio in segments to handle memory constraints
         seg_length = self.sample_rate * 30  # 30 second segments
@@ -364,19 +255,19 @@ class VoiceFixerRestorer(nn.Module):
         for i in range(0, audio_tensor.shape[-1], seg_length):
             segment = audio_tensor[..., i:i + seg_length]
             
-            # Preprocessing
+            # Preprocessing - both sp and mel_noisy are [batch, channels, freq, time]
             sp, mel_noisy = self._pre(segment)
             
             # Generate enhanced mel spectrogram
             output = self.generator(sp, mel_noisy)
             denoised_mel = from_log(output["mel"])
             
-            # For now, return the mel spectrogram (vocoder integration comes later)
+            # Return the enhanced mel spectrogram
             results.append(denoised_mel)
         
-        # Concatenate results
+        # Concatenate results along time dimension (dimension 3 for [batch, channels, freq, time])
         if len(results) > 1:
-            output_mel = torch.cat(results, dim=-1)
+            output_mel = torch.cat(results, dim=3)  # Concatenate along time dimension
         else:
             output_mel = results[0]
         
@@ -488,13 +379,13 @@ class VoiceFixerVocoder(nn.Module):
         Convert mel-spectrogram to audio waveform.
         
         Args:
-            mel_spectrogram: Mel-spectrogram tensor [batch, 1, time, mel_bins] or [batch, mel_bins, time]
+            mel_spectrogram: Mel-spectrogram tensor [batch, 1, freq, time] or [batch, mel_bins, time]
         Returns:
             Audio waveform tensor [batch, 1, samples]
         """
         # Handle different input formats
         if mel_spectrogram.dim() == 4:
-            # [batch, 1, time, mel_bins] -> [batch, mel_bins, time]
+            # [batch, 1, freq, time] -> [batch, mel_bins, time]
             mel = mel_spectrogram.squeeze(1).transpose(-1, -2)
         elif mel_spectrogram.dim() == 3:
             # [batch, mel_bins, time] - already correct format

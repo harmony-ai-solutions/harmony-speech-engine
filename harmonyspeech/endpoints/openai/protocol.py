@@ -2,7 +2,7 @@
 # Inspiration taken from PygmalionAI / Aphrodite Engine & OpenAI API definitions
 
 import time
-from typing import Dict, Literal, Optional, Union, List
+from typing import Dict, Literal, Optional, Union, List, Self
 
 from pydantic import (AliasChoices, BaseModel, Field, conint, model_validator,
                       root_validator)
@@ -67,13 +67,29 @@ class BaseRequest(BaseModel):
     model: str = Field(default="", description="the name of the model")
 
 
-class VoiceConversionRequest(BaseRequest):
+class AudioConversionRequest(BaseRequest):
+    """
+    AudioConversionRequest
+    Used to convert the style or content of an audio in a specific way.
+    Depending on model selection, the caller may need to provide additional params.
+    """
+    source_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    output_options: Optional[AudioOutputOptions] = Field(
+        default=None,
+        description="Options for returning the generated audio, see documentation for possible values"
+    )
+    pre_processing_filters: Optional[List[Self]] = Field(
+        default_factory=list,
+        description="List of Preprocessing filters to apply to the generated audio."
+    )
+
+
+class VoiceConversionRequest(AudioConversionRequest):
     """
     VoiceConversionRequest
     Used to convert the tone or nature of a voice in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
-    source_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
     target_audio: Optional[str] = Field(
         default=None,
         description="Binary audio data of the reference speaker for converting the source, encoded in base64"
@@ -86,10 +102,6 @@ class VoiceConversionRequest(BaseRequest):
     generation_options: Optional[GenerationOptions] = Field(
         default=None,
         description="Options for generating a speech request, see documentation for possible values"
-    )
-    output_options: Optional[AudioOutputOptions] = Field(
-        default=None,
-        description="Options for returning the generated audio, see documentation for possible values"
     )
 
 
@@ -136,7 +148,11 @@ class TextToSpeechRequest(BaseRequest):
         default=None,
         description="Options for returning the generated audio, see documentation for possible values"
     )
-    post_generation_filters: Optional[List[VoiceConversionRequest]] = Field(
+    pre_processing_filters: Optional[List[AudioConversionRequest]] = Field(
+        default_factory=list,
+        description="List of Preprocessing filters to apply to the generated audio."
+    )
+    post_generation_filters: Optional[List[AudioConversionRequest]] = Field(
         default_factory=list,
         description="List of Post-Generation filters to apply to the generated audio."
     )
@@ -170,6 +186,14 @@ class VoiceConversionResponse(AudioDataResponse):
     Extends AudioDataResponse with a request specific ID
     """
     id: str = Field(default_factory=lambda: f"vc-{random_uuid()}")
+
+
+class AudioConversionResponse(AudioDataResponse):
+    """
+    AudioConversionResponse
+    Extends AudioDataResponse with a request specific ID
+    """
+    id: str = Field(default_factory=lambda: f"ac-{random_uuid()}")
 
 
 class SpeechTranscribeRequest(BaseRequest):
@@ -242,7 +266,7 @@ class EmbedSpeakerRequest(BaseRequest):
 
 class EmbedSpeakerResponse(BaseResponse):
     """
-    EmbedSpeakerResult
+    EmbedSpeakerResponse
     Result Speaker Embedding
     """
     id: str = Field(default_factory=lambda: f"embed-{random_uuid()}")
@@ -280,10 +304,10 @@ class SynthesizeAudioRequest(BaseRequest):
 
 class SynthesizeAudioResponse(AudioDataResponse):
     """
-    EmbedSpeakerResult
-    Result Audio file after vocoding step
+    SynthesizeAudioResponse
+    Result Audio file after synthesis step
     """
-    id: str = Field(default_factory=lambda: f"vocode-{random_uuid()}")
+    id: str = Field(default_factory=lambda: f"synthesis-{random_uuid()}")
 
 
 class VocodeAudioRequest(BaseRequest):
@@ -296,7 +320,7 @@ class VocodeAudioRequest(BaseRequest):
 
 class VocodeAudioResponse(AudioDataResponse):
     """
-    EmbedSpeakerResult
+    VocodeAudioResponse
     Result Audio file after vocoding step
     """
     id: str = Field(default_factory=lambda: f"vocode-{random_uuid()}")
