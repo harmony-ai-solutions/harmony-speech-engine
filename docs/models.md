@@ -30,6 +30,8 @@ SYSTRAN's Implementation.
 Supports Local model path or Huggingface-Resolving by Model Name as described in the github repo below. Just put the
 name of the desired model into the `model` field of the configuration.
 
+**Note on VAD**: While Faster Whisper can perform Voice Activity Detection, it is significantly less suited for this task compared to specialized VAD models like Silero VAD. Faster Whisper often exhibits worse performance and a higher rate of false detections for VAD purposes due to its primary focus on transcription. For dedicated VAD tasks, using Silero VAD is highly recommended.
+
 Implementation Type: Native / Third-Party
 
 Links: 
@@ -46,6 +48,34 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda:0"
+```
+
+---
+
+### Voice Activity Detection (VAD)
+
+#### Silero VAD
+Silero VAD is a state-of-the-art (SOTA) voice activity detection model, optimized for detecting speech in audio samples. It is available in ONNX format for high-performance inference.
+
+Silero VAD is integrated as a native model, allowing for efficient CPU-based processing. It supports dynamic parameters via the API for fine-tuning detection sensitivity.
+
+Implementation Type: Native / Third-Party
+
+Links:
+- [Github: PyTorch Source Code](https://github.com/snakers4/silero-vad)
+- [Huggingface: ONNX Model Sources](https://huggingface.co/onnx-community/silero-vad)
+
+##### YAML Config Example
+```
+model_configs:
+  - name: "silero-vad"
+    model: "silero-vad" # Model name (not used for native models)
+    model_type: "SileroVAD"
+    load_format: "onnx" # Use ONNX version for better performance
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu" # Silero VAD is CPU-optimized
 ```
 
 ---

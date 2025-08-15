@@ -13,7 +13,8 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 # Add new model classes which allow handling VAD Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
 _VAD_MODEL_TYPES = [
-    "FasterWhisper"
+    "FasterWhisper",
+    "SileroVAD"
 ]
 _VAD_MODEL_GROUPS = {
 }
@@ -100,5 +101,3 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
         )
 
         return response
-
-

@@ -10,6 +10,7 @@ import soundfile as sf
 import torch
 
 from faster_whisper import BatchedInferencePipeline
+from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import *
@@ -79,6 +80,8 @@ class ModelRunnerBase:
             outputs = self._execute_voicefixer_restorer(inputs, requests_to_batch)
         elif model_type == "VoiceFixerVocoder":
             outputs = self._execute_voicefixer_vocoder(inputs, requests_to_batch)
+        elif model_type == "SileroVAD":
+            outputs = self._execute_silero_vad(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
@@ -501,5 +504,50 @@ class ModelRunnerBase:
             initial_request = requests_to_batch[i]
             inference_result = vocode_mel(x)
             result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_silero_vad(self, inputs, requests_to_batch):
+        """Execute Silero VAD model to detect voice activity."""
+        def run_vad(input_params):
+            audio_tensor, vad_params = input_params
+            
+            # Extract parameters from the input object
+            threshold = vad_params['threshold']
+            min_speech_duration_ms = vad_params['min_speech_duration_ms']
+            min_silence_duration_ms = vad_params['min_silence_duration_ms']
+            speech_pad_ms = vad_params['speech_pad_ms']
+            return_seconds = vad_params['return_seconds']
+            get_timestamps = vad_params['get_timestamps']
+            
+            # Run Silero VAD with dynamic parameters
+            timestamps = get_speech_timestamps(
+                audio_tensor, 
+                self.model,
+                threshold=threshold,
+                min_speech_duration_ms=min_speech_duration_ms,
+                min_silence_duration_ms=min_silence_duration_ms,
+                speech_pad_ms=speech_pad_ms,
+                return_seconds=return_seconds
+            )
+            
+            # Build response based on whether timestamps are requested
+            if get_timestamps:
+                response = {
+                    "speech_activity": len(timestamps) > 0,
+                    "segments": timestamps
+                }
+            else:
+                response = {
+                    "speech_activity": len(timestamps) > 0
+                }
+            
+            return json.dumps(response)
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = run_vad(x)
+            result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
             outputs.append(result)
         return outputs

@@ -85,7 +85,7 @@ class ModelConfig:
     def _verify_load_format(self) -> None:
         load_format = self.load_format.lower()
         supported_load_format = [
-            "auto", "pt", "pth", "safetensors", "npcache", "dummy"
+            "auto", "pt", "pth", "safetensors", "npcache", "dummy", "onnx"
         ]
         rocm_not_supported_load_format = []
         if load_format not in supported_load_format:

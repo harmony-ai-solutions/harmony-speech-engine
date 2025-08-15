@@ -337,6 +337,11 @@ class DetectVoiceActivityRequestInput(RequestInput):
         model: str,
         input_audio: Optional[str] = None,
         get_timestamps: Optional[bool] = False,
+        threshold: Optional[float] = 0.5,
+        min_speech_duration_ms: Optional[int] = 250,
+        min_silence_duration_ms: Optional[int] = 100,
+        speech_pad_ms: Optional[int] = 30,
+        return_seconds: Optional[bool] = False,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -347,6 +352,11 @@ class DetectVoiceActivityRequestInput(RequestInput):
         )
         self.input_audio = input_audio
         self.get_timestamps = get_timestamps
+        self.threshold = threshold
+        self.min_speech_duration_ms = min_speech_duration_ms
+        self.min_silence_duration_ms = min_silence_duration_ms
+        self.speech_pad_ms = speech_pad_ms
+        self.return_seconds = return_seconds
 
     @classmethod
     def from_openai(cls, request_id: str, request: "DetectVoiceActivityRequest"):
@@ -356,4 +366,9 @@ class DetectVoiceActivityRequestInput(RequestInput):
             model=getattr(request, 'model', ''),
             input_audio=getattr(request, 'input_audio', None),
             get_timestamps=getattr(request, 'get_timestamps', False),
+            threshold=getattr(request, 'threshold', 0.5),
+            min_speech_duration_ms=getattr(request, 'min_speech_duration_ms', 250),
+            min_silence_duration_ms=getattr(request, 'min_silence_duration_ms', 100),
+            speech_pad_ms=getattr(request, 'speech_pad_ms', 30),
+            return_seconds=getattr(request, 'return_seconds', False),
         )

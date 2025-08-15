@@ -141,6 +141,16 @@ model_configs:
     device_config:
       device: "cuda"
 
+  # Silero VAD - SOTA voice activity detection model
+  - name: "silero-vad"
+    model: "silero-vad"
+    model_type: "SileroVAD"
+    load_format: "onnx"  # Use ONNX version for better performance
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"  # Silero VAD is CPU-only
+
   # VoiceFixer Restorer - for audio denoising and enhancement
   - name: "voicefixer-restorer"
     model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
