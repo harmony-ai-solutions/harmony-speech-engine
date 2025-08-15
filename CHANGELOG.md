@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.0-rc9
+## v0.1.1-rc1
 
 ### New Features
 
@@ -26,7 +26,7 @@
 
 ---
 
-## v0.1.0-rc8 and Earlier
+## v0.1.0 and Earlier
 
 ### Foundation
 
