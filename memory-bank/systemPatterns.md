@@ -157,6 +157,8 @@ model_configs:
 - `OpenVoiceV1Synthesizer`: OpenVoice V1 TTS
 - `OpenVoiceV1ToneConverter`: OpenVoice V1 voice conversion
 - `MeloTTSSynthesizer`: MeloTTS multilingual synthesis
+- `VoiceFixerRestorer`: Audio restoration and denoising
+- `VoiceFixerVocoder`: Mel-spectrogram to audio conversion
 - `FasterWhisper`: Speech recognition and VAD
 
 ### 3. Model Loading Pattern

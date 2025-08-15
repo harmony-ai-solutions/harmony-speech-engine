@@ -128,6 +128,20 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                 raise ValueError(f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
                                  f"SynthesisRequestInput")
         return prepare_melotts_synthesizer_inputs(model_config, inputs)
+    elif model_config.model_type == "VoiceFixerRestorer":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, AudioConversionRequestInput):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(f"request ID {r.request_id} is not of type AudioConversionRequestInput")
+        return prepare_voicefixer_restorer_inputs(inputs)
+    elif model_config.model_type == "VoiceFixerVocoder":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, AudioConversionRequestInput):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(f"request ID {r.request_id} is not of type AudioConversionRequestInput")
+        return prepare_voicefixer_vocoder_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -144,6 +158,65 @@ def prepare_harmonyspeech_encoder_inputs(requests_to_batch: List[Union[
         input_frames = get_input_frames(preprocessed_audio)
         # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
         return input_frames
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_voicefixer_restorer_inputs(requests_to_batch: List[AudioConversionRequestInput]):
+    """
+    Prepare inputs for VoiceFixerRestorer model.
+    Expects audio data in base64 format and converts to tensor format.
+    """
+    def prepare(request):
+        # Make sure Audio is decoded from Base64
+        input_audio = base64.b64decode(request.source_audio)
+        input_audio_ref = io.BytesIO(input_audio)
+        
+        # Load audio using librosa at VoiceFixer's expected sample rate (44100 Hz)
+        audio_data, _ = librosa.load(input_audio_ref, sr=44100)
+        
+        # Convert to tensor format expected by VoiceFixerRestorer
+        # The model expects [batch, channels, samples] format
+        # Add channel dimension if mono audio, then add batch dimension
+        if audio_data.ndim == 1:
+            # [samples] -> [channels, samples] -> [batch, channels, samples]
+            audio_tensor = torch.FloatTensor(audio_data).unsqueeze(0).unsqueeze(0)
+        else:
+            # [channels, samples] -> [batch, channels, samples]
+            audio_tensor = torch.FloatTensor(audio_data).unsqueeze(0)
+        
+        return audio_tensor
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_voicefixer_vocoder_inputs(requests_to_batch: List[AudioConversionRequestInput]):
+    """
+    Prepare inputs for VoiceFixerVocoder model.
+    Expects mel spectrogram data in base64 format and converts to tensor format.
+    """
+    def prepare(request):
+        # Decode mel spectrogram from base64
+        mel_data = base64.b64decode(request.input_mel_spectrogram)
+        mel_json = json.loads(mel_data.decode('utf-8'))
+        
+        # Convert to numpy array and then to tensor
+        mel_array = np.array(mel_json, dtype=np.float32)
+        
+        # Convert to tensor format expected by VoiceFixerVocoder
+        # The model expects [batch, mel_bins, time] format
+        if mel_array.ndim == 2:
+            mel_tensor = torch.FloatTensor(mel_array).unsqueeze(0)  # Add batch dimension
+        else:
+            mel_tensor = torch.FloatTensor(mel_array)
+        
+        return mel_tensor
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

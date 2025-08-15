@@ -33,7 +33,44 @@ class RequestInput:
         self.request_id = request_id
         self.requested_model = requested_model
         self.model = model
-        self.metrics: metrics
+        self.metrics = metrics
+
+
+class AudioConversionRequestInput(RequestInput):
+    """
+    The input data for an Audio Conversion Request
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        requested_model: str,
+        model: str,
+        source_audio: str,
+        input_mel_spectrogram: Optional[str] = None,
+        output_options: Optional[TextToSpeechAudioOutputOptions] = None,
+        metrics: Optional[RequestMetrics] = None,
+    ):
+        super().__init__(
+            request_id=request_id,
+            requested_model=requested_model,
+            model=model,
+            metrics=metrics,
+        )
+        self.source_audio = source_audio
+        self.input_mel_spectrogram = input_mel_spectrogram
+        self.output_options = output_options
+
+    @classmethod
+    def from_openai(cls, request_id: str, request: "AudioConversionRequest"):
+        return cls(
+            request_id=request_id,
+            requested_model=getattr(request, 'model', ''),
+            model=getattr(request, 'model', ''),
+            source_audio=getattr(request, 'source_audio', ''),
+            input_mel_spectrogram=getattr(request, 'input_mel_spectrogram', None),
+            output_options=getattr(request, 'output_options', None),
+        )
 
 
 class VoiceConversionRequestInput(RequestInput):
@@ -71,7 +108,7 @@ class VoiceConversionRequestInput(RequestInput):
             request_id=request_id,
             requested_model=getattr(request, 'model', ''),
             model=getattr(request, 'model', ''),
-            source_audio=getattr(request, 'source_audio', None),
+            source_audio=getattr(request, 'source_audio', ''),
             target_audio=getattr(request, 'target_audio', None),
             target_embedding=getattr(request, 'target_embedding', None),
             generation_options=getattr(request, 'generation_options', None),
@@ -99,7 +136,7 @@ class TextToSpeechRequestInput(RequestInput):
         input_embedding: Optional[str] = None,
         generation_options: Optional[TextToSpeechGenerationOptions] = None,
         output_options: Optional[TextToSpeechAudioOutputOptions] = None,
-        post_generation_filters: Optional[List[Union[VoiceConversionRequestInput]]] = None,
+        post_generation_filters: Optional[List[AudioConversionRequestInput]] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -187,11 +224,11 @@ class SynthesisRequestInput(RequestInput):
         request_id: str,
         requested_model: str,
         model: str,
-        input_text: str = "",
+        input_text: str = '',
         language_id: Optional[str] = None,
         voice_id: Optional[str] = None,
-        input_embedding: str = None,
-        generation_options: TextToSpeechGenerationOptions = None,
+        input_embedding: str = '',
+        generation_options: Optional[TextToSpeechGenerationOptions] = None,
         metrics: Optional[RequestMetrics] = None,
     ):
         super().__init__(
@@ -215,7 +252,7 @@ class SynthesisRequestInput(RequestInput):
             input_text=getattr(request, 'input', ''),
             language_id=getattr(request, 'language', None),
             voice_id=getattr(request, 'voice', None),
-            input_embedding=getattr(request, 'input_embedding', None),
+            input_embedding=getattr(request, 'input_embedding', ''),
             generation_options=getattr(request, 'generation_options', None),
         )
 

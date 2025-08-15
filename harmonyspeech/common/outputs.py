@@ -148,6 +148,36 @@ class VocodeRequestOutput(RequestOutput):
                 f"data=bytes({len(self.output)})")
 
 
+class AudioConversionRequestOutput(RequestOutput):
+    """
+    The output Data of an Audio Conversion Request.
+
+    Args:
+        request_id: The unique ID of the request.
+        output: The generated output data, encoded in base64.
+        finish_reason: Reason why this request finished, if set.
+        metrics: Metrics associated with the request.
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        output: str,
+        finish_reason: Optional[str] = None,
+        metrics: Optional[RequestMetrics] = None,
+    ) -> None:
+        super().__init__(
+            request_id=request_id,
+            finish_reason=finish_reason,
+            metrics=metrics,
+        )
+        self.output = output
+
+    def __repr__(self) -> str:
+        return (f"AudioConversionRequestOutput(request_id={self.request_id}, "
+                f"data=bytes({len(self.output)})")
+
+
 class VoiceConversionRequestOutput(RequestOutput):
     """
     The output Data of a Voice Conversion Request.

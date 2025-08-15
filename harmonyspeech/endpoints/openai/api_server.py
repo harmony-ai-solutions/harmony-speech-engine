@@ -19,6 +19,7 @@ from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
 from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
@@ -44,6 +45,7 @@ openai_serving_stt: OpenAIServingSpeechToText = None
 openai_serving_vc: OpenAIServingVoiceConversion = None
 openai_serving_embedding: OpenAIServingVoiceEmbedding = None
 openai_serving_vad: OpenAIServingVoiceActivityDetection = None
+openai_serving_ac: OpenAIServingAudioConversion = None
 
 router = APIRouter()
 
@@ -241,6 +243,29 @@ async def show_available_vad_models(x_api_key: Optional[str] = Header(None)):
     return JSONResponse(content=models.model_dump())
 
 
+@router.post("/v1/audio/convert", response_model=AudioConversionResponse)
+async def convert_audio(
+    request: AudioConversionRequest,
+    raw_request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """Create a vad from audio."""
+    generator = await openai_serving_ac.convert_audio(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    # if request.output_options and request.output_options.stream:
+    #     return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.get("/v1/audio/convert/models", response_model=ModelList)
+async def show_available_audio_conversion_models(x_api_key: Optional[str] = Header(None)):
+    """Show available vad models."""
+    models = await openai_serving_ac.show_available_models()
+    return JSONResponse(content=models.model_dump())
+
+
 # Register event with Rate limiting backend
 # Use separate thread to not interfere with request processing
 def register_event(api_key, event_name, client_ip):
@@ -359,6 +384,7 @@ def run_server(args):
     global openai_serving_stt
     global openai_serving_vc
     global openai_serving_vad
+    global openai_serving_ac
     # TODO: Add other Endpoint serving classes here
 
     if args.config_file_path is not None:
@@ -390,6 +416,10 @@ def run_server(args):
     openai_serving_vad = OpenAIServingVoiceActivityDetection(
         engine,
         OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+    )
+    openai_serving_ac = OpenAIServingAudioConversion(
+        engine,
+        OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
 

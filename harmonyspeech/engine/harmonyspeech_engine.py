@@ -277,6 +277,26 @@ class HarmonySpeechEngine:
                     request.model = cfg.name
                     break
 
+    def reroute_request_voicefixer(self, request: RequestInput):
+        """
+        VoiceFixer uses a two-step process for audio restoration:
+        1. VoiceFixerRestorer: Audio → Enhanced Mel Spectrogram
+        2. VoiceFixerVocoder: Enhanced Mel Spectrogram → Restored Audio
+        """
+        if isinstance(request, AudioConversionRequestInput):
+            if request.input_mel_spectrogram is None:
+                # Step 1: Route to Restorer (Audio → Mel)
+                for cfg in self.model_configs:
+                    if cfg.model_type == "VoiceFixerRestorer":
+                        request.model = cfg.name
+                        break
+            else:
+                # Step 2: Route to Vocoder (Mel → Audio)
+                for cfg in self.model_configs:
+                    if cfg.model_type == "VoiceFixerVocoder":
+                        request.model = cfg.name
+                        break
+
     def check_reroute_request_to_model(self, request: RequestInput):
         # Harmonyspeech TTS Processing
         if request.requested_model == "harmonyspeech":
@@ -287,6 +307,9 @@ class HarmonySpeechEngine:
         # OpenVoice V2 TTS & VC Processing
         if request.requested_model == "openvoice_v2":
             self.reroute_request_openvoice_v2(request)
+        # VoiceFixer Audio Conversion Processing
+        if request.requested_model == "voicefixer":
+            self.reroute_request_voicefixer(request)
 
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED
@@ -387,6 +410,22 @@ class HarmonySpeechEngine:
                     metrics=result.result_data.metrics if result.result_data.metrics else None
                 )
                 result.result_data = tts_result
+
+        # Multi-Step Audio Conversion Processing (VoiceFixer)
+        if isinstance(input_data, AudioConversionRequestInput) and requested_model == "voicefixer":
+            forwarding_request = input_data
+
+            if isinstance(result.result_data, AudioConversionRequestOutput) and input_data.input_mel_spectrogram is None:
+                # Restorer step finished, forward to Vocoder
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Update request with mel spectrogram output from restorer
+                forwarding_request.input_mel_spectrogram = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
+            else:
+                # Vocoder step finished, mark as completed
+                new_status = RequestStatus.FINISHED_STOPPED
+                self.scheduler.update_request_status(result.request_id, new_status)
 
         # TODO: Post-Generation Processing
 

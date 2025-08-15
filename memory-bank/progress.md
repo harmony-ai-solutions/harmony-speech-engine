@@ -2,7 +2,7 @@
 
 ## Implementation Status Overview
 
-**Current Version**: 0.1.0-rc8  
+**Current Version**: 0.1.0-rc9  
 **Overall Completion**: ~75%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
@@ -60,6 +60,7 @@
 - ✅ `/v1/audio/transcriptions` - Speech-to-text
 - ✅ `/v1/audio/embeddings` - Speaker embeddings
 - ✅ `/v1/audio/voice-conversion` - Voice conversion
+- ✅ `/v1/audio/convert` - Audio restoration and filtering
 - ✅ `/docs` - Interactive API documentation
 - ✅ `/redoc` - Alternative documentation interface
 
@@ -92,6 +93,13 @@
 - ✅ Multiple model sizes (tiny, medium, large-v3-turbo)
 - ✅ Language detection and multilingual support
 - ✅ Integration with voice cloning workflows
+
+### ✅ VoiceFixer (COMPLETE)
+- ✅ VoiceFixerRestorer - Audio denoising and enhancement
+- ✅ VoiceFixerVocoder - Mel-spectrogram to audio conversion
+- ✅ Audio restoration for degraded speech
+- ✅ Support for noise, reverberation, and clipping removal
+- ✅ Integration with HSE model loading system
 
 ### 🔄 Planned Model Integrations (IN PROGRESS)
 
