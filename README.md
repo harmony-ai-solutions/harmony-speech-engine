@@ -145,7 +145,7 @@ May change over time as new models and frameworks are being developed.
   - [ ] Embedding Vector Matching (Convenience Feature)
 - [x] Automatic Speech Recognition & Language Detection
   - [x] Faster-Whisper / Faster-Distil-Whisper
-  - [ ] Silero VAD
+  - [x] Silero VAD
   - [ ] SenseVoice
 
 ## Open ToDo's & things that require work
@@ -160,7 +160,6 @@ May change over time as new models and frameworks are being developed.
   - [ ] XTTS V2
   - [ ] Vall-E-X
   - [ ] EmotiVoice
-  - [ ] Silero VAD
   - [ ] Input Pre-Processing
   - [ ] Post-Processing / Overlays
   - [ ] Output Format Customization

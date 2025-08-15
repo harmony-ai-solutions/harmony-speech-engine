@@ -46,7 +46,7 @@ class ModelList(BaseModel):
 
 class ResponseFormat(BaseModel):
     # type must be "json_object" or "text"
-    type: str = Literal["text", "json_object"]
+    type: Literal["text", "json_object"]
 
 
 class GenerationOptions(BaseModel):
@@ -241,6 +241,27 @@ class DetectVoiceActivityRequest(BaseRequest):
     get_timestamps: Optional[bool] = Field(
         default=False,
         description="whether to return the word timestamps. Check model description if supported."
+    )
+    # Dynamic Silero VAD parameters
+    threshold: Optional[float] = Field(
+        default=0.5,
+        description="Speech threshold. Probabilities above this value are considered as speech."
+    )
+    min_speech_duration_ms: Optional[int] = Field(
+        default=250,
+        description="Final speech chunks shorter than this duration (in ms) are discarded."
+    )
+    min_silence_duration_ms: Optional[int] = Field(
+        default=100,
+        description="Minimum silence duration (in ms) before separating speech chunks."
+    )
+    speech_pad_ms: Optional[int] = Field(
+        default=30,
+        description="Speech chunks are padded by this duration (in ms) on each side."
+    )
+    return_seconds: Optional[bool] = Field(
+        default=False,
+        description="Whether to return timestamps in seconds (default: samples)."
     )
 
 

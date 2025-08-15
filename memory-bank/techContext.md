@@ -262,6 +262,44 @@ class HarmonySpeechLoader:
         return HarmonySpeechSynthesizer.from_pretrained(model_path)
 ```
 
+**Native Model Integration Pattern**
+```python
+# Native models bypass HuggingFace loading and use direct library imports
+def get_model(model_config: ModelConfig, device_config: DeviceConfig):
+    # Check for native model types first
+    if model_class == "native" and hf_config == "native":
+        if model_config.model_type == "FasterWhisper":
+            from faster_whisper import WhisperModel
+            model = WhisperModel(model_config.model)
+            return model
+        elif model_config.model_type == "SileroVAD":
+            from silero_vad import load_silero_vad
+            use_onnx = getattr(model_config, 'use_onnx', True)
+            model = load_silero_vad(onnx=use_onnx)
+            return model
+    
+    # Standard HuggingFace loading for other models
+    return load_hf_model(model_config, device_config)
+```
+
+**Model Type Registration System**
+```python
+# Model configuration dictionaries define loading behavior
+_MODEL_CONFIGS = {
+    "SileroVAD": {"default": "native"},
+    "FasterWhisper": {"default": "native"},
+    "VoiceFixerRestorer": {"default": "native"},
+    "HarmonySpeechEncoder": {"default": "encoder/config.json"}
+}
+
+_MODEL_WEIGHTS = {
+    "SileroVAD": {"default": "native"},
+    "FasterWhisper": {"default": "native"},
+    "VoiceFixerRestorer": {"default": "vf.ckpt"},
+    "HarmonySpeechEncoder": {"default": "encoder/encoder.pt"}
+}
+```
+
 ## Performance Optimization
 
 ### Compilation Optimizations

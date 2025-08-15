@@ -5,6 +5,7 @@ from typing import Type, Optional
 import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
+from silero_vad import load_silero_vad
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
@@ -73,6 +74,10 @@ _MODEL_CONFIGS = {
     # Faster-Whisper
     "FasterWhisper": {
         "default": "native"
+    },
+    # Silero VAD
+    "SileroVAD": {
+        "default": "native"
     }
 }
 
@@ -117,6 +122,10 @@ _MODEL_WEIGHTS = {
     },
     # Faster-Whisper
     "FasterWhisper": {
+        "default": "native"
+    },
+    # Silero VAD
+    "SileroVAD": {
         "default": "native"
     }
 }
@@ -246,6 +255,14 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
             if model_class == "native" and hf_config == "native":
                 if model_config.model_type == "FasterWhisper":
                     model = WhisperModel(model_config.model)
+                    return model
+                elif model_config.model_type == "SileroVAD":                    
+                    # Support both ONNX and PyTorch formats based on config
+                    use_onnx = True
+                    load_format = getattr(model_config, 'load_format', 'onnx')
+                    if load_format not in ['auto', 'onnx']:
+                        use_onnx = False
+                    model = load_silero_vad(onnx=use_onnx)
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)

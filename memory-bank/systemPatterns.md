@@ -198,6 +198,16 @@ POST /v1/audio/speech
     "input_audio": "base64_encoded_reference_audio",
     "language_id": "EN"
 }
+
+# VAD endpoint with dynamic parameters
+POST /v1/audio/vad
+{
+    "model": "silero-vad",
+    "input_audio": "base64_encoded_audio",
+    "get_timestamps": true,
+    "threshold": 0.5,
+    "min_speech_duration_ms": 250
+}
 ```
 
 ### 2. Request/Response Pattern
@@ -207,12 +217,109 @@ POST /v1/audio/speech
 - `SpeechEmbeddingRequestInput`: Speaker embedding generation
 - `SpeechTranscribeRequestInput`: Speech-to-text processing
 - `VoiceConversionRequest`: Voice conversion operations
+- `DetectVoiceActivityRequestInput`: VAD processing with dynamic parameters
+- `AudioConversionRequestInput`: Audio restoration and processing
 
 **Output Types:**
 - `TextToSpeechRequestOutput`: TTS results
 - `SpeechEmbeddingRequestOutput`: Embedding vectors
 - `SpeechTranscriptionRequestOutput`: Transcription and VAD data
 - `VoiceConversionRequestOutput`: Converted audio
+- `DetectVoiceActivityRequestOutput`: VAD results with optional timestamps
+- `AudioConversionRequestOutput`: Processed audio data
+
+### 3. API Protocol Serving Architecture
+
+**Serving Layer Structure:**
+```
+FastAPI Application
+├── OpenAIServingEngine (base serving class)
+├── OpenAIServingTextToSpeech (/v1/audio/speech)
+├── OpenAIServingVoiceActivityDetection (/v1/audio/vad)
+├── OpenAIServingSpeechToText (/v1/audio/transcriptions)
+└── OpenAIServingEmbedding (/v1/embeddings)
+```
+
+**Model Type Registration Pattern:**
+```python
+# Each serving class defines supported model types
+_VAD_MODEL_TYPES = [
+    "FasterWhisper",
+    "SileroVAD"
+]
+
+# Model filtering and availability
+@staticmethod
+def models_from_config(configured_models: List[ModelConfig]) -> List[ModelCard]:
+    return OpenAIServing.model_cards_from_config_groups(
+        configured_models,
+        _VAD_MODEL_TYPES,
+        _VAD_MODEL_GROUPS
+    )
+```
+
+### 4. Request Processing Flow
+
+**Complete Request Lifecycle:**
+```
+1. FastAPI Endpoint Reception
+   ↓
+2. Protocol Validation (Pydantic models)
+   ↓
+3. Request Input Conversion (.from_openai() methods)
+   ↓
+4. Engine Request Creation
+   ↓
+5. Model Routing & Executor Selection
+   ↓
+6. Input Preparation (prepare_inputs())
+   ↓
+7. Model Execution (execute_model())
+   ↓
+8. Result Processing & Response Generation
+   ↓
+9. HTTP Response Return
+```
+
+**Input Processing Pipeline:**
+```python
+# 1. Protocol layer defines request structure
+class DetectVoiceActivityRequest(BaseRequest):
+    input_audio: str
+    get_timestamps: Optional[bool] = False
+    threshold: Optional[float] = 0.5
+    # ... dynamic parameters
+
+# 2. Conversion to internal format
+DetectVoiceActivityRequestInput.from_openai(request_id, request)
+
+# 3. Input preparation with parameter extraction
+def prepare_silero_vad_inputs(requests_to_batch):
+    def prepare(request):
+        # Audio processing
+        audio_tensor = torch.FloatTensor(audio_ref)
+        
+        # Parameter extraction
+        vad_params = {
+            'threshold': getattr(request, 'threshold', 0.5),
+            'min_speech_duration_ms': getattr(request, 'min_speech_duration_ms', 250),
+            # ... other parameters
+        }
+        
+        return (audio_tensor, vad_params)
+
+# 4. Model execution with unpacked parameters
+def _execute_silero_vad(self, inputs, requests_to_batch):
+    def run_vad(input_params):
+        audio_tensor, vad_params = input_params
+        # Use parameters directly in model call
+        timestamps = get_speech_timestamps(
+            audio_tensor, 
+            self.model,
+            threshold=vad_params['threshold'],
+            # ... other parameters
+        )
+```
 
 ## Performance Optimization Patterns
 

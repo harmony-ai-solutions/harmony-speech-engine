@@ -24,7 +24,9 @@ _MODELS = {
     "VoiceFixerRestorer": ("voicefixer", "VoiceFixerRestorer"),
     "VoiceFixerVocoder": ("voicefixer", "VoiceFixerVocoder"),
     # Faster-Whisper
-    "FasterWhisper": ("faster-wisper", "native")
+    "FasterWhisper": ("faster-wisper", "native"),
+    # SileroVAD
+    "SileroVAD": ("silero-vad", "native")
 }
 
 # Architecture -> type.

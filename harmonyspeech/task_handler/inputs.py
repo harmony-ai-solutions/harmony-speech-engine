@@ -142,6 +142,21 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
             else:
                 raise ValueError(f"request ID {r.request_id} is not of type AudioConversionRequestInput")
         return prepare_voicefixer_vocoder_inputs(inputs)
+    elif model_config.model_type == "SileroVAD":
+        for r in requests_to_batch:
+            if (
+                isinstance(r.request_data, SpeechEmbeddingRequestInput) or
+                isinstance(r.request_data, TextToSpeechRequestInput) or
+                isinstance(r.request_data, SpeechTranscribeRequestInput) or
+                isinstance(r.request_data, DetectVoiceActivityRequestInput)
+            ):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                    f"SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput or"
+                    f"DetectVoiceActivityRequestInput")
+        return prepare_silero_vad_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -495,6 +510,41 @@ def prepare_melotts_synthesizer_inputs(model_config: ModelConfig, requests_to_ba
 
         inference_items = melo_normalize_inputs(input_text, hf_config, model_config.language)
         return inference_items, speaker_id, speed_modifier
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_silero_vad_inputs(requests_to_batch: List[DetectVoiceActivityRequestInput]):
+    """
+    Prepare inputs for Silero VAD model.
+    Expects audio data in base64 format and converts to tensor format.
+    Includes VAD parameters as part of the input object.
+    """
+    def prepare(request):
+        # Decode base64 audio
+        input_audio = base64.b64decode(request.input_audio)
+        input_audio_ref = io.BytesIO(input_audio)
+        
+        # Load audio at 16kHz (Silero's expected sample rate)
+        audio_ref, _ = librosa.load(input_audio_ref, sr=16000)
+        
+        # Convert to tensor format expected by Silero VAD
+        audio_tensor = torch.FloatTensor(audio_ref)
+        
+        # Extract VAD parameters from request
+        vad_params = {
+            'threshold': getattr(request, 'threshold', 0.5),
+            'min_speech_duration_ms': getattr(request, 'min_speech_duration_ms', 250),
+            'min_silence_duration_ms': getattr(request, 'min_silence_duration_ms', 100),
+            'speech_pad_ms': getattr(request, 'speech_pad_ms', 30),
+            'return_seconds': getattr(request, 'return_seconds', False),
+            'get_timestamps': getattr(request, 'get_timestamps', False)
+        }
+        
+        return (audio_tensor, vad_params)
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

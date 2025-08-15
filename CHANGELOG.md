@@ -11,10 +11,18 @@
     *   Voicefixer processes audio internally at 44.1kHz.
     *   Extended request routing system to support audio restoration workflows in addition to existing TTS, STT, and voice conversion pipelines.
 
+*   **Silero VAD Integration**:
+    *   Added Silero VAD as a high-performance alternative to FasterWhisper for Voice Activity Detection tasks.
+    *   Implemented native model integration following HSE's established patterns for optimal CPU performance.
+    *   Enhanced `/v1/audio/vad` endpoint with dynamic parameter support for fine-tuning detection sensitivity.
+    *   Added configurable parameters: threshold, min_speech_duration_ms, min_silence_duration_ms, speech_pad_ms, and return_seconds.
+    *   Provides better performance and lower false detection rates compared to adapted transcription models.
+
 ### Dependencies
 
 *   **New Dependencies**:
     *   TorchLibrosa for STFT operations and spectrogram conversion
+    *   silero-vad to support the silero VAD model
 
 ---
 
