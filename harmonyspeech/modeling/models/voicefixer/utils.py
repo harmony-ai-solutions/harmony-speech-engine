@@ -4,7 +4,7 @@ Utility functions adapted from VoiceFixer for Harmony Speech Engine integration.
 import math
 import warnings
 
-from torchlibrosa.stft import STFT, ISTFT, magphase
+from torchlibrosa.stft import STFT
 import torch
 import torch.nn as nn
 import numpy as np
@@ -257,3 +257,202 @@ def initialize_dummy_weights(model: nn.Module):
     for param in model.parameters():
         if param.requires_grad:
             param.data.normal_(0, 0.02)
+
+
+def tr_normalize(S: torch.Tensor) -> torch.Tensor:
+    """Tensor version of normalize with proper clipping."""
+    # VoiceFixer Config values for 44.1kHz
+    allow_clipping_in_normalization = True
+    symmetric_mels = True
+    max_abs_value = 4.0
+    min_db = -115
+    
+    if allow_clipping_in_normalization:
+        if symmetric_mels:
+            return torch.clip(
+                (2 * max_abs_value) * ((S - min_db) / (-min_db))
+                - max_abs_value,
+                -max_abs_value,
+                max_abs_value,
+            )
+        else:
+            return torch.clip(
+                max_abs_value * ((S - min_db) / (-min_db)),
+                0,
+                max_abs_value,
+            )
+
+    assert S.max() <= 0 and S.min() - min_db >= 0
+    if symmetric_mels:
+        return (2 * max_abs_value) * (
+            (S - min_db) / (-min_db)
+        ) - max_abs_value
+    else:
+        return max_abs_value * ((S - min_db) / (-min_db))
+
+
+def tr_amp_to_db(x: torch.Tensor) -> torch.Tensor:
+    """Tensor version of amp_to_db conversion."""
+    min_level_db = -100
+    min_level = torch.exp(min_level_db / 20 * torch.log(torch.tensor(10.0)))
+    min_level = min_level.type_as(x)
+    return 20 * torch.log10(torch.maximum(min_level, x))
+
+
+def tr_pre(npy: torch.Tensor) -> torch.Tensor:
+    """Critical preprocessing with padding and transpose."""
+    num_mels = 128  # VoiceFixer Config value
+
+    conditions = npy.transpose(1, 2)
+    l = conditions.size(-1)
+    pad_tail = l % 2 + 4
+    zeros = (
+        torch.zeros([conditions.size()[0], num_mels, pad_tail]).type_as(
+            conditions
+        )
+        + -4.0
+    )
+    return torch.cat([conditions, zeros], dim=-1)
+
+
+def get_mel_weight_torch(percent=1, a=18.8927416350036, b=0.0269863588184314):
+    mel_weight_torch = torch.tensor(
+        [
+            19.40951426,
+            19.94047336,
+            20.4859038,
+            21.04629067,
+            21.62194148,
+            22.21335214,
+            22.8210215,
+            23.44529231,
+            24.08660962,
+            24.74541882,
+            25.42234287,
+            26.11770576,
+            26.83212784,
+            27.56615283,
+            28.32007747,
+            29.0947679,
+            29.89060111,
+            30.70832636,
+            31.54828121,
+            32.41121487,
+            33.29780773,
+            34.20865341,
+            35.14437675,
+            36.1056621,
+            37.09332763,
+            38.10795802,
+            39.15039691,
+            40.22119881,
+            41.32154931,
+            42.45172373,
+            43.61293329,
+            44.80609379,
+            46.031602,
+            47.29070223,
+            48.58427549,
+            49.91327905,
+            51.27863232,
+            52.68119708,
+            54.1222372,
+            55.60274206,
+            57.12364703,
+            58.68617876,
+            60.29148652,
+            61.94081306,
+            63.63501986,
+            65.37562658,
+            67.16408954,
+            69.00109084,
+            70.88850318,
+            72.82736101,
+            74.81985537,
+            76.86654792,
+            78.96885475,
+            81.12900906,
+            83.34840929,
+            85.62810662,
+            87.97005418,
+            90.37689804,
+            92.84887686,
+            95.38872881,
+            97.99777002,
+            100.67862715,
+            103.43232942,
+            106.26140638,
+            109.16827015,
+            112.15470471,
+            115.22184756,
+            118.37439245,
+            121.6122689,
+            124.93877158,
+            128.35661454,
+            131.86761321,
+            135.47417938,
+            139.18059494,
+            142.98713744,
+            146.89771854,
+            150.91684347,
+            155.0446638,
+            159.28614648,
+            163.64270198,
+            168.12035831,
+            172.71749158,
+            177.44220154,
+            182.29556933,
+            187.28286676,
+            192.40502126,
+            197.6682721,
+            203.07516896,
+            208.63088733,
+            214.33770931,
+            220.19910108,
+            226.22363072,
+            232.41087124,
+            238.76803591,
+            245.30079083,
+            252.01064464,
+            258.90261676,
+            265.98474,
+            273.26010248,
+            280.73496362,
+            288.41440094,
+            296.30489752,
+            304.41180337,
+            312.7377183,
+            321.28877878,
+            330.07870237,
+            339.10812951,
+            348.38276173,
+            357.91393924,
+            367.70513992,
+            377.76413924,
+            388.09467408,
+            398.70920178,
+            409.61813793,
+            420.81980127,
+            432.33215467,
+            444.16083117,
+            456.30919947,
+            468.78589276,
+            481.61325588,
+            494.78824596,
+            508.31969844,
+            522.2238331,
+            536.51163441,
+            551.18859414,
+            566.26142988,
+            581.75006061,
+            597.66210737,
+        ]
+    )
+
+    x_orig_torch = torch.linspace(1, mel_weight_torch.shape[0], steps=mel_weight_torch.shape[0])
+    b = percent * b
+
+    def func(a, b, x):
+        return a * torch.exp(b * x)
+
+    return func(a, b, x_orig_torch)

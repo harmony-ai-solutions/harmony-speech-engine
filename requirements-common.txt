@@ -1,6 +1,7 @@
 # Torch
 torch
 torchaudio
+torchlibrosa
 # General Stuff
 pydantic
 fastapi

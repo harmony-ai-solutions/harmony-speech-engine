@@ -16,15 +16,15 @@ VoiceFixer is a neural network-based system for restoring degraded speech audio.
 ### VoiceFixerRestorer
 - **Purpose**: Audio denoising and enhancement
 - **Input**: Degraded audio tensor [batch, channels, samples]
-- **Output**: Enhanced mel-spectrogram tensor
+- **Output**: Enhanced mel-spectrogram tensor [batch, 1, time, 128]
 - **Architecture**: Combines denoising GRU networks with UNet enhancement
 - **Checkpoint**: `vf.ckpt`
 
 ### VoiceFixerVocoder
 - **Purpose**: Convert mel-spectrograms to audio waveforms
-- **Input**: Mel-spectrogram tensor [batch, mel_bins, time] or [batch, 1, time, mel_bins]
+- **Input**: Mel-spectrogram tensor [batch, 1, time, 128]
 - **Output**: Audio waveform tensor [batch, 1, samples]
-- **Architecture**: Neural vocoder with upsampling layers
+- **Architecture**: Neural vocoder with conditional network and upsampling layers
 - **Checkpoint**: `model.ckpt-1490000_trimed.pt`
 
 ## Configuration
@@ -66,6 +66,7 @@ The models are automatically integrated into HSE's model loading system:
 2. **Automatic Loading**: Checkpoints are downloaded and cached automatically
 3. **Device Management**: Supports both CPU and GPU inference
 4. **Memory Management**: Includes segmented processing for large audio files
+5. **API Integration**: Accessible via `/v1/audio/convert` endpoint
 
 ## Technical Details
 
@@ -73,16 +74,25 @@ The models are automatically integrated into HSE's model loading system:
 - Ported core VoiceFixer architectures to HSE patterns
 - Adapted checkpoint loading to HSE's weight loading system
 - Integrated with HSE's device management and tensor operations
-- Added proper error handling and fallback initialization
+- Added proper error handling and strict input validation
+- Implemented pipeline format consistency between Restorer and Vocoder
+
+### Pipeline Data Flow
+1. **Audio Input**: Raw audio → STFT → Mel-spectrogram
+2. **Enhancement**: Mel-spectrogram → VoiceFixerRestorer → Enhanced mel-spectrogram
+3. **Vocoding**: Enhanced mel-spectrogram → VoiceFixerVocoder → Restored audio
+4. **Validation**: Format validation at each stage ensures pipeline compatibility
 
 ### Optimizations
 - **Memory Efficiency**: Processes audio in 30-second segments
 - **Batch Processing**: Supports batch processing of multiple audio files
 - **Device Flexibility**: Works on both CPU and GPU
 - **Lazy Loading**: Models are loaded only when needed
+- **Pipeline Integration**: Seamless integration with HSE request routing
 
 ### Dependencies
 - PyTorch (for neural network operations)
+- TorchLibrosa (for STFT operations and spectrogram conversion)
 - librosa (for audio processing)
 - numpy (for numerical operations)
 - soundfile (for audio I/O)

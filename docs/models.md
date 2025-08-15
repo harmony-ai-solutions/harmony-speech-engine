@@ -50,6 +50,46 @@ model_configs:
 
 ---
 
+### Audio Restoration
+
+#### VoiceFixer
+VoiceFixer is a neural network-based system for restoring degraded speech audio developed by Haohe Liu. It can handle various types of audio degradation including background noise, reverberation, low resolution audio, audio clipping, and general audio artifacts.
+
+VoiceFixer processes audio internally at 44.1kHz and uses a two-stage pipeline:
+1. **VoiceFixerRestorer**: Audio enhancement and noise reduction
+2. **VoiceFixerVocoder**: Mel-spectrogram to audio conversion
+
+The models are accessible through the `/v1/audio/convert` endpoint for audio restoration workflows. 
+
+Implementation Type: Adapted
+
+Links:
+- [Original Paper](https://arxiv.org/abs/2109.13731): "VoiceFixer: Toward General Speech Restoration With Neural Vocoder"
+- [Original Repository](https://github.com/haoheliu/voicefixer)
+- [Huggingface Models](https://huggingface.co/jlmarrugom/voice_fixer)
+
+##### YAML Config Example
+```
+model_configs:
+  - name: "voicefixer-restorer"
+    model: "jlmarrugom/voice_fixer"
+    model_type: "VoiceFixerRestorer"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+
+  - name: "voicefixer-vocoder"
+    model: "jlmarrugom/voice_fixer"
+    model_type: "VoiceFixerVocoder"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+```
+
+---
+
 ## TTS Frameworks
 
 ### Harmony Speech V1

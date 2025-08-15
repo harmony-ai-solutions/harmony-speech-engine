@@ -1,5 +1,5 @@
 """
-VoiceFixer modules with proper dimension handling.
+VoiceFixer modules with proper dimension handling and original vocoder architecture.
 Based on the original VoiceFixer implementation.
 """
 
@@ -435,3 +435,181 @@ class UNetResComplex_100Mb(nn.Module):
 
         output_dict = {"mel": x}
         return output_dict
+
+
+class UpsampleNet(nn.Module):
+    """Original VoiceFixer upsampling network with skip connections and smoothing."""
+    
+    def __init__(self, input_size, output_size, upsample_factor, hp=None, index=0):
+        super(UpsampleNet, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.upsample_factor = upsample_factor
+        self.skip_conv = nn.Conv1d(input_size, output_size, kernel_size=1)
+        self.index = index
+        
+        # Configuration parameters (from original VoiceFixer Config)
+        self.up_type = "transpose"  # Default upsampling type
+        self.use_smooth = False     # Smoothing disabled by default
+        self.use_drop = False       # Dropout disabled by default
+        self.no_skip = False        # Skip connections enabled
+        self.org = False            # Original mode disabled
+        
+        # Main upsampling layer
+        layer = nn.ConvTranspose1d(
+            input_size,
+            output_size,
+            upsample_factor * 2,
+            upsample_factor,
+            padding=upsample_factor // 2 + upsample_factor % 2,
+            output_padding=upsample_factor % 2,
+        )
+        self.layer = nn.utils.parametrizations.weight_norm(layer)
+
+    def forward(self, inputs):
+        if not self.org:
+            inputs = inputs + torch.sin(inputs)
+            B, C, T = inputs.size()
+            res = inputs.repeat(1, self.upsample_factor, 1).view(B, C, -1)
+            skip = self.skip_conv(res)
+
+        outputs = self.layer(inputs)
+
+        if self.no_skip:
+            return outputs
+
+        if not self.org:
+            outputs = outputs + skip
+
+        if self.use_drop:
+            outputs = F.dropout(outputs, p=0.05)
+
+        return outputs
+
+
+class ResStack(nn.Module):
+    """Original VoiceFixer residual stack with dilated convolutions."""
+    
+    def __init__(self, channel, kernel_size=3, resstack_depth=4, hp=None):
+        super(ResStack, self).__init__()
+        
+        self.use_wn = False          # Weight normalization disabled by default
+        self.use_shift_scale = False # Shift-scale disabled by default
+        self.channel = channel
+
+        def get_padding(kernel_size, dilation=1):
+            return int((kernel_size * dilation - dilation) / 2)
+
+        # Create residual layers with dilated convolutions
+        self.layers = nn.ModuleList([
+            nn.Sequential(
+                nn.LeakyReLU(),
+                nn.utils.parametrizations.weight_norm(
+                    nn.Conv1d(
+                        channel,
+                        channel,
+                        kernel_size=kernel_size,
+                        dilation=3 ** (i % 10),
+                        padding=get_padding(kernel_size, 3 ** (i % 10)),
+                    )
+                ),
+                nn.LeakyReLU(),
+                nn.utils.parametrizations.weight_norm(
+                    nn.Conv1d(
+                        channel,
+                        channel,
+                        kernel_size=kernel_size,
+                        dilation=1,
+                        padding=get_padding(kernel_size, 1),
+                    )
+                ),
+            )
+            for i in range(resstack_depth)
+        ])
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = x + layer(x)
+        return x
+
+
+class PQMF(nn.Module):
+    """Pseudo Quadrature Mirror Filter for multi-band processing."""
+    
+    def __init__(self, subbands=4, taps=64, cutoff_ratio=0.142, beta=9.0):
+        super(PQMF, self).__init__()
+        self.subbands = subbands
+        self.taps = taps
+        self.cutoff_ratio = cutoff_ratio
+        self.beta = beta
+
+        # Create analysis and synthesis filters
+        QMF = torch.tensor(self._get_qmf_filter(), dtype=torch.float32)
+        
+        # Analysis filter bank
+        self.register_buffer("analysis_filter", QMF)
+        
+        # Synthesis filter bank  
+        self.register_buffer("synthesis_filter", QMF)
+
+    def _get_qmf_filter(self):
+        """Generate QMF filter coefficients."""
+        from scipy.signal import kaiser
+        import numpy as np
+        
+        # Generate prototype filter
+        h = kaiser(self.taps + 1, self.beta)
+        h = h / np.sum(h)
+        
+        # Create QMF filter bank
+        filters = []
+        for k in range(self.subbands):
+            # Modulate prototype filter
+            n = np.arange(self.taps + 1)
+            h_k = h * np.cos((2 * k + 1) * np.pi * n / (2 * self.subbands) + (-1)**k * np.pi / 4)
+            filters.append(h_k)
+        
+        return np.array(filters)
+
+    def analysis(self, x):
+        """Analysis filter bank - split into subbands."""
+        # x: [batch, 1, time]
+        batch_size = x.size(0)
+        
+        # Apply analysis filters
+        subbands = []
+        for k in range(self.subbands):
+            # Convolve with k-th analysis filter
+            h_k = self.analysis_filter[k:k+1].unsqueeze(0)  # [1, 1, taps]
+            y_k = F.conv1d(x, h_k, padding=self.taps//2)
+            
+            # Downsample by subbands factor
+            y_k = y_k[:, :, ::self.subbands]
+            subbands.append(y_k)
+        
+        # Stack subbands: [batch, subbands, time//subbands]
+        return torch.stack(subbands, dim=1)
+
+    def synthesis(self, x):
+        """Synthesis filter bank - reconstruct from subbands."""
+        # x: [batch, subbands, time//subbands]
+        batch_size, subbands, subband_length = x.size()
+        
+        # Upsample and filter each subband
+        y = torch.zeros(batch_size, 1, subband_length * self.subbands, 
+                       device=x.device, dtype=x.dtype)
+        
+        for k in range(self.subbands):
+            # Upsample by inserting zeros
+            x_k = x[:, k:k+1, :]  # [batch, 1, time//subbands]
+            x_up = torch.zeros(batch_size, 1, subband_length * self.subbands,
+                              device=x.device, dtype=x.dtype)
+            x_up[:, :, ::self.subbands] = x_k
+            
+            # Apply synthesis filter
+            h_k = self.synthesis_filter[k:k+1].unsqueeze(0)  # [1, 1, taps]
+            y_k = F.conv1d(x_up, h_k, padding=self.taps//2)
+            
+            y += y_k
+        
+        return y

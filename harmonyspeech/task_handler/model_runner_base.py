@@ -454,7 +454,6 @@ class ModelRunnerBase:
                 enhanced_mel = self.model(audio_tensor)
 
             # Convert enhanced mel spectrogram to JSON format for forwarding
-            # enhanced_mel shape: [batch, channels, time, n_mels]
             enhanced_mel_np = enhanced_mel.detach().cpu().numpy()
             mel_json = json.dumps(enhanced_mel_np.tolist())
 
