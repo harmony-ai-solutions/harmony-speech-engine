@@ -1,139 +1,139 @@
 model_configs:
-#  - name: "hs1-encoder"
-#    model: "harmony-ai/harmony-speech-v1"
-#    model_type: "HarmonySpeechEncoder"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "hs1-synthesizer"
-#    model: "harmony-ai/harmony-speech-v1"
-#    model_type: "HarmonySpeechSynthesizer"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "hs1-vocoder"
-#    model: "harmony-ai/harmony-speech-v1"
-#    model_type: "HarmonySpeechVocoder"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov1-synthesizer-en"
-#    model: "myshell-ai/openvoice"
-#    model_type: "OpenVoiceV1Synthesizer"
-#    language: "EN"
-#    voices: ["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov1-synthesizer-zh"
-#    model: "myshell-ai/openvoice"
-#    model_type: "OpenVoiceV1Synthesizer"
-#    language: "ZH"
-#    voices: ["default"]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov1-tone-converter"
-#    model: "myshell-ai/openvoice"
-#    model_type: "OpenVoiceV1ToneConverter"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov1-tone-converter-encoder"
-#    model: "myshell-ai/openvoice"
-#    model_type: "OpenVoiceV1ToneConverterEncoder"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-en"
-#    model: "myshell-ai/MeloTTS-English-v3"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "EN"
-#    voices: ["EN-Newest"]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-zh"
-#    model: "myshell-ai/MeloTTS-Chinese"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "ZH"
-#    voices: ["ZH"]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-es"
-#    model: "myshell-ai/MeloTTS-Spanish"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "ES"
-#    voices: [ "ES" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-fr"
-#    model: "myshell-ai/MeloTTS-French"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "FR"
-#    voices: [ "FR" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-jp"
-#    model: "myshell-ai/MeloTTS-Japanese"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "JP"
-#    voices: [ "JP" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-synthesizer-kr"
-#    model: "myshell-ai/MeloTTS-Korean"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "KR"
-#    voices: [ "KR" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-tone-converter"
-#    model: "myshell-ai/openvoicev2"
-#    model_type: "OpenVoiceV2ToneConverter"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "ov2-tone-converter-encoder"
-#    model: "myshell-ai/openvoicev2"
-#    model_type: "OpenVoiceV2ToneConverterEncoder"
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
+  - name: "hs1-encoder"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-synthesizer"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechSynthesizer"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-vocoder"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechVocoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-synthesizer-en"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "EN"
+    voices: ["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-synthesizer-zh"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "ZH"
+    voices: ["default"]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-tone-converter"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverter"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov1-tone-converter-encoder"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-en"
+    model: "myshell-ai/MeloTTS-English-v3"
+    model_type: "MeloTTSSynthesizer"
+    language: "EN"
+    voices: ["EN-Newest"]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-zh"
+    model: "myshell-ai/MeloTTS-Chinese"
+    model_type: "MeloTTSSynthesizer"
+    language: "ZH"
+    voices: ["ZH"]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-es"
+    model: "myshell-ai/MeloTTS-Spanish"
+    model_type: "MeloTTSSynthesizer"
+    language: "ES"
+    voices: [ "ES" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-fr"
+    model: "myshell-ai/MeloTTS-French"
+    model_type: "MeloTTSSynthesizer"
+    language: "FR"
+    voices: [ "FR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-jp"
+    model: "myshell-ai/MeloTTS-Japanese"
+    model_type: "MeloTTSSynthesizer"
+    language: "JP"
+    voices: [ "JP" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-synthesizer-kr"
+    model: "myshell-ai/MeloTTS-Korean"
+    model_type: "MeloTTSSynthesizer"
+    language: "KR"
+    voices: [ "KR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-tone-converter"
+    model: "myshell-ai/openvoicev2"
+    model_type: "OpenVoiceV2ToneConverter"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "ov2-tone-converter-encoder"
+    model: "myshell-ai/openvoicev2"
+    model_type: "OpenVoiceV2ToneConverterEncoder"
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cpu"
 
 #  - name: "faster-whisper-large-v3-turbo"
 #    model: "large-v3-turbo"
@@ -143,21 +143,21 @@ model_configs:
 #    device_config:
 #      device: "cuda"
 
-#  - name: "faster-whisper-medium"
-#    model: "medium"
-#    model_type: "FasterWhisper"
-#    max_batch_size: 16
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
-#
-#  - name: "faster-whisper-tiny"
-#    model: "tiny"
-#    model_type: "FasterWhisper"
-#    max_batch_size: 16
-#    dtype: "float32"
-#    device_config:
-#      device: "cpu"
+  - name: "faster-whisper-medium"
+    model: "medium"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "faster-whisper-tiny"
+    model: "tiny"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"
 
   # VoiceFixer Restorer - for audio denoising and enhancement
   - name: "voicefixer-restorer"
@@ -166,7 +166,7 @@ model_configs:
     max_batch_size: 4
     dtype: "float32"
     device_config:
-      device: "cpu"  # or "cpu"
+      device: "cpu"
 
   # VoiceFixer Vocoder - for mel-spectrogram to audio conversion
   - name: "voicefixer-vocoder"
@@ -175,4 +175,4 @@ model_configs:
     max_batch_size: 4
     dtype: "float32"
     device_config:
-      device: "cpu"  # or "cpu"
+      device: "cpu"

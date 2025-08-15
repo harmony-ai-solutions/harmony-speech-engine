@@ -140,3 +140,21 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda"
+
+  # VoiceFixer Restorer - for audio denoising and enhancement
+  - name: "voicefixer-restorer"
+    model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
+    model_type: "VoiceFixerRestorer"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda"
+
+  # VoiceFixer Vocoder - for mel-spectrogram to audio conversion
+  - name: "voicefixer-vocoder"
+    model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
+    model_type: "VoiceFixerVocoder"
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cuda"
