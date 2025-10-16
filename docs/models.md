@@ -8,15 +8,19 @@ The following Models and Speech Frameworks are currently supported. YAML config 
 
 The following table should help with evaluating the requirements:
 
-| Model Toolchain   | Type      | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Storage & RAM / VRAM required |
-|-------------------|-----------|----------------|----------------------------|----------------------|----------------------------|-------------------------------|
-| Harmony Speech V1 | TTS       | Adapted        | No                         | Very Good            | ++                         | ~1GB                          |
-| OpenVoice V1      | TTS       | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
-| OpenVoice V2      | TTS       | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
-| Faster-Whisper    | STT / VAD | Native         | N / A                      | Medium               | STT: +++ / VAD: +          | ~1-6GB (depending on model)   |
-| Silero-VAD        | VAT       | Native         | N / A                      | Very Good            | +++                        | ~512MB                        |
-| VoiceFixer        | Converter | Adapted        | N / A                      | Bad                  | input-dependent            | ~2GB                          |
+| Model Toolchain   | Type         | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Storage & RAM / VRAM required |
+|-------------------|--------------|----------------|----------------------------|----------------------|----------------------------|-------------------------------|
+| Harmony Speech V1 | TTS          | Adapted        | No                         | Very Good            | ++                         | ~1GB                          |
+| OpenVoice V1      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
+| OpenVoice V2      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
+| Faster-Whisper    | STT <br>VAD* | Native         | N / A                      | Medium               | STT: +++ <br>VAD*: +       | ~1-6GB (depending on model)   |
+| Silero-VAD        | VAD          | Native         | N / A                      | Very Good            | +++                        | ~512MB                        |
+| VoiceFixer        | Converter    | Adapted        | N / A                      | Bad                  | input-dependent            | ~2GB                          |
 
+\* While Whisper (or STT models in general) can work for pure VAD use cases, too, they require significantly more
+processing time and the precision isn't as good. Reason for this is because they don't just check for voice activity,
+but try to actually understand what is being said, which sometimes can also cause hallucinations (e.g. "understanding
+words" in audio which has no speech in it; for example, breathing into a microphone) 
 
 ### Model Types
 - **Native** / **Third-Party** Models: build on top of other Repositories. This is the preferred way of adding new
