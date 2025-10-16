@@ -4,7 +4,19 @@ To be able to use a model for Inference tasks, Harmony Speech Engine needs to lo
 As soon as the model has been loaded, it is eglible for processing direct requests or requests as part of the internal
 routing chain of a framework.
 
-The following Models and Speech Frameworks are currently supported. YAML config examples are being provided.
+The following Models and Speech Frameworks are currently supported. YAML config examples are being provided below.
+
+The following table should help with evaluating the requirements:
+
+| Model Toolchain   | Type      | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Storage & RAM / VRAM required |
+|-------------------|-----------|----------------|----------------------------|----------------------|----------------------------|-------------------------------|
+| Harmony Speech V1 | TTS       | Adapted        | No                         | Very Good            | ++                         | ~1GB                          |
+| OpenVoice V1      | TTS       | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
+| OpenVoice V2      | TTS       | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
+| Faster-Whisper    | STT / VAD | Native         | N / A                      | Medium               | STT: +++ / VAD: +          | ~1-6GB (depending on model)   |
+| Silero-VAD        | VAT       | Native         | N / A                      | Very Good            | +++                        | ~512MB                        |
+| VoiceFixer        | Converter | Adapted        | N / A                      | Bad                  | input-dependent            | ~2GB                          |
+
 
 ### Model Types
 - **Native** / **Third-Party** Models: build on top of other Repositories. This is the preferred way of adding new
