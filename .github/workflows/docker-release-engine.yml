@@ -28,6 +28,19 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
+      - name: Move workspace to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/work
+          sudo chown -R $USER:$USER /mnt/work
+          # Move existing structure if any (usually empty at this point)
+          if [ -d /home/runner/work ] && [ ! -L /home/runner/work ]; then
+            rsync -aH --delete /home/runner/work/ /mnt/work/ || true
+            sudo rm -rf /home/runner/work
+          fi
+          ln -s /mnt/work /home/runner/work
+          ls -ld /home/runner/work
 
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -44,6 +57,44 @@ jobs:
             $env:VERSION = 'v0.0.0-dev'
           }
           echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Relocate Docker data-root to /mnt/docker
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/docker
+          # Stop dockerd (different runner images expose different helpers)
+          sudo systemctl stop docker || sudo service docker stop || sudo pkill -9 dockerd || true
+
+          # If there is existing state, move it once
+          if [ -d /var/lib/docker ] && [ ! -L /var/lib/docker ]; then
+            sudo rsync -aH /var/lib/docker/ /mnt/docker/ || true
+            sudo rm -rf /var/lib/docker
+          fi
+
+          # Bind-mount so everything under /var/lib/docker actually lives on /mnt
+          sudo mkdir -p /var/lib/docker
+          sudo mount --bind /mnt/docker /var/lib/docker
+
+          # Make sure dockerd keeps using the bind mount even if it restarts
+          # (no need to edit daemon.json; the bind mount is enough for this job)
+          sudo systemctl start docker || sudo service docker start || true
+
+          # Verify
+          docker info | grep -i "Docker Root Dir" || true
+          df -h /var/lib/docker || true
+
+      - name: Redirect build caches to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /mnt/{npm-cache,pip-cache,ccache,cargo-cache}
+          echo "PIP_CACHE_DIR=/mnt/pip-cache" >> $GITHUB_ENV
+          echo "PIP_NO_INPUT=1" >> $GITHUB_ENV
+          echo "NPM_CONFIG_CACHE=/mnt/npm-cache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=/mnt/ccache" >> $GITHUB_ENV
+          echo "CARGO_HOME=/mnt/cargo-cache" >> $GITHUB_ENV
+          echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -80,6 +131,73 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
+      - name: Move workspace to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/work
+          sudo chown -R $USER:$USER /mnt/work
+          # Move existing structure if any (usually empty at this point)
+          if [ -d /home/runner/work ] && [ ! -L /home/runner/work ]; then
+            rsync -aH --delete /home/runner/work/ /mnt/work/ || true
+            sudo rm -rf /home/runner/work
+          fi
+          ln -s /mnt/work /home/runner/work
+          ls -ld /home/runner/work
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set VERSION variable
+        shell: pwsh
+        run: |
+          $inputsVersion = '${{ github.event.inputs.version }}'
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
+            $env:VERSION = $inputsVersion
+          } else {
+            $env:VERSION = 'v0.0.0-dev'
+          }
+          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Relocate Docker data-root to /mnt/docker
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/docker
+          # Stop dockerd (different runner images expose different helpers)
+          sudo systemctl stop docker || sudo service docker stop || sudo pkill -9 dockerd || true
+
+          # If there is existing state, move it once
+          if [ -d /var/lib/docker ] && [ ! -L /var/lib/docker ]; then
+            sudo rsync -aH /var/lib/docker/ /mnt/docker/ || true
+            sudo rm -rf /var/lib/docker
+          fi
+
+          # Bind-mount so everything under /var/lib/docker actually lives on /mnt
+          sudo mkdir -p /var/lib/docker
+          sudo mount --bind /mnt/docker /var/lib/docker
+
+          # Make sure dockerd keeps using the bind mount even if it restarts
+          # (no need to edit daemon.json; the bind mount is enough for this job)
+          sudo systemctl start docker || sudo service docker start || true
+
+          # Verify
+          docker info | grep -i "Docker Root Dir" || true
+          df -h /var/lib/docker || true
+
+      - name: Redirect build caches to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /mnt/{npm-cache,pip-cache,ccache,cargo-cache}
+          echo "PIP_CACHE_DIR=/mnt/pip-cache" >> $GITHUB_ENV
+          echo "PIP_NO_INPUT=1" >> $GITHUB_ENV
+          echo "NPM_CONFIG_CACHE=/mnt/npm-cache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=/mnt/ccache" >> $GITHUB_ENV
+          echo "CARGO_HOME=/mnt/cargo-cache" >> $GITHUB_ENV
+          echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
 
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -132,6 +250,73 @@ jobs:
           remove-haskell: 'true'
           remove-codeql: 'true'
 
+      - name: Move workspace to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/work
+          sudo chown -R $USER:$USER /mnt/work
+          # Move existing structure if any (usually empty at this point)
+          if [ -d /home/runner/work ] && [ ! -L /home/runner/work ]; then
+            rsync -aH --delete /home/runner/work/ /mnt/work/ || true
+            sudo rm -rf /home/runner/work
+          fi
+          ln -s /mnt/work /home/runner/work
+          ls -ld /home/runner/work
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set VERSION variable
+        shell: pwsh
+        run: |
+          $inputsVersion = '${{ github.event.inputs.version }}'
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
+          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
+            $env:VERSION = $inputsVersion
+          } else {
+            $env:VERSION = 'v0.0.0-dev'
+          }
+          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Relocate Docker data-root to /mnt/docker
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo mkdir -p /mnt/docker
+          # Stop dockerd (different runner images expose different helpers)
+          sudo systemctl stop docker || sudo service docker stop || sudo pkill -9 dockerd || true
+
+          # If there is existing state, move it once
+          if [ -d /var/lib/docker ] && [ ! -L /var/lib/docker ]; then
+            sudo rsync -aH /var/lib/docker/ /mnt/docker/ || true
+            sudo rm -rf /var/lib/docker
+          fi
+
+          # Bind-mount so everything under /var/lib/docker actually lives on /mnt
+          sudo mkdir -p /var/lib/docker
+          sudo mount --bind /mnt/docker /var/lib/docker
+
+          # Make sure dockerd keeps using the bind mount even if it restarts
+          # (no need to edit daemon.json; the bind mount is enough for this job)
+          sudo systemctl start docker || sudo service docker start || true
+
+          # Verify
+          docker info | grep -i "Docker Root Dir" || true
+          df -h /var/lib/docker || true
+
+      - name: Redirect build caches to /mnt
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /mnt/{npm-cache,pip-cache,ccache,cargo-cache}
+          echo "PIP_CACHE_DIR=/mnt/pip-cache" >> $GITHUB_ENV
+          echo "PIP_NO_INPUT=1" >> $GITHUB_ENV
+          echo "NPM_CONFIG_CACHE=/mnt/npm-cache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=/mnt/ccache" >> $GITHUB_ENV
+          echo "CARGO_HOME=/mnt/cargo-cache" >> $GITHUB_ENV
+          echo "DOCKER_BUILDKIT=1" >> $GITHUB_ENV
 
       - name: Checkout repository
         uses: actions/checkout@v3
