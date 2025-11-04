@@ -157,9 +157,6 @@ jobs:
             echo "DOCKER_BUILDKIT=1"
           } >> "$GITHUB_ENV"
 
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
       - name: Set VERSION variable
         shell: pwsh
         run: |
@@ -254,9 +251,6 @@ jobs:
             echo "CARGO_HOME=${{ github.workspace }}/.caches/cargo"
             echo "DOCKER_BUILDKIT=1"
           } >> "$GITHUB_ENV"
-
-      - name: Checkout repository
-        uses: actions/checkout@v3
 
       - name: Set VERSION variable
         shell: pwsh
