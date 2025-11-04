@@ -13,6 +13,7 @@ packaging
 numpy
 numba
 huggingface_hub
+hf_xet
 cached_path
 safetensors
 scipy
