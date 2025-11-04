@@ -1,0 +1,44 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "wheel",
+    "torch>=2.7.1",
+    "packaging"
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harmony-speech-engine"
+version = "0.1.1-rc2"
+description = "A high performance inference engine for Open Source Speech AI"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "AGPL-3.0"}
+authors = [{name = "Harmony.AI Solutions"}]
+keywords = ["AI", "Speech", "TTS", "STT", "Voice", "Inference", "PyTorch"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://project-harmony.ai/"
+Documentation = "https://github.com/harmony-ai-solutions/harmony-speech-engine/docs"
+GitHub = "https://github.com/harmony-ai-solutions/harmony-speech-engine"
+Huggingface = "https://huggingface.co/harmony-ai"
+
+[project.scripts]
+harmonyspeech = "harmonyspeech.endpoints.cli:main"
+
+[tool.setuptools]
+packages = {find = {exclude = ["kernels", "examples", "tests*"]}}
+
+[tool.setuptools.package-data]
+harmonyspeech = [
+    "endpoints/kobold/klite.embd",
+    "quantization/hadamard.safetensors",
+    "py.typed",
+    "modeling/layers/fused_moe/configs/*.json"
+]

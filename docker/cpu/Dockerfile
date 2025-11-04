@@ -1,13 +1,13 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # Set home dir
-ENV HOME /app/harmony-speech-engine
+ENV HOME=/app/harmony-speech-engine
 WORKDIR $HOME
 
 # Allow statements and log messages to immediately appear in the Knative logs
-ENV PYTHONUNBUFFERED True
+ENV PYTHONUNBUFFERED=True
 
 # Upgrade OS Packages + Prepare Python Environment
 RUN set -eux; \
@@ -37,8 +37,7 @@ ENV MAX_JOBS=${MAX_JOBS}
 # Set Hugging Face cache directory
 RUN mkdir -p /app/harmony-speech-engine/cache
 ENV HF_HOME=/app/harmony-speech-engine/cache
-
-ENV NUMBA_CACHE_DIR=$HF_HOME/numba_cache
+ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
 RUN HARMONYSPEECH_TARGET_DEVICE=cpu python3 -m pip install --no-cache-dir -e .
 
 # Workaround to properly install flash-attn. For reference => Not needed for Speech Engine currently

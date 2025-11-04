@@ -1,16 +1,16 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM rocm/pytorch:rocm6.2.3_ubuntu22.04_py3.10_pytorch_release_2.3.0
+FROM rocm/pytorch:rocm6.4.4_ubuntu24.04_py3.12_pytorch_release_2.7.1
 
 # Default ROCm ARCHes to build Harmony Speech Engine for.
 ARG PYTORCH_ROCM_ARCH="gfx908;gfx90a;gfx942;gfx1100"
 
 # Set home dir
-ENV HOME /app/harmony-speech-engine
+ENV HOME=/app/harmony-speech-engine
 WORKDIR $HOME
 
 # Allow statements and log messages to immediately appear in the Knative logs
-ENV PYTHONUNBUFFERED True
+ENV PYTHONUNBUFFERED=True
 
 # Upgrade OS Packages + Prepare Python Environment
 RUN set -eux; \
@@ -51,8 +51,7 @@ RUN cd /opt/rocm/share/amd_smi && python3 -m pip wheel . --wheel-dir=/install
 # Set Hugging Face cache directory
 RUN mkdir -p /app/harmony-speech-engine/cache
 ENV HF_HOME=/app/harmony-speech-engine/cache
-
-ENV NUMBA_CACHE_DIR=$HF_HOME/numba_cache
+ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
 RUN python3 -m pip install --no-cache-dir -e .
 
 # Workaround to properly install flash-attn. For reference => Not needed for Speech Engine currently

@@ -1,20 +1,20 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
 
 # Set home dir
-ENV HOME /app/harmony-speech-engine
+ENV HOME=/app/harmony-speech-engine
 WORKDIR $HOME
 
 # Allow statements and log messages to immediately appear in the Knative logs
-ENV PYTHONUNBUFFERED True
+ENV PYTHONUNBUFFERED=True
 
 # Upgrade OS Packages + Prepare Python Environment
 RUN set -eux; \
     export DEBIAN_FRONTEND=noninteractive \
     && apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y bzip2 g++ git make python3-pip tzdata libeigen3-dev gcc curl libsndfile1 zlib1g-dev ffmpeg libcudnn8 libmecab-dev \
+    && apt-get install -y bzip2 g++ git make python3-pip tzdata libeigen3-dev gcc curl libsndfile1 zlib1g-dev ffmpeg libcudnn9-cuda-12 libmecab-dev ccache \
     && rm -fr /var/lib/apt/lists/*
 
 # Alias python3 to python and upgrade pip
@@ -40,8 +40,7 @@ ENV CUDA_HOME=/usr/local/cuda
 # Set Hugging Face cache directory
 RUN mkdir -p /app/harmony-speech-engine/cache
 ENV HF_HOME=/app/harmony-speech-engine/cache
-
-ENV NUMBA_CACHE_DIR=$HF_HOME/numba_cache
+ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
 ENV TORCH_CUDA_ARCH_LIST="6.1 7.0 7.5 8.0 8.6 8.9 9.0+PTX"
 RUN python3 -m pip install --no-cache-dir -e .
 
