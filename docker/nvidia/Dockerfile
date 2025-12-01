@@ -1,6 +1,6 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04
 
 # Set home dir
 ENV HOME=/app/harmony-speech-engine
@@ -24,7 +24,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip
 # Clone Repo and install requirements
 RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
     && chmod +x docker/entrypoint.sh
-RUN pip3 install -r requirements-cuda.txt
+RUN pip3 install -r requirements-cuda.txt --break-system-packages
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all
@@ -42,7 +42,7 @@ RUN mkdir -p /app/harmony-speech-engine/cache
 ENV HF_HOME=/app/harmony-speech-engine/cache
 ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
 ENV TORCH_CUDA_ARCH_LIST="6.1 7.0 7.5 8.0 8.6 8.9 9.0+PTX"
-RUN python3 -m pip install --no-cache-dir -e .
+RUN python3 -m pip install --break-system-packages --no-cache-dir -e .
 
 # Workaround to properly install flash-attn. For reference => Not needed for Speech Engine currently
 # see: https://github.com/Dao-AILab/flash-attention/issues/453

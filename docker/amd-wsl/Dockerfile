@@ -25,9 +25,13 @@ RUN ln -s /usr/bin/python3 /usr/bin/python || true
 RUN apt install --only-upgrade python3-pip
 
 # Clone Repo and install requirements
-RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
-    && chmod +x docker/entrypoint.sh
-RUN pip3 install -r requirements-rocm.txt --break-system-packages --extra-index-url https://download.pytorch.org/whl/rocm6.4
+RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME
+COPY entrypoint.sh docker/amd-wsl/entrypoint.sh
+RUN chmod +x docker/amd-wsl/entrypoint.sh
+# Install requirements but skip torch and torchaudio (already in base image)
+RUN grep -v '^torch$' requirements-common.txt | grep -v '^torchaudio$' > requirements-common-notorch.txt && \
+    echo "-r requirements-common-notorch.txt" > requirements-rocm-notorch.txt && \
+    pip3 install -r requirements-rocm-notorch.txt --break-system-packages
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all
@@ -57,7 +61,7 @@ ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
 RUN python3 -m pip install --no-cache-dir --break-system-packages --no-build-isolation -e .
 
 # Entrypoint exec form doesn't do variable substitution automatically ($HOME)
-ENTRYPOINT ["/app/harmony-speech-engine/docker/entrypoint.sh"]
+ENTRYPOINT ["/app/harmony-speech-engine/docker/amd-wsl/entrypoint.sh"]
 EXPOSE 12080
 
 # Service UID needs write access to $HOME to create temporary folders, see #458

@@ -128,4 +128,4 @@ def load_or_download_model(model_name_or_path: str, device: str, ckpt_filename: 
             revision=revision,
             filename=ckpt_filename
         )
-    return torch.load(ckpt_path, map_location=device)
+    return torch.load(ckpt_path, map_location=device, weights_only=False)
