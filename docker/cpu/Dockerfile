@@ -19,12 +19,12 @@ RUN set -eux; \
 
 # Alias python3 to python and upgrade pip
 RUN ln -s /usr/bin/python3 /usr/bin/python
-RUN python3 -m pip install --no-cache-dir --upgrade pip
+RUN apt-get install --only-upgrade python3-pip
 
 # Clone Repo and install requirements
 RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
     && chmod +x docker/entrypoint.sh
-RUN pip3 install -r requirements-cpu.txt --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip3 install -r requirements-cpu.txt --break-system-packages --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all
@@ -38,7 +38,7 @@ ENV MAX_JOBS=${MAX_JOBS}
 RUN mkdir -p /app/harmony-speech-engine/cache
 ENV HF_HOME=/app/harmony-speech-engine/cache
 ENV NUMBA_CACHE_DIR=${HF_HOME}/numba_cache
-RUN HARMONYSPEECH_TARGET_DEVICE=cpu python3 -m pip install --no-cache-dir -e .
+RUN HARMONYSPEECH_TARGET_DEVICE=cpu python3 -m pip install --break-system-packages --no-cache-dir -e .
 
 # Workaround to properly install flash-attn. For reference => Not needed for Speech Engine currently
 # see: https://github.com/Dao-AILab/flash-attention/issues/453

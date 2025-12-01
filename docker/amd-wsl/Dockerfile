@@ -22,7 +22,7 @@ RUN set -eux; \
 
 # Alias python3 to python and upgrade pip
 RUN ln -s /usr/bin/python3 /usr/bin/python || true
-RUN apt install --only-upgrade python3-pip
+RUN apt-get install --only-upgrade python3-pip
 
 # Clone Repo and install requirements
 RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME
