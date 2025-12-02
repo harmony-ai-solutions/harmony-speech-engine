@@ -1,6 +1,6 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+FROM nvidia/cuda:12.9.1-devel-ubuntu24.04
 
 # Set home dir
 ENV HOME=/app/harmony-speech-engine
@@ -24,7 +24,7 @@ RUN apt-get install --only-upgrade python3-pip
 # Clone Repo and install requirements
 RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME \
     && chmod +x docker/entrypoint.sh
-RUN pip3 install -r requirements-cuda.txt --break-system-packages --extra-index-url https://download.pytorch.org/whl/cu130
+RUN pip3 install -r requirements-cuda.txt --break-system-packages --extra-index-url https://download.pytorch.org/whl/cu129
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all
