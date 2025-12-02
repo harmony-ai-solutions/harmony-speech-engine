@@ -1,6 +1,6 @@
 # Dockerfile for Harmony-Speech-Engine
 # mostly copied over from from PygmalionAI / Aphrodite Engine
-FROM nvidia/cuda:13.0.2-devel-ubuntu24.04
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 # Set home dir
 ENV HOME=/app/harmony-speech-engine
