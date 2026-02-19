@@ -163,6 +163,9 @@ cython_debug/
 # vscode
 .vscode/
 
+# Frontend repository (now separate) - exclude everything since it's a separat repo
+frontend/
+
 .current_work/
 
 /docs/api/jsclient/

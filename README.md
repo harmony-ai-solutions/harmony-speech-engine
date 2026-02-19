@@ -66,7 +66,7 @@ pip install -r requirements
 ```
 conda install conda-forge::nodejs
 cd frontend
-npm -i
+npm install
 ```
 </details>
 
@@ -83,8 +83,9 @@ For more details about the API & generating OpenAPI clients, please check our [A
 #### 4. Run the Frontend
 ```
 cd frontend
-npm run dev
+npm run dev:speech-engine
 ```
+The unified frontend supports both Harmony Link and Harmony Speech Engine; when running from this repository, use Speech Engine mode.
 This will start a vite server accessible via http://localhost:5173/
 
 #### 5. If you encounter any bugs, please create a Github Issue describing the problems you're facing. We're happy to help. :-) 

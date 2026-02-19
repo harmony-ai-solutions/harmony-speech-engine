@@ -14,10 +14,13 @@ For Nvidia GPU support:
 
 ## Docker Compose Files
 
-There are two `docker-compose` files provided:
+There are three compose files provided:
 
 - **`docker-compose.yml`**: Uses CPU only. Suitable if you don't have an NVIDIA GPU.
 - **`docker-compose.nvidia.yml`**: Utilizes NVIDIA GPUs for acceleration.
+- **`docker-compose.amd.yml`**: Uses AMD/ROCm-specific runtime settings.
+
+By default, these compose files use prebuilt images from Docker Hub (including `harmonyai/harmonyspeech-ui`).
 
 ## Running with Docker Compose (CPU Only)
 
@@ -43,8 +46,17 @@ This will start both the Harmony Speech Engine API and the frontend UI, using th
    ```bash
    docker compose -f docker-compose.nvidia.yml up
    ```
-By default, out images provided via docker hub will be downloaded. However you can also build
-the docker images yourself locally, by removing the hashtag '#' in front of the build instruction inside the compose files.
+By default, images are pulled from Docker Hub. You can also build images locally by uncommenting the `build:` sections in the compose files.
+
+For the frontend UI, the local build hint intentionally targets the Speech Engine variant:
+
+```yaml
+build:
+  context: ./frontend
+  dockerfile: Dockerfile.speech-engine
+```
+
+The unified frontend supports both Harmony Link and Harmony Speech Engine, but this repository and these compose files are documented for the **Speech Engine** variant.
 
 If you want to start the docker containers as services in the background, you can use the `-d` flag:
    ```bash
@@ -61,7 +73,7 @@ To stop the running containers:
    ```
 or for the NVIDIA GPU setup:
    ```bash
-   docker-compose -f docker-compose.nvidia.yml down
+   docker compose -f docker-compose.nvidia.yml down
    ```
 
 ## Configuration
