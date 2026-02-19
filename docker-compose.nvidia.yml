@@ -1,6 +1,8 @@
 services:
   harmonyspeech-ui:
-#    build: ./frontend
+#    build:
+#      context: ./frontend
+#      dockerfile: Dockerfile.speech-engine
     image: harmonyai/harmonyspeech-ui:latest
     pull_policy: always
     ports:

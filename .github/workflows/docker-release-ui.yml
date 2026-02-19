@@ -31,6 +31,34 @@ jobs:
           }
           echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Determine Frontend Reference
+        shell: pwsh
+        run: |
+          try {
+            $response = Invoke-WebRequest -Uri "https://api.github.com/repos/harmony-ai-solutions/harmony-link-ui/git/refs/tags/$env:VERSION" -Method Head -ErrorAction Stop
+            Write-Host "Frontend tag $env:VERSION found, using tag"
+            echo "FRONTEND_REF=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } catch {
+            Write-Host "Frontend tag $env:VERSION not found, using main branch"
+            echo "FRONTEND_REF=main" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Checkout Frontend UI Source
+        shell: pwsh
+        run: |
+          Write-Host "Preparing frontend source from harmony-link-ui at ref: $env:FRONTEND_REF"
+          if (Test-Path frontend) {
+            Remove-Item -Recurse -Force frontend
+          }
+          git clone --depth 1 --branch $env:FRONTEND_REF https://github.com/harmony-ai-solutions/harmony-link-ui.git frontend
+          Write-Host "Frontend source checkout complete."
+
+      - name: Log selected frontend ref and Dockerfile
+        shell: pwsh
+        run: |
+          Write-Host "Using FRONTEND_REF=$env:FRONTEND_REF"
+          Write-Host "Using Dockerfile=./frontend/Dockerfile.speech-engine"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
@@ -44,6 +72,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           context: ./frontend
+          file: ./frontend/Dockerfile.speech-engine
           push: true
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-ui:${{ env.VERSION }}

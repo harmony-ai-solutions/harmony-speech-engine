@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+
+*   **Unified Frontend Tooling Alignment**:
+    *   Clarified and standardized frontend mode usage for Harmony Speech Engine across Docker, compose guidance, and frontend documentation.
+    *   Updated UI release workflow behavior to explicitly build and publish the Speech Engine UI variant from the canonical unified frontend source.
+    *   Added clearer local setup guidance for cloning and running the unified frontend in Speech Engine mode from this repository context.
+
+### Fixes
+
+*   **Container UI Runtime Build Reliability**:
+    *   Improved Docker build context handling for the frontend image to avoid local dependency contamination that could break runtime UI builds.
+
 ## v0.1.1-rc1
 
 ### New Features
