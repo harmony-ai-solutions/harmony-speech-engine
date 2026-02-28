@@ -90,8 +90,20 @@
 
 ## Test Coverage Gaps
 
+**No Unit Tests:**
+- What's not tested: The `tests/` directory exists but contains no test files - only `__pycache__`.
+- Files: `tests/`
+- Risk: No automated verification of individual components; regressions can go unnoticed.
+- Priority: High
+
 **Integration Testing:**
 - What's not tested: Complex multi-step routing (VAD -> Embedding -> TTS) through the engine.
 - Files: `harmonyspeech/engine/harmonyspeech_engine.py`
 - Risk: Regressions in routing logic could break whole model workflows unnoticed.
 - Priority: High
+
+**VAD Compatibility Issues:**
+- What's not tested: VAD input processing expects Whisper VAD format but needs rework for Silero VAD compatibility. (It is actually working, but maybe needs better documentation)
+- Files: `harmonyspeech/task_handler/inputs.py:333`
+- Risk: Users using Silero VAD may get incorrect or failed processing.
+- Priority: Medium
