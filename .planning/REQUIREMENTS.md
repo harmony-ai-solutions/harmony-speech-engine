@@ -61,12 +61,30 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TFW-01 to TFW-04 | 1 | Pending |
-| UNIT-01 to UNIT-05 | 2 | Pending |
-| INT-01 to INT-03 | 3 | Pending |
-| E2E-01 to E2E-07 | 4-5 | Pending |
-| CI-01 to CI-03 | 1, 5 | Pending |
-| DOC-01 to DOC-02 | 1, 5 | Pending |
+| TFW-01 | 1 | Pending |
+| TFW-02 | 1 | Pending |
+| TFW-03 | 1 | Pending |
+| TFW-04 | 1 | Pending |
+| CI-01 | 1 | Pending |
+| CI-02 | 1 | Pending |
+| DOC-01 | 1 | Pending |
+| UNIT-01 | 2 | Pending |
+| UNIT-02 | 2 | Pending |
+| UNIT-03 | 2 | Pending |
+| UNIT-04 | 2 | Pending |
+| UNIT-05 | 2 | Pending |
+| INT-01 | 3 | Pending |
+| INT-02 | 3 | Pending |
+| INT-03 | 3 | Pending |
+| E2E-01 | 4 | Pending |
+| E2E-02 | 4 | Pending |
+| E2E-03 | 4 | Pending |
+| E2E-04 | 5 | Pending |
+| E2E-05 | 5 | Pending |
+| E2E-06 | 5 | Pending |
+| E2E-07 | 5 | Pending |
+| CI-03 | 5 | Pending |
+| DOC-02 | 5 | Pending |
 
 ---
 *Last updated: 2026-02-28 after requirements definition*
