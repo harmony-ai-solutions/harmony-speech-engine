@@ -26,7 +26,9 @@ _MODELS = {
     # Faster-Whisper
     "FasterWhisper": ("faster-wisper", "native"),
     # SileroVAD
-    "SileroVAD": ("silero-vad", "native")
+    "SileroVAD": ("silero-vad", "native"),
+    # KittenTTS
+    "KittenTTSSynthesizer": ("kittentts", "native"),
 }
 
 # Architecture -> type.

@@ -16,7 +16,8 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 # If multiple models need to be initialized to process request, add them as a group
 _TTS_MODEL_TYPES = [
     "OpenVoiceV1Synthesizer",
-    "MeloTTSSynthesizer"
+    "MeloTTSSynthesizer",
+    "KittenTTSSynthesizer"
 ]
 _TTS_MODEL_GROUPS = {
     "harmonyspeech": ["HarmonySpeechSynthesizer", "HarmonySpeechVocoder"],

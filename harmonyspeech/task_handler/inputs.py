@@ -157,6 +157,19 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                     f"SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput or"
                     f"DetectVoiceActivityRequestInput")
         return prepare_silero_vad_inputs(inputs)
+    elif model_config.model_type == "KittenTTSSynthesizer":
+        for r in requests_to_batch:
+            if (
+                isinstance(r.request_data, TextToSpeechRequestInput) or
+                isinstance(r.request_data, SynthesisRequestInput)
+            ):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or "
+                    f"SynthesisRequestInput"
+                )
+        return prepare_kittentts_synthesizer_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -545,6 +558,35 @@ def prepare_silero_vad_inputs(requests_to_batch: List[DetectVoiceActivityRequest
         }
         
         return (audio_tensor, vad_params)
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+
+    return inputs
+
+
+def prepare_kittentts_synthesizer_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    """
+    Prepare inputs for KittenTTSSynthesizer model.
+    Extracts text, voice name, and speed from the request.
+    No preprocessing or BERT tokenization needed — KittenTTS handles this internally.
+    """
+    def prepare(request):
+        input_text = request.input_text
+
+        # Voice selection: use voice_id from request or fall back to default
+        voice = request.voice_id if request.voice_id else "Jasper"
+
+        # Speed modifier
+        speed_modifier = 1.0
+        if request.generation_options:
+            if request.generation_options.speed:
+                speed_modifier = float(request.generation_options.speed)
+
+        return input_text, voice, speed_modifier
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

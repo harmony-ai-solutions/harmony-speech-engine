@@ -82,6 +82,8 @@ class ModelRunnerBase:
             outputs = self._execute_voicefixer_vocoder(inputs, requests_to_batch)
         elif model_type == "SileroVAD":
             outputs = self._execute_silero_vad(inputs, requests_to_batch)
+        elif model_type == "KittenTTSSynthesizer":
+            outputs = self._execute_kittentts_synthesizer(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
@@ -549,5 +551,40 @@ class ModelRunnerBase:
             initial_request = requests_to_batch[i]
             inference_result = run_vad(x)
             result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_kittentts_synthesizer(self, inputs, requests_to_batch):
+        """Execute KittenTTSSynthesizer to generate speech audio from text."""
+
+        def synthesize_text(input_params):
+            input_text, voice, speed_modifier = input_params
+
+            # Run KittenTTS generation
+            # Returns numpy float32 array at 24000 Hz
+            audio_array = self.model.generate(
+                text=input_text,
+                voice=voice,
+                speed=speed_modifier,
+                clean_text=True
+            )
+
+            # Flatten to 1D if needed (KittenTTS may return 2D)
+            if audio_array.ndim > 1:
+                audio_array = audio_array.flatten()
+
+            # Encode to WAV in memory and return as base64 string
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sample_rate, format='WAV')
+                wav_bytes = wav_buffer.getvalue()
+
+            encoded_audio = base64.b64encode(wav_bytes).decode('utf-8')
+            return encoded_audio
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize_text(x)
+            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
             outputs.append(result)
         return outputs

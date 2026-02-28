@@ -166,7 +166,11 @@ cython_debug/
 # Frontend repository (now separate) - exclude everything since it's a separat repo
 frontend/
 
-.current_work/
+#.current_work/
+.current_work/chatterbox-tts
+.current_work/chatterbox-tts-expansion
+.current_work/KittenTTS
+# .current_work/kittentts-integration
 
 /docs/api/jsclient/
 /docs/api/goclient/

@@ -168,3 +168,46 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda"
+
+  # KittenTTS - Ultra-lightweight ONNX TTS models (English only)
+  # Choose one variant based on your quality/size requirements:
+
+  # kitten-tts-mini: Highest quality, 80MB
+  - name: "kitten-tts-mini"
+    model: "KittenML/kitten-tts-mini-0.8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  # kitten-tts-micro: Good quality, 41MB
+  # - name: "kitten-tts-micro"
+  #   model: "KittenML/kitten-tts-micro-0.8"
+  #   model_type: "KittenTTSSynthesizer"
+  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+  #   max_batch_size: 4
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # kitten-tts-nano: Lightweight, 56MB fp32
+  # - name: "kitten-tts-nano"
+  #   model: "KittenML/kitten-tts-nano-0.8-fp32"
+  #   model_type: "KittenTTSSynthesizer"
+  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+  #   max_batch_size: 4
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # kitten-tts-nano-int8: Most compact, 25MB (quantized)
+  # - name: "kitten-tts-nano-int8"
+  #   model: "KittenML/kitten-tts-nano-0.8-int8"
+  #   model_type: "KittenTTSSynthesizer"
+  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+  #   max_batch_size: 4
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"

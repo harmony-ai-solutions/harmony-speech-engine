@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
+from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
@@ -78,6 +79,10 @@ _MODEL_CONFIGS = {
     # Silero VAD
     "SileroVAD": {
         "default": "native"
+    },
+    # KittenTTS
+    "KittenTTSSynthesizer": {
+        "default": "native"
     }
 }
 
@@ -126,6 +131,10 @@ _MODEL_WEIGHTS = {
     },
     # Silero VAD
     "SileroVAD": {
+        "default": "native"
+    },
+    # KittenTTS
+    "KittenTTSSynthesizer": {
         "default": "native"
     }
 }
@@ -263,6 +272,9 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     if load_format not in ['auto', 'onnx']:
                         use_onnx = False
                     model = load_silero_vad(onnx=use_onnx)
+                    return model
+                elif model_config.model_type == "KittenTTSSynthesizer":
+                    model = KittenTTSSynthesizer(model_name_or_path=model_config.model)
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)
