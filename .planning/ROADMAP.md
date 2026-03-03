@@ -62,7 +62,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md - Config unit tests (DeviceConfig, ModelConfig, EngineConfig, dtype resolution)
+- [x] 02-01-PLAN.md - Config unit tests (DeviceConfig, ModelConfig, EngineConfig, dtype resolution)
 - [ ] 02-02-PLAN.md - Engine initialization and model loader unit tests
 
 ---
