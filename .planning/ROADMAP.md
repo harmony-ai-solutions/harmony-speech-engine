@@ -10,7 +10,8 @@
 
 - [x] **Phase 1: Test Framework Foundation** - Core pytest setup, fixtures, directory structure, basic CI
  (completed 2026-03-03)
-- [ ] **Phase 2: Unit Testing Core Components** - Unit tests for config, engine, model loaders
+- [x] **Phase 2: Unit Testing Core Components** - Unit tests for config, engine, model loaders
+ (completed 2026-03-03)
 - [ ] **Phase 3: Integration Testing** - API endpoint and CLI integration tests
 - [ ] **Phase 4: E2E Testing - TTS Models** - End-to-end tests for TTS pipelines
 - [ ] **Phase 5: E2E Testing - Remaining Models & CI Finalization** - STT, VC, VAD, Voicefixer + coverage
@@ -59,7 +60,7 @@ Plans:
 4. Mock objects can be used in tests via `pytest-mock` fixture
 5. Async test functions can be executed with proper event loop handling via `pytest-asyncio`
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md - Config unit tests (DeviceConfig, ModelConfig, EngineConfig, dtype resolution)
@@ -80,7 +81,11 @@ Plans:
 2. Integration tests for CLI commands pass - CLI arguments parse correctly
 3. Integration tests verify request/response cycle - data flows correctly through the system
 
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md - API endpoint integration tests (conftest mock engine + test_api_endpoints.py)
+- [ ] 03-02-PLAN.md - CLI argument parser integration tests (test_cli.py)
 
 ---
 
@@ -127,8 +132,8 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Test Framework Foundation | 2/2 | Complete   | 2026-03-03 |
-| 2. Unit Testing Core Components | 0/2 | Not started | - |
-| 3. Integration Testing | 0/1 | Not started | - |
+| 2. Unit Testing Core Components | 2/2 | Complete   | 2026-03-03 |
+| 3. Integration Testing | 0/2 | Not started | - |
 | 4. E2E Testing - TTS Models | 0/1 | Not started | - |
 | 5. E2E Testing - Remaining Models & CI Finalization | 0/1 | Not started | - |
 
