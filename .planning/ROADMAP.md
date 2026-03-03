@@ -104,7 +104,13 @@ Plans:
 3. E2E tests for HarmonySpeech pass - text input produces audio output
 4. All E2E tests run in CPU mode without GPU dependencies
 
-**Plans:** TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 04-01-PLAN.md - KittenTTS E2E tests (4 variants: mini, micro, nano, nano-int8)
+- [ ] 04-02-PLAN.md - MeloTTS (4 stages) + OpenVoice V1 (3 stages) E2E tests
+- [ ] 04-03-PLAN.md - HarmonySpeech E2E tests (full pipeline + encode + synthesize)
+- [ ] 04-04-PLAN.md - CI workflow: parallel e2e jobs per TTS model
 
 ---
 
