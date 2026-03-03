@@ -35,7 +35,11 @@
 6. GitHub Actions workflow runs pytest on push/pull_request events
 7. Test documentation exists in `docs/testing.md` explaining how to run tests
 
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md - pytest directory structure, conftest.py fixtures, --device/--dtype CLI hooks
+- [ ] 01-02-PLAN.md - GitHub Actions CI workflow and docs/testing.md developer guide
 
 ---
 
@@ -117,7 +121,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Test Framework Foundation | 0/1 | Not started | - |
+| 1. Test Framework Foundation | 0/2 | In progress | - |
 | 2. Unit Testing Core Components | 0/1 | Not started | - |
 | 3. Integration Testing | 0/1 | Not started | - |
 | 4. E2E Testing - TTS Models | 0/1 | Not started | - |
