@@ -4,10 +4,10 @@
 
 ### Test Framework (TFW)
 
-- [ ] **TFW-01**: Project uses pytest as the testing framework
-- [ ] **TFW-02**: pytest configuration added to pyproject.toml with appropriate options
-- [ ] **TFW-03**: Test directory structure created (unit/, integration/, e2e/)
-- [ ] **TFW-04**: conftest.py created with shared fixtures for test setup/teardown
+- [x] **TFW-01**: Project uses pytest as the testing framework
+- [x] **TFW-02**: pytest configuration added to pyproject.toml with appropriate options
+- [x] **TFW-03**: Test directory structure created (unit/, integration/, e2e/)
+- [x] **TFW-04**: conftest.py created with shared fixtures for test setup/teardown
 
 ### Unit Tests (UNIT)
 
@@ -61,10 +61,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TFW-01 | 1 | Pending |
-| TFW-02 | 1 | Pending |
-| TFW-03 | 1 | Pending |
-| TFW-04 | 1 | Pending |
+| TFW-01 | 1 | Complete |
+| TFW-02 | 1 | Complete |
+| TFW-03 | 1 | Complete |
+| TFW-04 | 1 | Complete |
 | CI-01 | 1 | Pending |
 | CI-02 | 1 | Pending |
 | DOC-01 | 1 | Pending |
