@@ -42,3 +42,30 @@ harmonyspeech = [
     "py.typed",
     "modeling/layers/fused_moe/configs/*.json"
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "unit: marks tests as unit tests (fast, fully mocked)",
+    "integration: marks tests as integration tests (component interaction, partially mocked)",
+    "e2e: marks tests as end-to-end tests (real models, slow, CPU-only)",
+    "slow: marks tests that take > 30 seconds to run",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+exclude = [".git", "__pycache__", "models/", ".planning/"]
