@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-03T18:14:55.805Z"
+progress:
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+---
+
 # Project State
 
 ## Project Reference
@@ -46,6 +59,9 @@ Recent decisions affecting current work:
 - pytest chosen as testing framework (from PROJECT.md)
 - CPU-only execution for CI compatibility (from PROJECT.md)
 - Model-by-model test structure for modular testing (from PROJECT.md)
+- [Phase 01-test-framework-foundation]: Using Python 3.12 in CI to match requires-python in pyproject.toml
+- [Phase 01-test-framework-foundation]: Separate lint job running in parallel with test job for faster CI
+- [Phase 01-test-framework-foundation]: Strict CUDA validation - tests fail immediately if --device=cuda on CPU-only machine
 
 ### Pending Todos
 

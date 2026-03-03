@@ -35,13 +35,13 @@
 
 ### CI/CD (CI)
 
-- [ ] **CI-01**: GitHub Actions workflow created for automated test execution
-- [ ] **CI-02**: CI configured to run tests in CPU-only mode
+- [x] **CI-01**: GitHub Actions workflow created for automated test execution
+- [x] **CI-02**: CI configured to run tests in CPU-only mode
 - [ ] **CI-03**: Coverage reporting configured using pytest-cov
 
 ### Documentation (DOC)
 
-- [ ] **DOC-01**: Test documentation created explaining how to run tests
+- [x] **DOC-01**: Test documentation created explaining how to run tests
 - [ ] **DOC-02**: Test documentation explains how to interpret results
 
 ## v2 Requirements (Deferred)
@@ -65,9 +65,9 @@
 | TFW-02 | 1 | Complete |
 | TFW-03 | 1 | Complete |
 | TFW-04 | 1 | Complete |
-| CI-01 | 1 | Pending |
-| CI-02 | 1 | Pending |
-| DOC-01 | 1 | Pending |
+| CI-01 | 1 | Complete |
+| CI-02 | 1 | Complete |
+| DOC-01 | 1 | Complete |
 | UNIT-01 | 2 | Pending |
 | UNIT-02 | 2 | Pending |
 | UNIT-03 | 2 | Pending |
