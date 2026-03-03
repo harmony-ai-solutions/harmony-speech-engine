@@ -12,16 +12,16 @@
 ### Unit Tests (UNIT)
 
 - [ ] **UNIT-01**: Unit tests created for config parsing (harmonyspeech/common/config.py)
-- [ ] **UNIT-02**: Unit tests created for engine initialization (harmonyspeech/engine/)
-- [ ] **UNIT-03**: Unit tests created for model loader (harmonyspeech/modeling/loader.py)
+- [x] **UNIT-02**: Unit tests created for engine initialization (harmonyspeech/engine/)
+- [x] **UNIT-03**: Unit tests created for model loader (harmonyspeech/modeling/loader.py)
 - [ ] **UNIT-04**: Mocking support configured using pytest-mock
 - [ ] **UNIT-05**: Async testing support configured using pytest-asyncio
 
 ### Integration Tests (INT)
 
-- [ ] **INT-01**: Integration tests created for OpenAI-compatible API endpoints
+- [x] **INT-01**: Integration tests created for OpenAI-compatible API endpoints
 - [ ] **INT-02**: Integration tests created for CLI commands
-- [ ] **INT-03**: Integration tests verify request/response cycle correctly
+- [x] **INT-03**: Integration tests verify request/response cycle correctly
 
 ### End-to-End Tests (E2E)
 
@@ -69,13 +69,13 @@
 | CI-02 | 1 | Complete |
 | DOC-01 | 1 | Complete |
 | UNIT-01 | 2 | Pending |
-| UNIT-02 | 2 | Pending |
-| UNIT-03 | 2 | Pending |
+| UNIT-02 | 2 | Complete |
+| UNIT-03 | 2 | Complete |
 | UNIT-04 | 2 | Pending |
 | UNIT-05 | 2 | Pending |
-| INT-01 | 3 | Pending |
+| INT-01 | 3 | Complete |
 | INT-02 | 3 | Pending |
-| INT-03 | 3 | Pending |
+| INT-03 | 3 | Complete |
 | E2E-01 | 4 | Pending |
 | E2E-02 | 4 | Pending |
 | E2E-03 | 4 | Pending |
