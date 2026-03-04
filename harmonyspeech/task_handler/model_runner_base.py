@@ -93,15 +93,28 @@ class ModelRunnerBase:
         request_id = initial_request.request_id
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
+        
+        # Build kwargs based on result_cls type
+        kwargs = {
+            "request_id": request_id,
+            "finish_reason": "stop",
+            "metrics": metrics
+        }
+        
+        # TextToSpeechRequestOutput requires text and output parameters
+        if result_cls == TextToSpeechRequestOutput:
+            input_text = ""
+            if hasattr(initial_request.request_data, 'input_text'):
+                input_text = initial_request.request_data.input_text
+            kwargs["text"] = input_text
+            kwargs["output"] = inference_result
+        else:
+            kwargs["output"] = inference_result
+        
         result = ExecutorResult(
             request_id=request_id,
             input_data=initial_request.request_data,
-            result_data=result_cls(
-                request_id=request_id,
-                output=inference_result,
-                finish_reason="stop",
-                metrics=metrics
-            )
+            result_data=result_cls(**kwargs)
         )
         return result
 

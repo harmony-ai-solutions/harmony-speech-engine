@@ -40,8 +40,8 @@ class TextToSpeechRequestOutput(RequestOutput):
     def __init__(
         self,
         request_id: str,
-        text: str,
-        output: str,
+        text: str = "",
+        output: str = "",
         finish_reason: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ) -> None:
