@@ -71,6 +71,64 @@ pytest --dtype=float16
 > **Strict validation:** If `--device=cuda` is passed on a machine without CUDA, the test suite
 > will exit immediately with an error. This is by design to prevent silent failures.
 
+### Run a single model's E2E tests
+
+```bash
+pytest -k "whisper" tests/e2e/ --device=cpu --dtype=float32
+pytest -k "kittentts" tests/e2e/ --device=cpu --dtype=float32
+pytest -k "voicefixer" tests/e2e/ --device=cpu --dtype=float32
+pytest -k "vad" tests/e2e/ --device=cpu --dtype=float32
+```
+
+> **Tip:** E2E tests require internet access on first run to download model weights. Weights are cached in a temporary directory per test session.
+
+---
+
+## Coverage Reports
+
+The test suite generates a coverage report automatically when you run `pytest`. Coverage is collected for the `harmonyspeech/` package, excluding `harmonyspeech/modeling/models/` (third-party model code).
+
+### Reading the terminal output
+
+After running tests, you will see a table like:
+
+```
+Name                                    Stmts   Miss Branch  BrCov   Cover
+---------------------------------------------------------------------------
+harmonyspeech/common/config.py             85      3     24    92%     96%
+harmonyspeech/engine/async_harmonyspeech.py 120   12     30    80%     88%
+...
+TOTAL                                    1240    187    420    82%     85%
+```
+
+**Column meanings:**
+
+| Column  | Meaning |
+|---------|---------|
+| `Stmts` | Total executable statements in the file |
+| `Miss`  | Statements never reached during tests |
+| `Branch`| Total conditional branches (if/else, loops) |
+| `BrCov` | Percentage of branches covered |
+| `Cover` | Overall line coverage percentage |
+
+**Line coverage** measures whether each line of code was *executed at least once*. **Branch coverage** additionally checks whether both sides of every conditional (`if`/`else`, `for` empty, `while` exit) were tested. Branch coverage is a stricter metric.
+
+A file showing `Cover: 95%` but `BrCov: 70%` means most lines run, but some `if/else` paths are never tested.
+
+### Generating an HTML report
+
+For a browsable, line-by-line view of what is and isn't covered:
+
+```bash
+pytest --cov=harmonyspeech --cov-omit="harmonyspeech/modeling/models/*" --cov-report=html
+open htmlcov/index.html   # macOS
+xdg-open htmlcov/index.html  # Linux
+```
+
+### CI coverage artifact
+
+In GitHub Actions, the main test job uploads `coverage.xml` as a build artifact. Download it from the run's "Artifacts" section to inspect coverage in CI without re-running tests locally.
+
 ---
 
 ## Test Structure

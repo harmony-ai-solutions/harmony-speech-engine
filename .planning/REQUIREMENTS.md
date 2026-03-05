@@ -11,23 +11,23 @@
 
 ### Unit Tests (UNIT)
 
-- [ ] **UNIT-01**: Unit tests created for config parsing (harmonyspeech/common/config.py)
+- [x] **UNIT-01**: Unit tests created for config parsing (harmonyspeech/common/config.py)
 - [x] **UNIT-02**: Unit tests created for engine initialization (harmonyspeech/engine/)
 - [x] **UNIT-03**: Unit tests created for model loader (harmonyspeech/modeling/loader.py)
-- [ ] **UNIT-04**: Mocking support configured using pytest-mock
-- [ ] **UNIT-05**: Async testing support configured using pytest-asyncio
+- [x] **UNIT-04**: Mocking support configured using pytest-mock
+- [x] **UNIT-05**: Async testing support configured using pytest-asyncio
 
 ### Integration Tests (INT)
 
 - [x] **INT-01**: Integration tests created for OpenAI-compatible API endpoints
-- [ ] **INT-02**: Integration tests created for CLI commands
+- [x] **INT-02**: Integration tests created for CLI commands
 - [x] **INT-03**: Integration tests verify request/response cycle correctly
 
 ### End-to-End Tests (E2E)
 
-- [ ] **E2E-01**: End-to-end tests created for KittenTTS model
-- [ ] **E2E-02**: End-to-end tests created for MeloTTS model
-- [ ] **E2E-03**: End-to-end tests created for HarmonySpeech model
+- [x] **E2E-01**: End-to-end tests created for KittenTTS model
+- [x] **E2E-02**: End-to-end tests created for MeloTTS model
+- [x] **E2E-03**: End-to-end tests created for HarmonySpeech model
 - [ ] **E2E-04**: End-to-end tests created for STT (Whisper) model
 - [ ] **E2E-05**: End-to-end tests created for Voice Conversion (OpenVoice)
 - [ ] **E2E-06**: End-to-end tests created for VAD
@@ -68,17 +68,17 @@
 | CI-01 | 1 | Complete |
 | CI-02 | 1 | Complete |
 | DOC-01 | 1 | Complete |
-| UNIT-01 | 2 | Pending |
+| UNIT-01 | 2 | Complete |
 | UNIT-02 | 2 | Complete |
 | UNIT-03 | 2 | Complete |
-| UNIT-04 | 2 | Pending |
-| UNIT-05 | 2 | Pending |
+| UNIT-04 | 2 | Complete |
+| UNIT-05 | 2 | Complete |
 | INT-01 | 3 | Complete |
-| INT-02 | 3 | Pending |
+| INT-02 | 3 | Complete |
 | INT-03 | 3 | Complete |
-| E2E-01 | 4 | Pending |
-| E2E-02 | 4 | Pending |
-| E2E-03 | 4 | Pending |
+| E2E-01 | 4 | Complete |
+| E2E-02 | 4 | Complete |
+| E2E-03 | 4 | Complete |
 | E2E-04 | 5 | Pending |
 | E2E-05 | 5 | Pending |
 | E2E-06 | 5 | Pending |
