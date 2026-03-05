@@ -11,6 +11,8 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 
 
 # KittenTTS voices available across all variants
@@ -356,6 +358,54 @@ def harmonyspeech_engine(models_cache_dir):
         engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs))
     
     return (engine, serving_tts, serving_embed)
+
+
+# FasterWhisper STT engine fixture
+@pytest.fixture(scope="session")
+def whisper_engine(models_cache_dir):
+    """Session-scoped engine fixture for FasterWhisper STT tests (whisper-tiny variant)."""
+    model_config = ModelConfig(
+        name="faster-whisper",
+        model="Systran/faster-whisper-tiny",
+        model_type="FasterWhisper",
+        max_batch_size=1,
+        dtype="float32",
+        device_config=DeviceConfig(device="cpu"),
+    )
+    engine_config = EngineConfig(model_configs=[model_config])
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_stt = OpenAIServingSpeechToText(
+        engine,
+        OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_stt)
+
+
+# SileroVAD engine fixture
+@pytest.fixture(scope="session")
+def vad_engine(models_cache_dir):
+    """Session-scoped engine fixture for SileroVAD voice activity detection tests."""
+    model_config = ModelConfig(
+        name="silero-vad",
+        model="silero-vad",
+        model_type="SileroVAD",
+        max_batch_size=1,
+        dtype="float32",
+        device_config=DeviceConfig(device="cpu"),
+    )
+    engine_config = EngineConfig(model_configs=[model_config])
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_vad = OpenAIServingVoiceActivityDetection(
+        engine,
+        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_vad)
 
 
 @pytest.fixture(scope="session")
