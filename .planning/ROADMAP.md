@@ -14,8 +14,8 @@
  (completed 2026-03-03)
 - [x] **Phase 3: Integration Testing** - API endpoint and CLI integration tests
  (completed 2026-03-03)
-- [ ] **Phase 4: E2E Testing - TTS Models** - End-to-end tests for TTS pipelines
-- [ ] **Phase 5: E2E Testing - Remaining Models & CI Finalization** - STT, VC, VAD, Voicefixer + coverage
+- [x] **Phase 4: E2E Testing - TTS Models** - End-to-end tests for TTS pipelines
+- [-] **Phase 5: E2E Testing - Remaining Models & CI Finalization** - STT, VC, VAD, Voicefixer + coverage
 
 ---
 
@@ -41,8 +41,8 @@
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 01-01-PLAN.md - pytest directory structure, conftest.py fixtures, --device/--dtype CLI hooks
-- [ ] 01-02-PLAN.md - GitHub Actions CI workflow and docs/testing.md developer guide
+- [x] 01-01-PLAN.md - pytest directory structure, conftest.py fixtures, --device/--dtype CLI hooks
+- [x] 01-02-PLAN.md - GitHub Actions CI workflow and docs/testing.md developer guide
 
 ---
 
@@ -65,7 +65,7 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md - Config unit tests (DeviceConfig, ModelConfig, EngineConfig, dtype resolution)
-- [ ] 02-02-PLAN.md - Engine initialization and model loader unit tests
+- [x] 02-02-PLAN.md - Engine initialization and model loader unit tests
 
 ---
 
@@ -110,7 +110,7 @@ Plans:
 - [x] 04-01-PLAN.md - KittenTTS E2E tests (4 variants: mini, micro, nano, nano-int8)
 - [x] 04-02-PLAN.md - MeloTTS (4 stages) + OpenVoice V1 (3 stages) E2E tests
 - [x] 04-03-PLAN.md - HarmonySpeech E2E tests (full pipeline + encode + synthesize)
-- [ ] 04-04-PLAN.md - CI workflow: parallel e2e jobs per TTS model
+- [x] 04-04-PLAN.md - CI workflow: parallel e2e jobs per TTS model
 
 ---
 
@@ -130,7 +130,12 @@ Plans:
 5. Coverage reporting is generated via pytest-cov
 6. Test documentation explains how to interpret test results and coverage reports
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 05-01-PLAN.md - STT (Whisper) + VAD (SileroVAD) E2E tests
+- [ ] 05-02-PLAN.md - Voicefixer audio restoration E2E tests
+- [ ] 05-03-PLAN.md - CI coverage reporting + docs/testing.md update
 
 ---
 
@@ -141,8 +146,8 @@ Plans:
 | 1. Test Framework Foundation | 2/2 | Complete   | 2026-03-03 |
 | 2. Unit Testing Core Components | 2/2 | Complete   | 2026-03-03 |
 | 3. Integration Testing | 2/2 | Complete   | 2026-03-03 |
-| 4. E2E Testing - TTS Models | 3/4 | In Progress | 2026-03-05 |
-| 5. E2E Testing - Remaining Models & CI Finalization | 0/1 | Not started | - |
+| 4. E2E Testing - TTS Models | 4/4 | Complete | 2026-03-05 |
+| 5. E2E Testing - Remaining Models & CI Finalization | 0/3 | In Progress | - |
 
 ---
 
