@@ -120,7 +120,7 @@ Plans:
 
 **Depends on:** Phase 4
 
-**Requirements:** E2E-04, E2E-05, E2E-06, E2E-07, CI-03, DOC-02
+**Requirements:** E2E-04, E2E-06, E2E-07, CI-03, DOC-02 (E2E-05 excluded — Voice Conversion covered in Phase 4)
 
 **Success Criteria** (what must be TRUE):
 1. E2E tests for STT (Whisper) pass - audio input produces text output
