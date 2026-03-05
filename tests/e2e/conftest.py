@@ -298,6 +298,66 @@ def openvoice_v1_en_engine(models_cache_dir):
     return (engine, serving_tts, serving_embed, serving_vc)
 
 
+# HarmonySpeech engine fixture
+@pytest.fixture(scope="session")
+def harmonyspeech_engine(models_cache_dir):
+    """Session-scoped engine fixture for HarmonySpeech tests.
+    
+    Loads 3 models:
+    - hs1-encoder (HarmonySpeechEncoder)
+    - hs1-synthesizer (HarmonySpeechSynthesizer)
+    - hs1-vocoder (HarmonySpeechVocoder)
+    
+    Returns: (engine, serving_tts, serving_embed)
+    - engine: AsyncHarmonySpeech instance
+    - serving_tts: OpenAIServingTextToSpeech for full pipeline tests
+    - serving_embed: OpenAIServingVoiceEmbedding for embed stage tests
+    
+    For direct synthesis/vocode stage tests, use engine.generate() directly with
+    SynthesisRequestInput or VocodeRequestInput.
+    """
+    from harmonyspeech.common.inputs import SynthesisRequestInput, VocodeRequestInput
+    from harmonyspeech.common.outputs import SpeechSynthesisRequestOutput, VocodeRequestOutput
+    
+    device_config = DeviceConfig(device="cpu")
+    model_configs = [
+        ModelConfig(
+            name="hs1-encoder",
+            model="harmony-ai/harmony-speech-v1",
+            model_type="HarmonySpeechEncoder",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=device_config,
+        ),
+        ModelConfig(
+            name="hs1-synthesizer",
+            model="harmony-ai/harmony-speech-v1",
+            model_type="HarmonySpeechSynthesizer",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=device_config,
+        ),
+        ModelConfig(
+            name="hs1-vocoder",
+            model="harmony-ai/harmony-speech-v1",
+            model_type="HarmonySpeechVocoder",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=device_config,
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config)
+
+    serving_tts = OpenAIServingTextToSpeech(
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs))
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs))
+    
+    return (engine, serving_tts, serving_embed)
+
+
 @pytest.fixture(scope="session")
 def mock_raw_request():
     """Session-scoped mock FastAPI Request for serving handler calls."""
