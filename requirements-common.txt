@@ -45,7 +45,7 @@ eunjeon
 nltk
 silero-vad
 # Downgrade ctranslate, see: https://github.com/SYSTRAN/faster-whisper/issues/1086
-ctranslate2
+ctranslate2==4.4.0
 
 # KittenTTS dependencies
 onnxruntime
