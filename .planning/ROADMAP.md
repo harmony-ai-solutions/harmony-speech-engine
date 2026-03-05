@@ -133,7 +133,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 05-01-PLAN.md - STT (Whisper) + VAD (SileroVAD) E2E tests
+- [x] 05-01-PLAN.md - STT (Whisper) + VAD (SileroVAD) E2E tests
 - [ ] 05-02-PLAN.md - Voicefixer audio restoration E2E tests
 - [ ] 05-03-PLAN.md - CI coverage reporting + docs/testing.md update
 
