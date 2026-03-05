@@ -15,7 +15,7 @@
 - [x] **Phase 3: Integration Testing** - API endpoint and CLI integration tests
  (completed 2026-03-03)
 - [x] **Phase 4: E2E Testing - TTS Models** - End-to-end tests for TTS pipelines
-- [-] **Phase 5: E2E Testing - Remaining Models & CI Finalization** - STT, VC, VAD, Voicefixer + coverage
+- [x] **Phase 5: E2E Testing - Remaining Models & CI Finalization** - STT, VC, VAD, Voicefixer + coverage
 
 ---
 
@@ -135,7 +135,7 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md - STT (Whisper) + VAD (SileroVAD) E2E tests
 - [x] 05-02-PLAN.md - Voicefixer audio restoration E2E tests
-- [ ] 05-03-PLAN.md - CI coverage reporting + docs/testing.md update
+- [x] 05-03-PLAN.md - CI coverage reporting + docs/testing.md update
 
 ---
 
@@ -147,7 +147,7 @@ Plans:
 | 2. Unit Testing Core Components | 2/2 | Complete   | 2026-03-03 |
 | 3. Integration Testing | 2/2 | Complete   | 2026-03-03 |
 | 4. E2E Testing - TTS Models | 4/4 | Complete | 2026-03-05 |
-| 5. E2E Testing - Remaining Models & CI Finalization | 0/3 | In Progress | - |
+| 5. E2E Testing - Remaining Models & CI Finalization | 3/3 | Complete | 2026-03-05 |
 
 ---
 
