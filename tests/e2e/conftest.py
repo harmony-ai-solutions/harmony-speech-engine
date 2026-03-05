@@ -408,6 +408,30 @@ def vad_engine(models_cache_dir):
     return (engine, serving_vad)
 
 
+# Whisper VAD engine fixture (uses OpenAIServingVoiceActivityDetection for VAD)
+@pytest.fixture(scope="session")
+def whisper_vad_engine(models_cache_dir):
+    """Session-scoped engine fixture for Whisper-based VAD tests."""
+    model_config = ModelConfig(
+        name="faster-whisper",
+        model="Systran/faster-whisper-tiny",
+        model_type="FasterWhisper",
+        max_batch_size=1,
+        dtype="float32",
+        device_config=DeviceConfig(device="cpu"),
+    )
+    engine_config = EngineConfig(model_configs=[model_config])
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_vad = OpenAIServingVoiceActivityDetection(
+        engine,
+        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_vad)
+
+
 @pytest.fixture(scope="session")
 def mock_raw_request():
     """Session-scoped mock FastAPI Request for serving handler calls."""
