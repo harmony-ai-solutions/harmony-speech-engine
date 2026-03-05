@@ -27,6 +27,8 @@ class SchedulingBudget:
         return 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
 
     def remaining_request_budget(self, model: str):
+        if model not in self.request_per_model_budget:
+            return 0
         return self.request_per_model_budget[model] - self.num_per_model_requests[model]
 
     def add_num_requests(self, model: str, num_requests: int):

@@ -7,7 +7,7 @@ from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
-from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
+from harmonyspeech.common.outputs import TextToSpeechRequestOutput, SpeechSynthesisRequestOutput, RequestOutput
 from harmonyspeech.endpoints.openai.protocol import *
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
@@ -94,13 +94,18 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         # Ensure we're receiving a proper TTS Output here
         assert final_res is not None
-        assert isinstance(final_res, TextToSpeechRequestOutput)
+        
+        # Handle both TextToSpeechRequestOutput (KittenTTS) and SpeechSynthesisRequestOutput (MeloTTS)
+        if isinstance(final_res, TextToSpeechRequestOutput) or isinstance(final_res, SpeechSynthesisRequestOutput):
+            audio_data = final_res.output
+        else:
+            raise ValueError(f"Expected TextToSpeechRequestOutput or SpeechSynthesisRequestOutput, got {type(final_res).__name__}")
 
         response = TextToSpeechResponse(
             id=request_id,
             created=created_time,
             model=model_name,
-            data=final_res.output
+            data=audio_data
         )
 
         return response

@@ -193,7 +193,7 @@ class HarmonySpeechEngine:
                 if cfg.model_type == "OpenVoiceV1Synthesizer" and cfg.language == request.language_id:
                     request.model = cfg.name
                     break
-        elif (isinstance(request, VoiceConversionRequest) or
+        elif (isinstance(request, VoiceConversionRequestInput) or
               (
                   isinstance(request, TextToSpeechRequestInput) and
                   request.mode == "voice_cloning" and  # Only required when voice cloning
@@ -264,7 +264,7 @@ class HarmonySpeechEngine:
                 if cfg.model_type == "MeloTTSSynthesizer" and cfg.language == request.language_id:
                     request.model = cfg.name
                     break
-        elif (isinstance(request, VoiceConversionRequest) or
+        elif (isinstance(request, VoiceConversionRequestInput) or
               (
                   isinstance(request, TextToSpeechRequestInput) and
                   request.mode == "voice_cloning" and  # Only required when voice cloning

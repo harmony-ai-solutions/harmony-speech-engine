@@ -263,7 +263,9 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
             # Bailout for native models
             if model_class == "native" and hf_config == "native":
                 if model_config.model_type == "FasterWhisper":
-                    model = WhisperModel(model_config.model)
+                    # Convert torch.device to string (e.g., "cpu", "cuda")
+                    device_str = str(device_config.device)
+                    model = WhisperModel(model_config.model, device=device_str)
                     return model
                 elif model_config.model_type == "SileroVAD":                    
                     # Support both ONNX and PyTorch formats based on config

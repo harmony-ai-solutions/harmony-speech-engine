@@ -282,8 +282,8 @@ class ModelRunnerBase:
             audio_ref, input_embedding_ref, source_embedding_ref = input_params
 
             # Prepare conversion
-            target_embedding = torch.load(input_embedding_ref).to(self.device)
-            src_embedding = torch.load(source_embedding_ref).to(self.device)
+            target_embedding = torch.load(input_embedding_ref, weights_only=False).to(self.device)
+            src_embedding = torch.load(source_embedding_ref, weights_only=False).to(self.device)
             audio = torch.tensor(audio_ref).float()
             y = torch.FloatTensor(audio).to(self.device)
             y = y.unsqueeze(0)
