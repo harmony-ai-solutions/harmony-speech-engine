@@ -13,6 +13,7 @@ from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoic
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
 from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
+from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 
 
 # KittenTTS voices available across all variants
@@ -430,6 +431,46 @@ def whisper_vad_engine(models_cache_dir):
         OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
     )
     return (engine, serving_vad)
+
+
+# VoiceFixer audio restoration engine fixture
+@pytest.fixture(scope="session")
+def voicefixer_engine(models_cache_dir):
+    """Session-scoped engine fixture for VoiceFixer audio restoration tests.
+
+    Loads 2 models in pipeline sequence:
+    - voicefixer-restorer (VoiceFixerRestorer): audio → enhanced mel spectrogram
+    - voicefixer-vocoder (VoiceFixerVocoder): mel spectrogram → restored audio
+    """
+    device_config = DeviceConfig(device="cpu")
+    model_configs = [
+        ModelConfig(
+            name="voicefixer-restorer",
+            model="jlmarrugom/voice_fixer",
+            model_type="VoiceFixerRestorer",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=device_config,
+        ),
+        ModelConfig(
+            name="voicefixer-vocoder",
+            model="jlmarrugom/voice_fixer",
+            model_type="VoiceFixerVocoder",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=device_config,
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_audio = OpenAIServingAudioConversion(
+        engine,
+        OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_audio)
 
 
 @pytest.fixture(scope="session")
