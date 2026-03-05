@@ -43,7 +43,7 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
     async def create_voice_embedding(
         self, request: EmbedSpeakerRequest, raw_request: Request
-    ) -> Union[ErrorResponse, AsyncGenerator[str, None], TextToSpeechResponse]:
+    ) -> Union[ErrorResponse, AsyncGenerator[str, None], EmbedSpeakerResponse]:
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
@@ -74,7 +74,7 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput = None
+        final_res: RequestOutput|None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():

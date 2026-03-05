@@ -73,7 +73,7 @@ class AudioConversionRequest(BaseRequest):
     Used to convert the style or content of an audio in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
-    source_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    source_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
     output_options: Optional[AudioOutputOptions] = Field(
         default=None,
         description="Options for returning the generated audio, see documentation for possible values"
@@ -169,7 +169,7 @@ class AudioDataResponse(BaseResponse):
     AudioDataResponse
     Result Audio Data
     """
-    data: str = Field(default=None, description="Audio Bytes in requested format of the initial request")
+    data: str = Field(default="", description="Audio Bytes in requested format of the initial request")
 
 
 class TextToSpeechResponse(AudioDataResponse):
@@ -204,7 +204,7 @@ class SpeechTranscribeRequest(BaseRequest):
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
     input_audio: str = Field(
-        default=None,
+        default="",
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
     get_language: Optional[bool] = Field(
@@ -235,7 +235,7 @@ class DetectVoiceActivityRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     """
     input_audio: str = Field(
-        default=None,
+        default="",
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
     )
     get_timestamps: Optional[bool] = Field(
@@ -282,7 +282,7 @@ class EmbedSpeakerRequest(BaseRequest):
     Voice Conversion functionality.
     Please refer to the documentation whether an embedding is compatible between different models.
     """
-    input_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    input_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
 
 
 class EmbedSpeakerResponse(BaseResponse):
@@ -292,7 +292,7 @@ class EmbedSpeakerResponse(BaseResponse):
     """
     id: str = Field(default_factory=lambda: f"embed-{random_uuid()}")
     data: str = Field(
-        default=None,
+        default="",
         description="Speaker embedding data for the audio provided in the initial request, encoded in base64"
     )
 
@@ -304,7 +304,7 @@ class SynthesizeAudioRequest(BaseRequest):
     """
     input: str = Field(default="", description="the text to synthesize")
     language: str = Field(
-        default=None,
+        default="",
         description="language to synthesize. Only if the model supports language IDs. "
                     "Please refer to the model's documentation for which values are availiable.")
     voice: Optional[str] = Field(
@@ -336,7 +336,7 @@ class VocodeAudioRequest(BaseRequest):
     VocodeAudioRequest
     Used to run a vocoder model over a provided input audio
     """
-    input_audio: str = Field(default=None, description="Binary audio data to be processed, encoded in base64")
+    input_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
 
 
 class VocodeAudioResponse(AudioDataResponse):

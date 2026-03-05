@@ -83,7 +83,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput = None
+        final_res: RequestOutput|None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():

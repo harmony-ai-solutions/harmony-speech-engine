@@ -70,7 +70,7 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput = None
+        final_res: RequestOutput|None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():
@@ -96,7 +96,7 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
             id=request_id,
             created=created_time,
             model=model_name,
-            speech_activity=result_data["speech_activity"] if "speech_activity" in result_data else "",
+            speech_activity=result_data["speech_activity"] if "speech_activity" in result_data else False,
             timestamps=result_data["segments"] if "segments" in result_data and request.get_timestamps else None,
         )
 
