@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    name: Run Tests (Python 3.12, CPU)
+    name: Unit & Integration Tests (Python 3.12)
     runs-on: ubuntu-latest
 
     steps:
@@ -35,13 +35,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmecab-dev ffmpeg libsndfile1 espeak-ng
 
-      - name: Install CPU dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
 
-      - name: Run pytest (CPU-only mode)
+      - name: Run unit and integration tests
         run: |
           python -m pytest --device=cpu --dtype=float32 -v --tb=short -m "not e2e"
 

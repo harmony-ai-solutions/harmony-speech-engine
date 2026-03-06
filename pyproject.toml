@@ -50,9 +50,13 @@ addopts = [
     "--strict-markers",
     "-ra",
     "--cov=harmonyspeech",
-    "--cov-omit=harmonyspeech/modeling/models/*",
     "--cov-report=term-missing",
     "--cov-report=xml",
+]
+
+[tool.coverage.run]
+omit = [
+    "harmonyspeech/modeling/models/*",
 ]
 markers = [
     "unit: marks tests as unit tests (fast, fully mocked)",
