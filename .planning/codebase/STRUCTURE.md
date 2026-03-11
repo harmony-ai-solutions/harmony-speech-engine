@@ -1,6 +1,6 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-02-28
+**Analysis Date:** 2026-03-11
 
 ## Directory Layout
 
@@ -21,8 +21,35 @@ harmony-speech-engine/
 ├── auth/                       # HTTP authentication middleware
 ├── docker/                     # Docker build assets and helper scripts
 ├── docs/                       # Documentation (API specs, usage guides)
+├── frontend/                   # Frontend assets (web UI)
 ├── models/                     # Local model weight cache directory (not committed)
-├── tests/                      # Test suite
+├── tests/                      # Test suite (3-tier: unit/integration/e2e)
+│   ├── unit/                   # Unit tests (fast, fully mocked)
+│   │   ├── initialization/     # Engine initialization tests
+│   │   ├── inference_flow/     # Model loader tests
+│   │   ├── error_handling/     # Config error tests
+│   │   └── conftest.py         # Unit test fixtures
+│   ├── integration/            # Integration tests (component interaction)
+│   │   ├── test_cli.py         # CLI tests
+│   │   ├── test_api_endpoints.py # API endpoint tests
+│   │   └── conftest.py         # Integration fixtures
+│   ├── e2e/                    # End-to-end tests (real models, CPU-only, slow)
+│   │   ├── tts/                # TTS model tests
+│   │   │   ├── test_melotts.py
+│   │   │   ├── test_kittentts.py
+│   │   │   ├── test_openvoice_v1.py
+│   │   │   └── test_harmonyspeech.py
+│   │   ├── stt/                # STT/Whisper tests
+│   │   │   └── test_whisper.py
+│   │   ├── vad/                # Voice activity detection tests
+│   │   │   ├── test_silero_vad.py
+│   │   │   └── test_whisper_vad.py
+│   │   ├── audio_restoration/  # VoiceFixer tests
+│   │   │   └── test_voicefixer.py
+│   │   └── conftest.py         # E2E fixtures
+│   ├── conftest.py             # Root test configuration
+│   └── test-data/              # Test audio samples
+│       └── samples/            # WAV files (wanda4.wav, wanda5.wav, wanda6.wav)
 ├── .planning/                  # GSD planning documents (not shipped)
 │   └── codebase/               # Codebase analysis documents
 ├── memory-bank/                # Roo memory bank (project context, not shipped)
@@ -81,12 +108,27 @@ harmony-speech-engine/
 - Purpose: One subdirectory per supported model family; each contains the PyTorch nn.Module classes and model-specific utilities
 - Subdirectories:
   - `harmonyspeech/` — Harmony Speech v1 (encoder, synthesizer, vocoder + parallel_wavegan)
-  - `openvoice/` — OpenVoice V1 (ToneConverter, Synthesizer, Encoder)
+  - `openvoice/` — OpenVoice V1/V2 (ToneConverter, Synthesizer, Encoder)
   - `melo/` — MeloTTS / OpenVoice V2 (multi-language TTS synthesizer)
-  - `kittentts/` — KittenTTS (ultra-lightweight ONNX TTS)
+  - `kittentts/` — KittenTTS (ultra-lightweight ONNX TTS) ⭐ NEW
   - `voicefixer/` — VoiceFixer (audio restoration and vocoder)
   - `chatterbox/` — Chatterbox TTS (s3gen, t3, voice encoder submodules)
 - Key files: `harmonyspeech/modeling/models/harmonyspeech/harmonyspeech.py`, `harmonyspeech/modeling/models/openvoice/openvoice.py`, `harmonyspeech/modeling/models/melo/melo.py`, `harmonyspeech/modeling/models/kittentts/kittentts.py`, `harmonyspeech/modeling/models/voicefixer/voicefixer.py`
+
+**`tests/`:**
+- Purpose: Comprehensive test suite with 3-tier architecture
+- Structure:
+  - `tests/unit/` — Fast, fully mocked unit tests
+  - `tests/integration/` — Component interaction tests
+  - `tests/e2e/` — Real model tests (CPU-only, slow)
+- Run with: `pytest tests/unit/`, `pytest tests/integration/`, `pytest tests/e2e/`
+- Key fixtures: `tests/conftest.py` (root), `tests/unit/conftest.py`, `tests/integration/conftest.py`, `tests/e2e/conftest.py`
+
+**`tests/test-data/`:**
+- Purpose: Audio samples for testing
+- Contains: `samples/` directory with WAV files (wanda4.wav, wanda5.wav, wanda6.wav)
+- Generated: No (committed)
+- Committed: Yes
 
 **`auth/`:**
 - Purpose: HTTP basic authentication middleware for the FastAPI server
@@ -94,10 +136,6 @@ harmony-speech-engine/
 
 **`docker/`:**
 - Purpose: Dockerfile variants and helper scripts for container builds
-
-**`tests/`:**
-- Purpose: Test suite for the engine
-- Key files: `tests/` (test discovery root)
 
 **`models/`:**
 - Purpose: Local on-disk cache for downloaded model weights; populated at runtime by HuggingFace Hub download
@@ -130,6 +168,66 @@ harmony-speech-engine/
 - `harmonyspeech/engine/async_harmonyspeech.py`: Async engine — used by the API server
 - `harmonyspeech/processing/scheduler.py`: Request scheduler and batcher
 
+## Tests Directory Deep Dive
+
+**Test Structure (3-Tier):**
+
+```
+tests/
+├── conftest.py              # Root fixtures (shared across all test tiers)
+├── unit/                    # Unit tests - FAST, fully mocked
+│   ├── conftest.py          # Unit-specific fixtures
+│   ├── initialization/      # Engine initialization tests
+│   │   ├── test_engine.py
+│   │   └── test_config.py
+│   ├── inference_flow/      # Model loader tests
+│   │   └── test_loader.py
+│   └── error_handling/      # Config error validation
+│       └── test_config_errors.py
+├── integration/             # Integration tests - COMPONENT INTERACTION
+│   ├── conftest.py          # Integration-specific fixtures
+│   ├── test_cli.py          # CLI entry point tests
+│   └── test_api_endpoints.py # API endpoint tests
+└── e2e/                     # End-to-end tests - REAL MODELS, CPU-ONLY, SLOW
+    ├── conftest.py          # E2E-specific fixtures
+    ├── tts/                 # Text-to-Speech model tests
+    │   ├── test_melotts.py
+    │   ├── test_kittentts.py
+    │   ├── test_openvoice_v1.py
+    │   └── test_harmonyspeech.py
+    ├── stt/                 # Speech-to-Text tests
+    │   └── test_whisper.py
+    ├── vad/                 # Voice Activity Detection tests
+    │   ├── test_silero_vad.py
+    │   └── test_whisper_vad.py
+    └── audio_restoration/   # Audio restoration tests
+        └── test_voicefixer.py
+```
+
+**Test Configuration (pyproject.toml):**
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["--strict-markers", "-ra", "--cov=harmonyspeech", ...]
+
+[tool.pytest.markers]
+unit = "marks tests as unit tests (fast, fully mocked)"
+integration = "marks tests as integration tests (component interaction, partially mocked)"
+e2e = "marks tests as end-to-end tests (real models, slow, CPU-only)"
+slow = "marks tests that take > 30 seconds to run"
+```
+
+**Running Tests:**
+```bash
+pytest tests/unit/              # Run all unit tests (fast)
+pytest tests/integration/       # Run integration tests
+pytest tests/e2e/               # Run e2e tests (slow, requires models)
+pytest tests/                   # Run all tests
+pytest -m unit                  # Run only unit tests by marker
+pytest -m e2e                   # Run only e2e tests by marker
+```
+
 ## Naming Conventions
 
 **Files:**
@@ -137,6 +235,7 @@ harmony-speech-engine/
 - Serving modules prefixed: `serving_text_to_speech.py`, `serving_speech_to_text.py`
 - Worker/runner pairs mirror executor names: `cpu_worker.py` / `cpu_model_runner.py`, `gpu_worker.py` / `gpu_model_runner.py`
 - Model packages match model family name: `openvoice/`, `melo/`, `kittentts/`, `harmonyspeech/`, `voicefixer/`
+- Test files prefixed: `test_{module}.py`
 
 **Directories:**
 - All lowercase, underscore-separated: `task_handler/`, `modeling/`, `endpoints/`
@@ -159,6 +258,17 @@ harmony-speech-engine/
 - Add model runner inference logic: `harmonyspeech/task_handler/gpu_model_runner.py` and/or `cpu_model_runner.py`
 - Add model_type entry to: `config.yml`
 
+**New TTS Provider (like KittenTTS):**
+1. Create `harmonyspeech/modeling/models/{provider}/` with model implementation
+2. If ONNX-based: add `onnx_model.py` wrapper
+3. Register in `harmonyspeech/modeling/loader.py`:
+   - Add `"provider_type": {"default": "native"}` to `_MODEL_CONFIGS`
+   - Add `"provider_type": {"default": "native"}` to `_MODEL_WEIGHTS`
+   - Add model instantiation logic in `get_model()` with `"native"` bailout
+4. Add input preparation in `task_handler/inputs.py`
+5. Add runner logic (ONNX or PyTorch path)
+6. Add e2e test in `tests/e2e/tts/test_{provider}.py`
+
 **New API Endpoint / Capability:**
 - Add Pydantic request/response types: `harmonyspeech/endpoints/openai/protocol.py`
 - Add `RequestInput` subclass: `harmonyspeech/common/inputs.py`
@@ -170,8 +280,10 @@ harmony-speech-engine/
 - Expose via CLI: `harmonyspeech/engine/args_tools.py`
 
 **Tests:**
-- Test files: `tests/` directory (mirrors package structure)
-- Naming: `test_{module}.py`
+- Unit tests: `tests/unit/{category}/test_{feature}.py`
+- Integration tests: `tests/integration/test_{feature}.py`
+- E2E tests: `tests/e2e/{capability}/test_{model}.py`
+- Test data: `tests/test-data/samples/`
 
 ## Special Directories
 
@@ -194,6 +306,11 @@ harmony-speech-engine/
 - Purpose: GitHub Actions CI/CD workflows
 - Committed: Yes
 
+**`docs/`:**
+- Purpose: API documentation and usage guides
+- Generated: No (manually written)
+- Committed: Yes
+
 ---
 
-*Structure analysis: 2026-02-28*
+*Structure analysis: 2026-03-11*

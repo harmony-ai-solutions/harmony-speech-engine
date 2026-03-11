@@ -1,6 +1,6 @@
 # Architecture
 
-**Analysis Date:** 2026-02-28
+**Analysis Date:** 2026-03-11
 
 ## Pattern Overview
 
@@ -12,6 +12,82 @@
 - Pluggable executor backends (CPU, GPU, Ray multi-GPU) — selectable at startup
 - Multi-model configuration: multiple named model instances running concurrently, each with its own worker
 - Pipeline composition: a single high-level request (e.g., TextToSpeech) may internally fan out to multiple sub-model steps (encode → synthesize → vocode → convert)
+
+## System Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            External Clients                                  │
+│  (Harmony Link, curl, other apps)                                           │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        API Layer (Endpoints)                                 │
+│  harmonyspeech/endpoints/openai/                                            │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐  │
+│  │ TextToSpeech │ │ SpeechToText │ │ VoiceActivity│ │ VoiceConversion  │  │
+│  │ Serving      │ │ Serving      │ │ Detection    │ │ Serving          │  │
+│  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────────┘  │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Engine Layer (Core)                                     │
+│  harmonyspeech/engine/                                                       │
+│  ┌─────────────────────────┐  ┌────────────────────────────────────────┐   │
+│  │ AsyncHarmonySpeech      │  │ HarmonySpeechEngine (sync wrapper)    │   │
+│  │ - request lifecycle     │  │ - orchestration                       │   │
+│  └───────────┬─────────────┘  └──────────────────────┬─────────────────┘   │
+│              │                                        │                      │
+│              ▼                                        ▼                      │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                    Processing/Scheduling Layer                       │   │
+│  │  harmonyspeech/processing/scheduler.py                              │   │
+│  │  - HarmonySpeechScheduler: queues requests, batches up to           │   │
+│  │    max_batch_size per model                                         │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Executor Layer                                          │
+│  harmonyspeech/executor/                                                     │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────────────┐    │
+│  │ CPUExecutor  │ │ GPUExecutor  │ │ RayGPUExecutor (multi-GPU)      │    │
+│  └──────────────┘ └──────────────┘ └──────────────────────────────────┘    │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   Task Handler / Worker Layer                                │
+│  harmonyspeech/task_handler/                                                 │
+│  ┌─────────────────────┐ ┌────────────────────────────────────────────┐    │
+│  │ WorkerBase          │ │ ModelRunnerBase                             │    │
+│  │ - CPUWorker         │ │ - CPUModelRunner                           │    │
+│  │ - GPUWorker         │ │ - GPUModelRunner                           │    │
+│  │ - loads models      │ │ - prepare_inputs()                         │    │
+│  │ - executes batches  │ │ - forward pass                             │    │
+│  └─────────────────────┘ └────────────────────────────────────────────┘    │
+└────────────────────────────────┬────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Modeling Layer                                          │
+│  harmonyspeech/modeling/                                                     │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │ loader.py: get_model_class(), get_model_config(), get_model_weights()│   │
+│  │ hf_downloader.py: HuggingFace Hub integration                        │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│  harmonyspeech/modeling/models/                                              │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────────┐ ┌────────────┐          │
+│  │melotts/ │ │kittentts│ │openvoice│ │harmonysp..│ │voicefixer/ │          │
+│  │         │ │         │ │         │ │           │ │            │          │
+│  │ (PyTorch│ │ (ONNX)  │ │ (PyTorch│ │ (PyTorch) │ │ (PyTorch)  │          │
+│  │  TTS)   │ │ Ultra-  │ │  TTS/VC)│ │  Pipeline │ │  Restore)  │          │
+│  └─────────┘ └─────────┘ └─────────┘ └───────────┘ └────────────┘          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Layers
 
@@ -103,6 +179,110 @@
 - Model weights are loaded once per worker at startup and held in memory
 - Request queue state is held in-memory in the `Scheduler` — not persisted
 
+## TTS Provider Abstraction
+
+The architecture uses a `model_type` string key system to abstract different TTS providers. Each provider implements a specific interface:
+
+**TTS Provider Types (model_type strings):**
+
+| model_type | Implementation | Framework | Notes |
+|------------|----------------|-----------|-------|
+| `MeloTTSSynthesizer` | `harmonyspeech/modeling/models/melo/melo.py` | PyTorch | Multi-language TTS |
+| `KittenTTSSynthesizer` | `harmonyspeech/modeling/models/kittentts/kittentts.py` | ONNX | Ultra-lightweight, CPU-optimized |
+| `HarmonySpeechSynthesizer` | `harmonyspeech/modeling/models/harmonyspeech/harmonyspeech.py` | PyTorch | Full pipeline component |
+| `OpenVoiceV1Synthesizer` | `harmonyspeech/modeling/models/openvoice/openvoice.py` | PyTorch | OpenVoice V1 TTS |
+| `OpenVoiceV2ToneConverter` | `harmonyspeech/modeling/models/openvoice/openvoice.py` | PyTorch | OpenVoice V2 voice conversion |
+
+**Adding a New TTS Provider:**
+
+1. Create model class in `harmonyspeech/modeling/models/{provider}/`
+2. Register in `harmonyspeech/modeling/loader.py`:
+   - Add entry to `_MODEL_CONFIGS`
+   - Add entry to `_MODEL_WEIGHTS`
+   - Add to `ModelRegistry` if native model
+3. Add input preparation in `harmonyspeech/task_handler/inputs.py`
+4. Add model runner logic in `gpu_model_runner.py` or `cpu_model_runner.py`
+5. Add `model_type` entry to `config.yml`
+
+## KittenTTS Position in Architecture
+
+KittenTTS is an ultra-lightweight ONNX-based TTS synthesizer positioned as a fast, CPU-efficient alternative to heavier PyTorch models:
+
+- **Location:** `harmonyspeech/modeling/models/kittentts/`
+- **Files:**
+  - `kittentts.py` — `KittenTTSSynthesizer` class (main model)
+  - `onnx_model.py` — ONNX runtime wrapper
+  - `preprocess.py` — Text/audio preprocessing utilities
+
+- **Integration Point:** `harmonyspeech/modeling/loader.py` lines 83-86, 136-139, 278-280
+  - Registered as `"KittenTTSSynthesizer"` in `model_type` string dispatch
+  - Uses `"native"` config/weights (bypasses HuggingFace config loading)
+  - Instantiated directly via `KittenTTSSynthesizer(model_name_or_path=...)`
+
+- **Execution Path:**
+  1. `task_handler/inputs.py`: `prepare_kittentts_inputs()` — tokenizes text, prepares conditioning
+  2. `task_handler/gpu_model_runner.py`: Routes to `_run_kittentts()` for ONNX inference
+  3. Output: Raw audio waveform converted to base64
+
+- **Advantages:**
+  - No PyTorch dependency for inference
+  - Minimal memory footprint (~50MB model)
+  - Fast inference on CPU
+  - Can run alongside heavier GPU models
+
+## STT/ASR Provider Abstraction
+
+**STT Provider Types:**
+
+| model_type | Implementation | Framework | Notes |
+|------------|----------------|-----------|-------|
+| `FasterWhisper` | Native (faster-whisper library) | CTranslate2/ONNX | OpenAI Whisper faster implementation |
+| (via VAD) `SileroVAD` | Native (silero-vad library) | PyTorch/ONNX | Voice Activity Detection |
+
+**VAD Integration:**
+- VAD runs before STT to identify speech segments
+- VAD results (`input_vad_data`) passed to encoder for speaker extraction
+- Supports chaining: VAD → Encoder → Tone Converter
+
+## Configuration System
+
+**Configuration Sources:**
+1. `config.yml` (root) — Primary runtime model configuration
+2. `config.gpu.yml` — GPU-targeted variant
+3. CLI arguments via `harmonyspeech/engine/args_tools.py`
+4. Environment variables for API keys
+
+**Key Config Classes:**
+- `ModelConfig` (`harmonyspeech/common/config.py`): Per-model settings
+- `DeviceConfig`: Device assignment and dtype
+- `EngineConfig`: Global engine settings (max batch size, timeout)
+
+**Config Flow:**
+```
+config.yml → EngineArgs → EngineConfig + [ModelConfig] → Scheduler/Executor
+```
+
+## Model Loading/Management
+
+**Loading Pipeline:**
+1. `loader.get_model()` receives `ModelConfig`, `DeviceConfig`
+2. Resolve model class via `ModelRegistry` or `_get_model_cls()`
+3. Determine flavour (language variant for multi-lingual models)
+4. Fetch config: `get_model_config()` → HuggingFace or "native"
+5. Fetch weights: `get_model_weights()` → cached/downloaded
+6. Instantiate model class, load weights
+7. Return model in eval mode
+
+**Model Caching:**
+- HuggingFace Hub `snapshot_download` in `hf_downloader.py`
+- Local cache in `models/` directory (not committed)
+- Supports revision/branch pinning
+
+**Model Types by Loading Pattern:**
+- **PyTorch models:** OpenVoice, MeloTTS, HarmonySpeech, VoiceFixer — use `load_weights()` method
+- **Native models:** FasterWhisper, SileroVAD, KittenTTS — instantiated directly, no weight loading
+- **VoiceFixer:** Native class but with fixed config path
+
 ## Key Abstractions
 
 **ModelConfig:**
@@ -168,4 +348,4 @@
 
 ---
 
-*Architecture analysis: 2026-02-28*
+*Architecture analysis: 2026-03-11*

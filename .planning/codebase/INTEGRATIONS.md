@@ -1,6 +1,6 @@
 # External Integrations
 
-**Analysis Date:** 2026-02-28
+**Analysis Date:** 2026-03-11
 
 ## APIs & External Services
 
@@ -41,6 +41,8 @@
 
 All AI models run locally — no cloud AI API calls. Models are downloaded from Hugging Face and served on the local machine.
 
+### TTS Providers
+
 **Harmony Speech V1 (TTS):**
 - Source: `https://huggingface.co/harmony-ai/harmony-speech-v1`
 - Implementation: Adapted — model code in `harmonyspeech/modeling/models/harmonyspeech/`
@@ -61,25 +63,6 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 - Model types in config: `MeloTTSSynthesizer`, `OpenVoiceV2ToneConverter`, `OpenVoiceV2ToneConverterEncoder`
 - Dependency: Requires Faster-Whisper for embedding step
 
-**Faster-Whisper / Distil-Whisper (STT + VAD):**
-- Source: SYSTRAN's `faster-whisper` library (PyPI: `faster-whisper>=1.1.0`); models from OpenAI via Hugging Face
-- Implementation: Native / Third-Party — uses the `faster_whisper` package directly
-- Model types in config: `FasterWhisper`
-- Supports all Faster-Whisper model tags: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`
-- Backend: CTranslate2 (`ctranslate2` package)
-
-**Silero VAD (Voice Activity Detection):**
-- Source: `https://huggingface.co/onnx-community/silero-vad`; PyTorch source at `snakers4/silero-vad`
-- Implementation: Native / Third-Party — uses `silero-vad` package + `onnxruntime`
-- Model type in config: `SileroVAD`
-- Load format: `onnx` (ONNX version for CPU-optimized inference)
-
-**VoiceFixer (Audio Restoration):**
-- Source: `https://huggingface.co/jlmarrugom/voice_fixer` (alternative: `cqchangm/voicefixer`)
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/voicefixer/`
-- Components: Restorer (denoising) + Vocoder (mel-spectrogram to audio)
-- Model types in config: `VoiceFixerRestorer`, `VoiceFixerVocoder`
-
 **KittenTTS (ONNX TTS):**
 - Source: `https://huggingface.co/KittenML/kitten-tts-mini-0.8` (and micro/nano variants)
 - Implementation: Adapted — model code in `harmonyspeech/modeling/models/kittentts/`
@@ -87,11 +70,41 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 - Phonemizer: `misaki[en]>=0.9.4`
 - Model type in config: `KittenTTSSynthesizer`
 - Voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+- **Variants available:**
+  - `kitten-tts-mini`: Highest quality, 80MB
+  - `kitten-tts-micro`: Good quality, 41MB
+  - `kitten-tts-nano`: Lightweight, 56MB fp32
+  - `kitten-tts-nano-int8`: Most compact, 25MB (quantized)
+- **Note:** KittenTTS is English-only TTS with ultra-fast inference via ONNX
+
+**VoiceFixer (Audio Restoration):**
+- Source: `https://huggingface.co/jlmarrugom/voice_fixer` (alternative: `cqchangm/voicefixer`)
+- Implementation: Adapted — model code in `harmonyspeech/modeling/models/voicefixer/`
+- Components: Restorer (denoising) + Vocoder (mel-spectrogram to audio)
+- Model types in config: `VoiceFixerRestorer`, `VoiceFixerVocoder`
 
 **Chatterbox (TTS):**
 - Implementation: Adapted — model code in `harmonyspeech/modeling/models/chatterbox/`
 - Components: s3gen (Matcha-based), s3tokenizer, t3 transformer, voice encoder
 - Status: Present in codebase, not yet listed in default `config.yml`
+
+### STT / ASR Providers
+
+**Faster-Whisper / Distil-Whisper (STT + VAD):**
+- Source: SYSTRAN's `faster-whisper` library (PyPI: `faster-whisper>=1.1.0`); models from OpenAI via Hugging Face
+- Implementation: Native / Third-Party — uses the `faster_whisper` package directly
+- Model types in config: `FasterWhisper`
+- Supports all Faster-Whisper model tags: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`
+- Backend: CTranslate2 (`ctranslate2` package, version 4.4.0)
+- Default models in config: `medium`, `tiny`
+
+### VAD (Voice Activity Detection) Providers
+
+**Silero VAD (Voice Activity Detection):**
+- Source: `https://huggingface.co/onnx-community/silero-vad`; PyTorch source at `snakers4/silero-vad`
+- Implementation: Native / Third-Party — uses `silero-vad` package + `onnxruntime`
+- Model type in config: `SileroVAD`
+- Load format: `onnx` (ONNX version for CPU-optimized inference)
 
 ## API Protocol
 
@@ -113,6 +126,7 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 - `POST /v1/audio/synthesize` — Low-level Synthesis (synthesizer step only)
 - `POST /v1/audio/vocode` — Low-level Vocoding step
 - `GET /v1/models` — List loaded models
+- `GET /metrics` — Prometheus metrics endpoint
 
 **Request/Response format:**
 - JSON with base64-encoded audio payloads
@@ -122,7 +136,7 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 ## Monitoring & Observability
 
 **Metrics:**
-- `prometheus_client` — Prometheus metrics endpoint
+- `prometheus_client` — Prometheus metrics endpoint at `/metrics`
 - Metrics implementation: `harmonyspeech/common/metrics.py` and `harmonyspeech/engine/metrics.py`
 
 **Logs:**
@@ -136,13 +150,15 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 - UI container: `harmonyai/harmonyspeech-ui:latest`
 
 **CI Pipeline:**
-- GitHub Actions (`.github/` directory present); workflows not examined in detail
+- GitHub Actions (`.github/workflows/` directory)
+- Test workflow (`test.yml`): Unit, integration, and E2E tests
+- Docker release workflow (`docker-release-engine.yml`): Builds CPU, AMD, NVIDIA variants
 
 **Container Variants:**
 - CPU: `docker-compose.yml` → `harmonyai/harmonyspeech-engine-cpu:latest`
 - NVIDIA GPU: `docker-compose.nvidia.yml` → `harmonyai/harmonyspeech-engine-nvidia:latest` (requires `nvidia` driver capability)
 - AMD GPU: `docker-compose.amd.yml` (ROCm-based)
-- Docker build contexts: `docker/` directory
+- Docker build contexts: `docker/cpu`, `docker/amd`, `docker/amd-wsl`, `docker/nvidia`
 
 ## Environment Configuration
 
@@ -162,4 +178,4 @@ All AI models run locally — no cloud AI API calls. Models are downloaded from 
 
 ---
 
-*Integration audit: 2026-02-28*
+*Integration audit: 2026-03-11*
