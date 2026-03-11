@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "gsd-planner": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-plan-checker": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-phase-researcher": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-roadmapper": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-project-researcher": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-research-synthesizer": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-codebase-mapper": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-executor": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-debugger": { "model": "anthropic/claude-sonnet-4-20250514" },
+    "gsd-verifier": { "model": "anthropic/claude-sonnet-4.6" },
+    "gsd-integration-checker": { "model": "anthropic/claude-sonnet-4.6" }
+  }
+}

@@ -418,22 +418,41 @@ def prepare_openvoice_tone_converter_inputs(model_config: ModelConfig, requests_
 
     # We're expecting audio in waveform format in the requests
     def prepare(request):
+        # Handle both TextToSpeechRequestInput (for voice cloning) and VoiceConversionRequestInput
+        # For VoiceConversionRequestInput: source_audio, target_embedding
+        # For TextToSpeechRequestInput: input_audio, input_embedding
+        if hasattr(request, 'source_audio'):
+            # VoiceConversionRequestInput
+            audio_data = request.source_audio
+            embedding_data = request.target_embedding
+        else:
+            # TextToSpeechRequestInput
+            audio_data = request.input_audio
+            embedding_data = request.input_embedding
+        
         # Make sure Audio and Embedding are decoded from Base64
-        input_audio = base64.b64decode(request.input_audio.encode('utf-8'))
-        input_embedding = base64.b64decode(request.input_embedding.encode('utf-8'))
+        input_audio = base64.b64decode(audio_data.encode('utf-8'))
+        input_embedding = base64.b64decode(embedding_data.encode('utf-8'))
         input_audio_ref = io.BytesIO(input_audio)
         input_embedding_ref = io.BytesIO(input_embedding)
         audio_ref, _ = librosa.load(input_audio_ref, sr=hf_config.data.sampling_rate)
 
-        # Get Base Speaker Embedding from Repo
-        source_speaker_embedding_file = get_model_speaker(
-            model_config.model,
-            model_config.model_type,
-            model_config.revision,
-            request.language_id,
-            request.voice_id
-        )
-        source_embedding_ref = io.BytesIO(source_speaker_embedding_file)
+        # For voice conversion, use target embedding directly
+        # For voice cloning via TTS, get source embedding from repo
+        if hasattr(request, 'language_id') and hasattr(request, 'voice_id'):
+            # TextToSpeechRequestInput - get source embedding from repo
+            source_speaker_embedding_file = get_model_speaker(
+                model_config.model,
+                model_config.model_type,
+                model_config.revision,
+                request.language_id,
+                request.voice_id
+            )
+            source_embedding_ref = io.BytesIO(source_speaker_embedding_file)
+        else:
+            # VoiceConversionRequestInput - use target embedding as source
+            # Create a fresh BytesIO since input_embedding_ref may have been read
+            source_embedding_ref = io.BytesIO(input_embedding)
 
         return audio_ref, input_embedding_ref, source_embedding_ref
 
