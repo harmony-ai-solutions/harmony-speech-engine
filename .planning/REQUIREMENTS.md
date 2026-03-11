@@ -329,7 +329,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| REQ-DEP-01 | Phase 1: Dependencies & Setup | Pending |
+| REQ-DEP-01 | Phase 1: Dependencies & Setup | Complete |
 | REQ-ARCH-01 | Phase 2: Model Registration & Loading | Pending |
 | REQ-ARCH-02 | Phase 2: Model Registration & Loading | Pending |
 | REQ-INPUT-01 | Phase 3: Input Preparation | Pending |
