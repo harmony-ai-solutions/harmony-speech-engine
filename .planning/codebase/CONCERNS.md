@@ -8,79 +8,45 @@ This document captures technical debt, known issues, test coverage gaps, and ris
 
 ---
 
-## New Concerns (March 2026)
+## Recent Updates (March 2026)
 
-### KittenTTS Testing Status
+### KittenTTS Status
+**Resolved:** KittenTTS was introduced without tests (commit `3f63eb3`). All 4 e2e tests (mini, micro, nano, nano-int8) have since been validated and pass on CPU.
 
-**Issue:** KittenTTS was added in commit `3f63eb3` with the message "add KittenTTS, untested" - explicitly flagging lack of testing at introduction.
-
-**Files:**
-- `harmonyspeech/modeling/models/kittentts/kittentts.py` - Main implementation
-- `harmonyspeech/modeling/models/kittentts/onnx_model.py` - ONNX runtime wrapper
-
-**Current State:**
-- Test file exists at `tests/e2e/tts/test_kittentts.py` with 4 test cases:
-  - `test_kittentts_mini_single_speaker`
-  - `test_kittentts_micro_single_speaker`
-  - `test_kittentts_nano_single_speaker`
-  - `test_kittentts_nano_int8_single_speaker`
-- All tests are marked `@pytest.mark.e2e` and `@pytest.mark.slow`
-- Fixtures are defined in `tests/e2e/conftest.py` (`kittentts_mini_engine`, `kittentts_micro_engine`, etc.)
-- **Risk:** Tests have never been validated - actual model downloads and inference may fail
-
-**Impact:** Production use of KittenTTS models may encounter runtime errors that were not caught during development.
-
-**Fix Approach:** Run e2e tests to validate KittenTTS works end-to-end; add unit tests for the `KittenTTSSynthesizer` class.
+### ChatterBox Removed
+**Resolved:** The stale `harmonyspeech/modeling/models/chatterbox/` directory was removed as it was incomplete and untested.
 
 ---
 
-### Test Coverage Gaps
+## Test Coverage & Gaps
 
-**What's Tested:**
+The test suite consists of 80 tests with 80% overall coverage.
 
-**Unit Tests** (`tests/unit/`):
-- `initialization/test_config.py` - Config parsing
-- `initialization/test_engine.py` - Engine initialization
-- `inference_flow/test_loader.py` - Model loader
-- `error_handling/test_config_errors.py` - Config error handling
+### What IS Tested
 
-**Integration Tests** (`tests/integration/`):
-- `test_cli.py` - CLI endpoints
-- `test_api_endpoints.py` - API endpoints (mocked)
+| Tier | Count | Scope |
+|------|-------|-------|
+| **Unit** | 28 | Config parsing, dtype resolution, engine init, model loader registry |
+| **Integration** | 17 | CLI arg parsing, all 7 HTTP endpoints via mocked serving layer |
+| **E2E** | 35 | Full model pipelines for KittenTTS, MeloTTS, OpenVoice V1/V2, HarmonySpeech, FasterWhisper, SileroVAD, VoiceFixer |
 
-**E2E Tests** (`tests/e2e/`):
-- VAD: `test_whisper_vad.py`, `test_silero_vad.py`
-- TTS: `test_melotts.py`, `test_openvoice_v1.py`, `test_kittentts.py`, `test_harmonyspeech.py`
-- STT: `test_whisper.py`
-- Audio Restoration: `test_voicefixer.py`
+### Critical Gaps (Untested Areas)
 
-**What's NOT Tested:**
-
-| Model Type | Status | Gap |
-|------------|--------|-----|
-| **ChatterBox** | Not present | No test file exists - model may be incomplete |
-| **Voice Embedding** | Not present | No e2e tests for `OpenAIServingVoiceEmbedding` |
-| **Voice Conversion** | Not present | No e2e tests for `OpenAIServingVoiceConversion` |
-| **Multi-step pipelines** | Not present | No tests for VAD → Embedding → TTS workflow |
-| **Error paths** | Not present | Exception handling not systematically tested |
-
-**Priority:**
-- **High:** ChatterBox model - exists in codebase but no tests or clear implementation status
-- **High:** Multi-step routing (VAD → Embedding → TTS) - critical workflow untested
-- **Medium:** Voice embedding and conversion endpoints - may have bugs
+| Gap | Detail |
+|-----|--------|
+| **GPU Executor Path** | `gpu_model_runner.py` and `gpu_worker.py` are 0% covered (358 lines) |
+| **Integration Mocks** | Integration tier uses full mocks; real engine/scheduler interaction not tested at this level |
+| **Utility Functions** | `common/utils.py` is only 50% covered |
+| **Error Handling** | Exception handling branches in `serving_*.py` and `async_harmonyspeech.py` are largely untested |
+| **Streaming Output** | Feature not implemented; "Stream output is not yet supported" TODO in TTS endpoints |
 
 ---
 
-### ChatterBox Model Status Unknown
+## Test Infrastructure Issues
 
-**Issue:** Directory `harmonyspeech/modeling/models/chatterbox/` exists but no tests or clear documentation about its implementation state.
-
-**Files:**
-- `harmonyspeech/modeling/models/chatterbox/` - Directory exists
-
-**Risk:** Model may be incomplete, partially implemented, or broken with no way to detect issues.
-
-**Recommendation:** Verify implementation status and add tests or remove if abandoned.
+### Missing Commit ID Module
+**Problem:** `RuntimeWarning: Failed to read commit hash` from `harmonyspeech/__init__.py:3`.
+**Impact:** The `harmonyspeech.commit_id` module is expected but not generated or present, leading to "unknown" version reporting in logs.
 
 ---
 
@@ -231,6 +197,16 @@ This document captures technical debt, known issues, test coverage gaps, and ris
 - Multiple phonemizers: `gruut[de,es,fr]`, `misaki[en]`, `espeakng_loader`, `g2p_en`, `g2pkk`
 - Multiple NLP tools: `spacy`, `nltk`, `mecab-python3`, `unidic-lite`, `pykakasi`, `eunjeon`, `fugashi`, `cn2an`, `pypinyin`, `jieba`
 - **Risk:** Dependency conflicts likely when adding new features; testing overhead for multilingual support
+
+These items will break in upcoming dependency versions:
+
+| Warning | File | Breaking Version |
+|---------|------|-----------------|
+| `audioop` deprecated | `pydub` (third-party) | Python 3.13 |
+| `aifc`/`sunau` deprecated | `audioread` (third-party) | Python 3.13 |
+| `scipy.ndimage.morphology` | `harmonyspeech/modeling/models/harmonyspeech/common.py:7` | SciPy 2.0 |
+| `kakasi.setMode`/`getConverter` | `harmonyspeech/modeling/models/melo/text/japanese.py:548-551` | kakasi v3.0 |
+| `torch stft return_complex=False` | MeloTTS voice cloning path | Future PyTorch |
 
 ### No Lock File
 

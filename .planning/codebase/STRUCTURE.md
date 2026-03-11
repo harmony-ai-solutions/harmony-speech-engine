@@ -112,7 +112,6 @@ harmony-speech-engine/
   - `melo/` — MeloTTS / OpenVoice V2 (multi-language TTS synthesizer)
   - `kittentts/` — KittenTTS (ultra-lightweight ONNX TTS) ⭐ NEW
   - `voicefixer/` — VoiceFixer (audio restoration and vocoder)
-  - `chatterbox/` — Chatterbox TTS (s3gen, t3, voice encoder submodules)
 - Key files: `harmonyspeech/modeling/models/harmonyspeech/harmonyspeech.py`, `harmonyspeech/modeling/models/openvoice/openvoice.py`, `harmonyspeech/modeling/models/melo/melo.py`, `harmonyspeech/modeling/models/kittentts/kittentts.py`, `harmonyspeech/modeling/models/voicefixer/voicefixer.py`
 
 **`tests/`:**

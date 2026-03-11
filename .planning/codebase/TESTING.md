@@ -4,7 +4,7 @@ _Last updated: 2026-03-11_
 
 ## Overview
 
-The Harmony Speech Engine has a comprehensive three-tier test structure (unit, integration, E2E) with full CI/CD integration. Tests use pytest with async support, mocking, and coverage reporting.
+The Harmony Speech Engine has a comprehensive three-tier test structure (unit, integration, E2E) with 80 passing tests and 80% overall coverage. All tiers are integrated into CI/CD. Tests use pytest with async support, mocking, and coverage reporting.
 
 ## Test Framework
 
