@@ -1,16 +1,19 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "agent": {
-    "gsd-planner": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-plan-checker": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-phase-researcher": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-roadmapper": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-project-researcher": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-research-synthesizer": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-codebase-mapper": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-executor": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-debugger": { "model": "anthropic/claude-sonnet-4-20250514" },
-    "gsd-verifier": { "model": "anthropic/claude-sonnet-4.6" },
-    "gsd-integration-checker": { "model": "anthropic/claude-sonnet-4.6" }
+    "plan": { "model": "anthropic/claude-sonnet-4-6" },
+    "build": { "model": "openrouter/minimax/minimax-m2.5" },
+    "coder": { "model": "google/gemini-3-flash-preview" },
+    "gsd-codebase-mapper": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-debugger": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-executor": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-integration-checker": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-phase-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-plan-checker": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-planner": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-project-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-research-synthesizer": { "model": "google/gemini-3.1-pro-preview" },
+    "gsd-roadmapper": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-verifier": { "model": "openrouter/minimax/minimax-m2.5" }
   }
 }
