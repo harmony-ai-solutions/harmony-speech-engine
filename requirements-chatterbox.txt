@@ -1,0 +1,18 @@
+# Chatterbox TTS — separate install required due to conflicting pip metadata.
+#
+# chatterbox-tts 0.1.6 declares hard version pins (torch==2.6.0, numpy<1.26.0,
+# transformers==4.46.3, safetensors==0.5.3, diffusers==0.29.0) that would
+# downgrade HSE's core dependencies if installed normally. The code itself is
+# compatible with newer versions; the pins are overcautious.
+#
+# Install AFTER requirements-common.txt (or requirements-cuda/rocm/cpu.txt):
+#
+#   pip install --no-deps -r requirements-chatterbox.txt
+#
+# The --no-deps flag is required here — it tells pip to skip chatterbox-tts's
+# declared dependency pins entirely. The safe transitive deps are already
+# listed in requirements-common.txt and installed as part of the normal install.
+#
+# IMPORTANT: When upgrading this version pin, follow the checklist in
+# .planning/codebase/CONCERNS.md § "Chatterbox TTS Dependency Pinning".
+chatterbox-tts==0.1.6

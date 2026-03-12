@@ -196,13 +196,13 @@ The test suite consists of 80 tests with 80% overall coverage.
 
 - **Package:** `chatterbox-tts==0.1.6`
 - **Problem:** The package declares hard version pins in its pip metadata (`torch==2.6.0`, `torchaudio==2.6.0`, `transformers==4.46.3`, `numpy<1.26.0`, `safetensors==0.5.3`, `diffusers==0.29.0`) that conflict with the versions required by the rest of HSE. A normal `pip install chatterbox-tts` would downgrade torch, transformers, and numpy, breaking the engine.
-- **Current mitigation:** Installed via `--no-deps` with its transitive dependencies listed explicitly in `requirements-common.txt`. Verified working on torch 2.10, transformers 5.0, numpy 2.4, safetensors 0.7, diffusers 0.37.
+- **Current mitigation:** Installed via a separate `requirements-chatterbox.txt` using `pip install --no-deps -r requirements-chatterbox.txt`. The `--no-deps` flag bypasses the conflicting metadata pins. Safe transitive dependencies are listed explicitly in `requirements-common.txt` and installed as part of the normal install. Verified working on torch 2.10, transformers 5.0, numpy 2.4, safetensors 0.7, diffusers 0.37.
 - **Risk:** Every new `chatterbox-tts` release must be manually evaluated before bumping the pin:
   1. Check the new release's `requires_dist` for any newly required packages or changed pins.
   2. Run `pip install chatterbox-tts==<new_version> --no-deps` in a test environment.
   3. Verify all four classes import: `ChatterboxTTS`, `ChatterboxVC`, `ChatterboxMultilingualTTS`, `ChatterboxTurboTTS`.
   4. Run `pytest tests/unit/initialization/test_chatterbox_imports.py -v`.
-  5. Update the version pin and transitive deps in `requirements-common.txt` if needed.
+  5. Update the version pin in `requirements-chatterbox.txt` and any changed transitive deps in `requirements-common.txt`.
 - **Upgrade owner:** Whoever bumps the pin is responsible for completing steps 1–5 above.
 - **Long-term fix:** If Resemble AI relaxes their version pins in a future release, the `--no-deps` workaround can be removed and the package installed normally.
 
