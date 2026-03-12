@@ -48,7 +48,10 @@ Plans:
 4. `_get_model_cls("chatterbox_vc")` returns `ChatterboxVC` class
 5. `get_model("ChatterboxTTS")` returns a model instance via native loader pattern
 
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 02-01-PLAN.md — Create chatterbox model module with 4 wrapper classes; register in ModelRegistry and loader.py using native pattern
 
 ---
 
