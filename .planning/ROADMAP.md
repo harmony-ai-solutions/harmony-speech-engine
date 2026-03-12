@@ -8,8 +8,8 @@
 
 ## Phases
 
-- [ ] **Phase 1: Dependencies & Setup** - Install required packages (perth, pyloudnorm, chatterbox-tts)
-- [ ] **Phase 2: Model Registration & Loading** - Register all 4 Chatterbox models in ModelRegistry with native loader pattern
+- [x] **Phase 1: Dependencies & Setup** - Install required packages (perth, pyloudnorm, chatterbox-tts)
+- [x] **Phase 2: Model Registration & Loading** - Register all 4 Chatterbox models in ModelRegistry with native loader pattern
 - [ ] **Phase 3: Input Preparation** - Implement input preparation functions for TTS, embedding, and voice conversion
 - [ ] **Phase 4: Model Execution** - Implement execution methods for TTS, embedding, and voice conversion models
 - [ ] **Phase 5: Request Routing** - Implement routing logic for TTS, embedding, VC, and forward processing
@@ -51,7 +51,7 @@ Plans:
 **Plans:** 1 plan
 
 Plans:
-- [ ] 02-01-PLAN.md — Create chatterbox model module with 4 wrapper classes; register in ModelRegistry and loader.py using native pattern
+- [x] 02-01-PLAN.md — Create chatterbox model module with 4 wrapper classes; register in ModelRegistry and loader.py using native pattern
 
 ---
 
