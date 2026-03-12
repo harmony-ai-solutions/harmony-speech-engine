@@ -9,10 +9,10 @@
 - Chosen for extensive ML/AI ecosystem support
 - Compatibility with PyTorch and HuggingFace libraries
 
-**PyTorch 2.4.1**
+**PyTorch ≥ 2.7.1**
 - Deep learning framework for model inference
-- CUDA 12.1 support for GPU acceleration
-- ROCm 6.1 support for AMD GPUs
+- CUDA support for GPU acceleration
+- ROCm support for AMD GPUs
 - CPU-only deployment option available
 
 ### Web Framework and API
@@ -85,13 +85,20 @@
 conda create -n hse python=3.12
 conda activate hse
 
-# PyTorch installation (CUDA)
-pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121
+# PyTorch installation — pick the right command for your hardware:
+# NVIDIA:   pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# AMD:      pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/rocm6.1
+# CPU only: pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# See https://pytorch.org/get-started/locally/ for up-to-date commands.
 
 # Project dependencies
 git clone https://github.com/harmony-ai-solutions/harmony-speech-engine
 cd harmony-speech-engine
-pip install -r requirements-cuda.txt
+pip install -r requirements-cuda.txt    # or requirements-cpu.txt / requirements-rocm.txt
+
+# Chatterbox TTS (separate step — version pins in chatterbox-tts metadata conflict with HSE stack)
+# The --no-deps flag bypasses those pins; safe transitive deps are already in requirements-common.txt
+pip install --no-deps -r requirements-chatterbox.txt
 
 # Frontend setup
 conda install conda-forge::nodejs
@@ -115,26 +122,51 @@ docker-compose -f docker-compose.amd.yml up -d
 
 **Core Python Dependencies:**
 ```
-torch>=2.4.1
-transformers>=4.40.0
-fastapi>=0.100.0
-uvicorn>=0.20.0
-pydantic>=2.0.0
-loguru>=0.7.0
-pyyaml>=6.0
-numpy>=1.24.0
-scipy>=1.10.0
-librosa>=0.10.0
-soundfile>=0.12.0
+torch>=2.7.1
+transformers
+fastapi
+uvicorn
+pydantic
+loguru
+pyyaml
+numpy
+scipy
+librosa
+soundfile
+```
+
+**KittenTTS Dependencies:**
+```
+onnxruntime
+misaki[en]>=0.9.4
+espeakng_loader
+num2words
+spacy
+```
+
+**Chatterbox TTS Dependencies:**
+```
+# Installed via: pip install --no-deps -r requirements-chatterbox.txt
+chatterbox-tts==0.1.6   # --no-deps required — overcautious version pins conflict with HSE stack
+# Safe transitive deps (installed normally via requirements-common.txt):
+resemble-perth==1.0.1
+pyloudnorm
+einops
+omegaconf
+conformer==0.3.2
+s3tokenizer
+spacy-pkuseg
+pykakasi               # shared with MeloTTS Japanese
 ```
 
 **Development Tools:**
 ```
-pytest>=7.0.0
-black>=23.0.0
-flake8>=6.0.0
-mypy>=1.0.0
-pre-commit>=3.0.0
+pytest>=8.0.0
+black>=24.0.0
+flake8>=7.0.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.12.0
+pytest-cov>=5.0.0
 ```
 
 **Frontend Dependencies:**

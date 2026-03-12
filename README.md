@@ -46,12 +46,12 @@ conda activate hse
 #### 2. Install Pytorch
 | System | GPU | Command |
 |--------|---------|---------|
-| Linux/WSL | NVIDIA | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121` |
-| Linux/WSL | CPU only | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cpu` |
-| Linux | AMD | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/rocm6.1` |
-| MacOS + MPS | Any | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1` |
-| Windows | NVIDIA | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu121` |
-| Windows | CPU only | `pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1` |
+| Linux/WSL | NVIDIA | `pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cu121` |
+| Linux/WSL | CPU only | `pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cpu` |
+| Linux | AMD | `pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/rocm6.1` |
+| MacOS + MPS | Any | `pip3 install torch torchaudio` |
+| Windows | NVIDIA | `pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cu121` |
+| Windows | CPU only | `pip3 install torch torchaudio --index-url https://download.pytorch.org/whl/cpu` |
 
 The up-to-date commands can be found here: https://pytorch.org/get-started/locally/.
 
@@ -59,8 +59,13 @@ The up-to-date commands can be found here: https://pytorch.org/get-started/local
 ```
 git clone https://github.com/harmony-ai-solutions/harmony-speech-engine
 cd harmony-speech-engine
-pip install -r requirements
+pip install -r requirements-cuda.txt    # or requirements-cpu.txt / requirements-rocm.txt
+pip install --no-deps -r requirements-chatterbox.txt
 ```
+
+> **Note on Chatterbox TTS:** `chatterbox-tts` declares version pins that conflict with other HSE
+> dependencies (torch, numpy, transformers). The second install command uses `--no-deps` to bypass
+> those pins — the code is fully compatible with the versions installed by the main requirements file.
 
 #### 4. Set up NodeJS for the Frontend
 ```
@@ -133,12 +138,14 @@ May change over time as new models and frameworks are being developed.
   - [x] Harmony Speech V1 (english)
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 (English, Spanish, French, Chinese, Japanese and Korean)
+  - [ ] Chatterbox TTS (Multilingual, 23 languages — in progress)
   - [ ] Vall-E-X (Multilingual)
   - [ ] XTTS V2 (Multilingual)
   - [ ] CosyVoice (Multilingual)
 - [x] Generic High Quality Single-Speaker TTS
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 / MeloTTS (English, Spanish, French, Chinese, Japanese and Korean)
+  - [x] KittenTTS (English, ultra-lightweight ONNX — mini / micro / nano / nano-int8)
 - [ ] Generic Multispeaker TTS
   - [ ] EmotiVoice (English / Chinese + basic emotions for a wide range of speakers)
 - [ ] Adaptive Voice Cloning
@@ -168,8 +175,9 @@ May change over time as new models and frameworks are being developed.
   - [ ] TTS-Streaming
   - [ ] More comprehensive approach to internal Re-Routing of Requests 
 - Testing & Operation
-  - [ ] Unit Testing & Test mocking for Key Components
-  - [ ] API Integration Tests
+  - [x] Unit Testing & Test mocking for Key Components
+  - [x] API Integration Tests
+  - [ ] GPU Executor Test Coverage
   - [ ] Input Audio File Format Support
   - [ ] Compatibility Testing for all APIs and Models
 

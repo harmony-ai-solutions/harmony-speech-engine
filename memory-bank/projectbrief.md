@@ -3,7 +3,7 @@
 ## Project Overview
 
 **Project Name**: Harmony Speech Engine  
-**Version**: 0.1.0-rc8 (Release Candidate)  
+**Version**: 0.1.0-rc9 (Release Candidate)  
 **Repository**: https://github.com/harmony-ai-solutions/harmony-speech-engine  
 **License**: AGPLv3  
 **Organization**: Harmony.AI Solutions  
@@ -26,7 +26,8 @@ Harmony Speech Engine is a high-performance inference engine for Open Source Spe
 - Low-latency processing for real-time applications
 
 ### 3. Flexible Model Integration
-- Support for multiple TTS backends (Harmony Speech V1, OpenVoice V1/V2, MeloTTS)
+- Support for multiple TTS backends (Harmony Speech V1, OpenVoice V1/V2, MeloTTS, KittenTTS)
+- Chatterbox TTS integration in progress (4 model variants: TTS, VC, Multilingual, Turbo)
 - Speech recognition via Faster-Whisper
 - Voice conversion and cloning capabilities
 - Extensible architecture for new model types
@@ -57,6 +58,8 @@ Harmony Speech Engine is a high-performance inference engine for Open Source Spe
 - ✅ OpenAI-compatible API implementation
 - ✅ Docker deployment support
 - ✅ Basic TTS and STT functionality
+- ✅ KittenTTS integration (ONNX, 4 variants, 8 voices)
+- 🔄 Chatterbox TTS integration (Phase 1/7 complete)
 - 🔄 Voice conversion pipeline completion
 - 🔄 Comprehensive model support
 - ❌ Production-grade performance optimization

@@ -29,8 +29,12 @@
 - ✅ OpenVoice V1 (Synthesizer EN/ZH, Tone Converter, Encoder)
 - ✅ OpenVoice V2/MeloTTS (Multilingual synthesis: EN, ZH, ES, FR, JP, KR)
 - ✅ Faster-Whisper (Speech recognition and VAD: tiny, medium, large-v3-turbo)
-- ✅ VoiceFixer (Audio restoration: Restorer, Vocoder) - **COMPLETED**
-- ✅ Silero VAD (High-performance voice activity detection) - **COMPLETED**
+- ✅ VoiceFixer (Audio restoration: Restorer, Vocoder)
+- ✅ Silero VAD (High-performance voice activity detection)
+- ✅ KittenTTS (Ultra-lightweight ONNX TTS: mini, micro, nano, nano-int8)
+
+**In Progress:**
+- 🔄 Chatterbox TTS (4 variants: TTS, VC, Multilingual, Turbo) — Phase 1 of 7 complete
 
 **Model Integration Patterns:**
 - Standardized model configuration via YAML
@@ -38,6 +42,48 @@
 - Language-specific model routing
 - Voice selection and emotion support
 - Audio restoration and enhancement pipelines
+
+### KittenTTS Integration - COMPLETED
+
+**Overview**
+- Ultra-lightweight ONNX-based English TTS with 4 model variants
+- 8 voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+- Phonemizer: `misaki[en]`
+- Implementation: `harmonyspeech/modeling/models/kittentts/`
+
+**Model Variants**
+- `kitten-tts-mini`: Highest quality, 80MB
+- `kitten-tts-micro`: Good quality, 41MB
+- `kitten-tts-nano`: Lightweight, 56MB fp32
+- `kitten-tts-nano-int8`: Most compact, 25MB (quantized)
+
+**Integration**
+- Native ONNX runtime via `onnxruntime` (no torch dependency for inference)
+- Full integration with HSE model loading, routing and executor system
+- 4 e2e tests validated and passing on CPU
+
+### Chatterbox TTS Integration - Phase 1 Complete
+
+**Overview**
+- Resemble AI's open-source TTS family: 4 model variants (ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS)
+- 23 supported languages (multilingual variant)
+- Voice cloning with watermarking (resemble-perth)
+
+**Dependency Approach — Key Decision**
+- `chatterbox-tts==0.1.6` declares hard version pins (torch==2.6.0, numpy<1.26.0, transformers==4.46.3, etc.) that conflict with HSE's stack
+- The Python code is compatible with newer versions; the pins are overcautious
+- Solution: `chatterbox-tts` installed via `pip install --no-deps -r requirements-chatterbox.txt`
+- Safe transitive deps (`resemble-perth`, `pyloudnorm`, `einops`, `omegaconf`, `conformer`, `s3tokenizer`, `spacy-pkuseg`) listed in `requirements-common.txt`
+- Upgrade checklist documented in `.planning/codebase/CONCERNS.md` § "Chatterbox TTS Dependency Pinning"
+
+**Phase Status**
+- ✅ Phase 1: Dependencies installed and verified — all 7 import tests pass
+- ❌ Phase 2: Model Registration
+- ❌ Phase 3: Input Preparation
+- ❌ Phase 4: Model Execution
+- ❌ Phase 5: Request Routing
+- ❌ Phase 6: Configuration & Performance
+- ❌ Phase 7: Testing & Documentation
 
 ### VoiceFixer Integration - COMPLETED
 
@@ -97,38 +143,41 @@
 
 ## Current Work Focus
 
-**1. Model Integration Completion**
-- ✅ VoiceFixer integration for audio restoration
-- ✅ Silero VAD as high-performance alternative to Faster-Whisper
+**1. Chatterbox TTS Integration (Active — GSD Roadmap Phase 1 of 7 complete)**
+- ✅ Phase 1: Dependencies and setup complete
+- → Phase 2 next: Model registration — register all 4 Chatterbox variants in ModelRegistry
+- Run `/gsd-plan-phase 2` to generate the Phase 2 implementation plan
+
+**2. Model Integration Completion (Backlog)**
 - [ ] StyleTTS 2 integration for advanced voice cloning
 - [ ] XTTS V2 multilingual support
 - [ ] Vall-E-X zero-shot voice cloning
 
-**2. Performance and Reliability**
+**3. Performance and Reliability**
 - [ ] Comprehensive error handling and recovery mechanisms
 - [ ] Memory optimization for large model loading
 - [ ] Request batching optimization for improved throughput
 - [ ] GPU memory management improvements
 
-**3. Testing and Quality Assurance**
-- [ ] Unit test coverage for core components
-- [ ] Integration tests for multi-model workflows
-- [ ] Performance benchmarking and optimization
-- [ ] API compatibility testing
+**4. Testing and Quality Assurance**
+- 80 tests across unit / integration / e2e tiers, 80% coverage
+- [ ] GPU executor path coverage (currently 0%)
+- [ ] Multi-step pipeline integration tests
+- [ ] Performance benchmarking
 
-**4. Advanced Features**
+**5. Advanced Features**
 - [ ] TTS streaming capabilities for real-time applications
 - [ ] Input filters / pre-processing pipelines
 - [ ] Voice conversion post-processing pipelines
 - [ ] Advanced audio format support
 
-**5. Production Readiness**
+**6. Production Readiness**
 - [ ] Comprehensive monitoring and logging
 - [ ] Health check endpoints and diagnostics
 - [ ] Horizontal scaling capabilities
 - [ ] Production deployment guides
 
-**6. Community and Ecosystem**
+**7. Community and Ecosystem**
 - [ ] Community model contribution guidelines
 - [ ] Third-party integration examples
 - [ ] Performance optimization documentation
@@ -312,20 +361,18 @@
 
 ## Next Steps and Immediate Actions
 
-### This Week
-1. ✅ Complete VoiceFixer integration and testing
-2. Update documentation with VoiceFixer endpoints and usage
-3. Add performance benchmarking for audio restoration workflows
-4. Prepare release candidate 9 with VoiceFixer integration
+### Immediate
+1. ✅ Chatterbox Phase 1 complete — dependencies installed, import tests passing
+2. → Run `/gsd-plan-phase 2` to plan Chatterbox model registration
+3. → Execute Phase 2: register ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS in ModelRegistry
 
-### Next Week
-1. Begin StyleTTS 2 integration work
+### Near Term
+1. Complete Chatterbox TTS phases 2–7 (model registration → testing)
 2. Implement model unloading for memory management
-3. Add integration tests for audio restoration workflows
-4. Update API documentation and examples
+3. Expand e2e test coverage to GPU executor path
 
 ### This Month
-1. Complete major model integrations (StyleTTS 2, XTTS V2)
+1. Complete Chatterbox TTS full integration
 2. Implement TTS streaming capabilities
 3. Add comprehensive monitoring and health checks
 4. Prepare for stable v0.1.0 release

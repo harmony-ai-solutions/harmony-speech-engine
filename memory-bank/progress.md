@@ -108,6 +108,22 @@
 - ✅ Enhanced `/v1/audio/vad` endpoint with configurable parameters
 - ✅ Native model integration following HSE patterns
 
+### ✅ KittenTTS (COMPLETE)
+- ✅ KittenTTSSynthesizer — ONNX-based English TTS
+- ✅ 4 model variants: mini (80MB), micro (41MB), nano-fp32 (56MB), nano-int8 (25MB)
+- ✅ 8 voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+- ✅ Phonemizer: misaki[en]
+- ✅ 4 e2e tests validated and passing on CPU
+
+### 🔄 Chatterbox TTS (IN PROGRESS — Phase 1 of 7 Complete)
+- ✅ Phase 1: Dependencies installed — chatterbox-tts==0.1.6 (--no-deps), resemble-perth, pyloudnorm, einops, omegaconf, conformer, s3tokenizer, spacy-pkuseg; all 7 import tests pass
+- ❌ Phase 2: Model Registration (ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS in ModelRegistry)
+- ❌ Phase 3: Input Preparation
+- ❌ Phase 4: Model Execution
+- ❌ Phase 5: Request Routing (including multi-step voice cloning)
+- ❌ Phase 6: Configuration & Performance
+- ❌ Phase 7: Testing & Documentation
+
 ### 🔄 Planned Model Integrations (IN PROGRESS)
 
 **StyleTTS 2** (Priority: High)
@@ -178,15 +194,17 @@
 
 ## Testing and Quality Assurance
 
-### 🔄 Testing Infrastructure (PARTIAL)
-- 🔄 Unit tests for core components
-- ❌ Integration tests for API endpoints
+### ✅ Testing Infrastructure (ESTABLISHED)
+- ✅ 28 unit tests — config parsing, dtype resolution, engine init, model loader registry
+- ✅ 17 integration tests — all 7 HTTP endpoints via mocked serving layer
+- ✅ 35 e2e tests — full model pipelines for KittenTTS, MeloTTS, OpenVoice V1/V2, HarmonySpeech, FasterWhisper, SileroVAD, VoiceFixer
+- ✅ 80% overall coverage
+- ❌ GPU executor path untested (gpu_model_runner.py, gpu_worker.py — 0% coverage)
 - ❌ Performance benchmarking suite
-- ❌ Model accuracy validation tests
 - ❌ Load testing framework
 
 ### 🔄 Documentation (PARTIAL)
-- ✅ API documentation (auto-generated)
+- ✅ API documentation (auto-generated via Swagger/ReDoc)
 - ✅ Setup and installation guides
 - 🔄 Model configuration examples
 - ❌ Advanced usage tutorials
