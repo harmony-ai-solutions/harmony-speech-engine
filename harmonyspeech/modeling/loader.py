@@ -7,6 +7,12 @@ import torch.nn as nn
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
 from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
+from harmonyspeech.modeling.models.chatterbox.chatterbox import (
+    ChatterboxTTSModel,
+    ChatterboxTurboTTSModel,
+    ChatterboxMultilingualTTSModel,
+    ChatterboxVCModel,
+)
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
@@ -83,6 +89,19 @@ _MODEL_CONFIGS = {
     # KittenTTS
     "KittenTTSSynthesizer": {
         "default": "native"
+    },
+    # Chatterbox TTS
+    "ChatterboxTTS": {
+        "default": "native"
+    },
+    "ChatterboxTurboTTS": {
+        "default": "native"
+    },
+    "ChatterboxMultilingualTTS": {
+        "default": "native"
+    },
+    "ChatterboxVC": {
+        "default": "native"
     }
 }
 
@@ -135,6 +154,19 @@ _MODEL_WEIGHTS = {
     },
     # KittenTTS
     "KittenTTSSynthesizer": {
+        "default": "native"
+    },
+    # Chatterbox TTS
+    "ChatterboxTTS": {
+        "default": "native"
+    },
+    "ChatterboxTurboTTS": {
+        "default": "native"
+    },
+    "ChatterboxMultilingualTTS": {
+        "default": "native"
+    },
+    "ChatterboxVC": {
         "default": "native"
     }
 }
@@ -277,6 +309,22 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     return model
                 elif model_config.model_type == "KittenTTSSynthesizer":
                     model = KittenTTSSynthesizer(model_name_or_path=model_config.model)
+                    return model
+                elif model_config.model_type == "ChatterboxTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxTTSModel.from_pretrained(device=device)
+                    return model
+                elif model_config.model_type == "ChatterboxTurboTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    return model
+                elif model_config.model_type == "ChatterboxMultilingualTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    return model
+                elif model_config.model_type == "ChatterboxVC":
+                    device = str(device_config.device)
+                    model = ChatterboxVCModel.from_pretrained(device=device)
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)
