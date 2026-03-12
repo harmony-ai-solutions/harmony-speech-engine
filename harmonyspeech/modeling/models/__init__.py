@@ -29,6 +29,11 @@ _MODELS = {
     "SileroVAD": ("silero-vad", "native"),
     # KittenTTS
     "KittenTTSSynthesizer": ("kittentts", "native"),
+    # Chatterbox TTS
+    "ChatterboxTTS": ("chatterbox", "native"),
+    "ChatterboxTurboTTS": ("chatterbox", "native"),
+    "ChatterboxMultilingualTTS": ("chatterbox", "native"),
+    "ChatterboxVC": ("chatterbox", "native"),
 }
 
 # Architecture -> type.
