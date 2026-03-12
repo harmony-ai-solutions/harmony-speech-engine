@@ -192,6 +192,20 @@ The test suite consists of 80 tests with 80% overall coverage.
 - **onnxruntime:** No version pin - could have breaking changes
 - **torch >= 2.7.1:** Required but no upper bound - could break on torch 3.x
 
+### Chatterbox TTS Dependency Pinning
+
+- **Package:** `chatterbox-tts==0.1.6`
+- **Problem:** The package declares hard version pins in its pip metadata (`torch==2.6.0`, `torchaudio==2.6.0`, `transformers==4.46.3`, `numpy<1.26.0`, `safetensors==0.5.3`, `diffusers==0.29.0`) that conflict with the versions required by the rest of HSE. A normal `pip install chatterbox-tts` would downgrade torch, transformers, and numpy, breaking the engine.
+- **Current mitigation:** Installed via `--no-deps` with its transitive dependencies listed explicitly in `requirements-common.txt`. Verified working on torch 2.10, transformers 5.0, numpy 2.4, safetensors 0.7, diffusers 0.37.
+- **Risk:** Every new `chatterbox-tts` release must be manually evaluated before bumping the pin:
+  1. Check the new release's `requires_dist` for any newly required packages or changed pins.
+  2. Run `pip install chatterbox-tts==<new_version> --no-deps` in a test environment.
+  3. Verify all four classes import: `ChatterboxTTS`, `ChatterboxVC`, `ChatterboxMultilingualTTS`, `ChatterboxTurboTTS`.
+  4. Run `pytest tests/unit/initialization/test_chatterbox_imports.py -v`.
+  5. Update the version pin and transitive deps in `requirements-common.txt` if needed.
+- **Upgrade owner:** Whoever bumps the pin is responsible for completing steps 1–5 above.
+- **Long-term fix:** If Resemble AI relaxes their version pins in a future release, the `--no-deps` workaround can be removed and the package installed normally.
+
 ### Complex Dependency Tree
 
 - Multiple phonemizers: `gruut[de,es,fr]`, `misaki[en]`, `espeakng_loader`, `g2p_en`, `g2pkk`

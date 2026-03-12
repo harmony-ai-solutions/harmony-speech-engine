@@ -55,9 +55,21 @@ num2words
 spacy
 
 # Chatterbox TTS dependencies
-chatterbox-tts
-perth
+# Installed with --no-deps because chatterbox-tts 0.1.6 pins torch==2.6.0, transformers==4.46.3,
+# numpy<1.26.0, safetensors==0.5.3 etc. — all of which conflict with the versions HSE requires.
+# The actual Python code is compatible with newer versions; the pins are overcautious.
+# Transitive deps that are safe to install normally are listed explicitly below.
+# IMPORTANT: When upgrading chatterbox-tts, re-verify this no-deps install still works.
+# See .planning/codebase/CONCERNS.md § "Chatterbox TTS Dependency Pinning".
+chatterbox-tts==0.1.6 --no-deps
+resemble-perth==1.0.1
 pyloudnorm
+einops
+omegaconf
+conformer==0.3.2
+s3tokenizer
+spacy-pkuseg
+# pykakasi already listed above (MeloTTS Japanese); also used by Chatterbox MTL tokenizer
 
 # Testing
 pytest>=8.0.0
