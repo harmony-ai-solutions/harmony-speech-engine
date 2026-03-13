@@ -69,7 +69,11 @@ Plans:
 7. `ChatterboxMultilingualTTS` exposes a `SUPPORTED_LANGUAGES` constant (23 entries) registered as `LanguageOptions` on the model card
 8. No temp files created — all processing uses in-memory BytesIO
 
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Data model extensions (TextToSpeechGenerationOptions + GenerationOptions + SUPPORTED_LANGUAGES) + test scaffold
+- [ ] 03-02-PLAN.md — All 5 Chatterbox prepare functions + dispatch branches + multilingual language registration
 
 ---
 
