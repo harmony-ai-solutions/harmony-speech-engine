@@ -65,8 +65,8 @@ progress:
 
 | ID | Question | Status |
 |----|----------|--------|
-| OQ-01 | Should multilingual model languages be exposed in model card voices list? | Open - depends on API design preference |
-| OQ-02 | How to handle Turbo's ignored params - warn or silent ignore? | Open - need consistency with other model error handling |
+| OQ-01 | Should multilingual model languages be exposed in model card voices list? | **Resolved** - OpenCode's Discretion (research existing patterns) |
+| OQ-02 | How to handle Turbo's ignored params - warn or silent ignore? | **Resolved** - Raise ValueError for explicitly-set unsupported params (symmetric validation) |
 | OQ-03 | Should we implement eager loading of Chatterbox models on startup, or lazy load? | Open - follow existing HSE pattern (lazy) |
 
 ### Dependencies Between Phases
@@ -86,13 +86,13 @@ progress:
 
 ### Last Session
 
-- **Date:** 2026-03-12
-- **Action:** Completed Phase 2 Plan 1 - Chatterbox model registration and loader integration
-- **Outcome:** All 4 Chatterbox variants registered, 6 unit tests passing, loader branches added
+- **Date:** 2026-03-13
+- **Action:** Completed Phase 3 Context - Discussed and captured implementation decisions
+- **Outcome:** CONTEXT.md created with 4 key decision areas: unsupported param validation (ValueError), language validation (serve engine), VC conflicts (raise on both/neither), defaults (in prepare functions)
 
 ### Next Steps
 
-1. Continue with remaining Phase 2 plans (02-02, 02-03, etc.)
+1. Run /gsd-plan-phase 3 to create implementation plan
 2. Proceed to Phase 3: Input Preparation
 
 ---
