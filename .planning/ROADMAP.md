@@ -56,16 +56,18 @@ Plans:
 ---
 
 ### Phase 3: Input Preparation
-**Goal:** Input preparation functions handle all Chatterbox model variants with correct parameter extraction  
+**Goal:** Input preparation functions handle all Chatterbox model variants with correct parameter extraction, validation, and language registration  
 **Depends on:** Phase 2  
-**Requirements:** REQ-INPUT-01, REQ-INPUT-02, REQ-INPUT-03, REQ-INPUT-04  
+**Requirements:** REQ-INPUT-01, REQ-INPUT-02, REQ-INPUT-03, REQ-INPUT-04, REQ-INPUT-05, REQ-INPUT-06  
 **Success Criteria** (what must be TRUE):
 1. `prepare_chatterbox_tts_inputs()` extracts text, embedding, audio, and generation options correctly
-2. `prepare_chatterbox_multilingual_tts_inputs()` validates language_id for 23 supported languages
+2. `prepare_chatterbox_multilingual_tts_inputs()` defaults to `"en"` when language_id is absent
 3. `prepare_chatterbox_turbo_tts_inputs()` applies Turbo-specific default values
 4. `prepare_chatterbox_embedding_inputs()` decodes base64 audio to bytes without filesystem I/O
-5. `prepare_chatterbox_vc_inputs()` handles source_audio and target_audio/target_embedding correctly
-6. No temp files created - all processing uses in-memory BytesIO
+5. `prepare_chatterbox_vc_inputs()` raises `ValueError` when both or neither of target_audio/target_embedding are provided
+6. Any prepare function raises `ValueError` when a non-None unsupported generation param is passed for that model variant
+7. `ChatterboxMultilingualTTS` exposes a `SUPPORTED_LANGUAGES` constant (23 entries) registered as `LanguageOptions` on the model card
+8. No temp files created — all processing uses in-memory BytesIO
 
 **Plans:** TBD
 
@@ -119,13 +121,14 @@ Plans:
 ### Phase 7: Testing & Documentation
 **Goal:** Comprehensive test coverage and API documentation complete  
 **Depends on:** Phase 6  
-**Requirements:** REQ-TEST-01, REQ-TEST-02, REQ-TEST-03, REQ-DOC-01  
+**Requirements:** REQ-TEST-01, REQ-TEST-02, REQ-TEST-03, REQ-TEST-04, REQ-DOC-01  
 **Success Criteria** (what must be TRUE):
 1. Unit tests pass: `pytest tests/unit/inference_flow/test_chatterbox_*.py -v`
-2. Integration tests pass: `pytest tests/integration/test_chatterbox_flow.py -v`
-3. E2E tests pass or skip gracefully: `pytest tests/e2e/test_chatterbox_e2e.py -v`
-4. API documentation accessible via `/docs` endpoint
-5. New generation options fields documented in OpenAPI spec
+2. Input validation unit tests pass: all `ValueError` branches covered for all model variants and conflict cases (REQ-TEST-04)
+3. Integration tests pass: `pytest tests/integration/test_chatterbox_flow.py -v`
+4. E2E tests pass or skip gracefully: `pytest tests/e2e/test_chatterbox_e2e.py -v`
+5. API documentation accessible via `/docs` endpoint
+6. New generation options fields documented in OpenAPI spec
 
 **Plans:** TBD
 
@@ -142,6 +145,8 @@ Plans:
 | REQ-INPUT-02 | Phase 3 | Pending |
 | REQ-INPUT-03 | Phase 3 | Pending |
 | REQ-INPUT-04 | Phase 3 | Pending |
+| REQ-INPUT-05 | Phase 3 | Pending |
+| REQ-INPUT-06 | Phase 3 | Pending |
 | REQ-EXEC-01 | Phase 4 | Pending |
 | REQ-EXEC-02 | Phase 4 | Pending |
 | REQ-EXEC-03 | Phase 4 | Pending |
@@ -156,6 +161,7 @@ Plans:
 | REQ-TEST-01 | Phase 7 | Pending |
 | REQ-TEST-02 | Phase 7 | Pending |
 | REQ-TEST-03 | Phase 7 | Pending |
+| REQ-TEST-04 | Phase 7 | Pending |
 | REQ-DOC-01 | Phase 7 | Pending |
 
 ---
@@ -174,4 +180,4 @@ Plans:
 
 ---
 
-*Last updated: 2026-03-12*
+*Last updated: 2026-03-13*

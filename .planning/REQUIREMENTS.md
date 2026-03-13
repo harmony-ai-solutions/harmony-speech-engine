@@ -93,6 +93,38 @@
 
 ---
 
+## REQ-INPUT-05: Generation Option Validation per Model Variant
+
+**Description:** Each Chatterbox prepare function must reject unsupported generation option fields that the caller explicitly sets.
+
+**Details:**
+- Raise `ValueError` when a non-None value is passed for a param not supported by the target model variant:
+  - ChatterboxTTS / ChatterboxMultilingualTTS: reject `top_k`, `norm_loudness`
+  - ChatterboxTurboTTS: reject `exaggeration`, `cfg_weight`, `min_p`
+- Validation is **non-None only** — absent (None) fields are silently skipped. A caller passing a full options object with None fields must not be broken.
+- Validation is **symmetric**: Turbo-only params sent to base TTS raise; base-TTS-only params sent to Turbo raise.
+- Error messages must name the specific unsupported param(s) and the model type, e.g. `"exaggeration is not supported by ChatterboxTurboTTS"`.
+- This is a deliberate departure from the existing silent-ignore pattern used by KittenTTS, OpenVoice, and MeloTTS. Chatterbox establishes the new standard; existing models are not changed.
+
+**Verification:** Unit tests assert `ValueError` is raised for each unsupported param per model variant; assert no error is raised when the same param is `None`.
+
+---
+
+## REQ-INPUT-06: Chatterbox Multilingual Language Registration
+
+**Description:** Chatterbox Multilingual must register its 23 supported languages into the existing `LanguageOptions` / `model.languages` structure so they are discoverable via the API (`/v1/models`) and validated by the serving engine.
+
+**Details:**
+- The 23 supported language codes are defined as a constant (e.g. `SUPPORTED_LANGUAGES`) in the `ChatterboxMultilingualTTS` model wrapper class (`harmonyspeech/modeling/models/chatterbox/chatterbox.py`).
+- During model card construction (in the loader or engine layer), each language code is registered as a `LanguageOptions` entry on the model card — consistent with how MeloTTS and OpenVoice register their languages.
+- The serving engine's existing language validation (`serving_engine.py` lines 89–120) then handles request-time validation automatically — no duplicate validation in the prepare function.
+- Languages are **not** added as "voices" in the model card (voices remain a separate concept per language, as in existing models). Research the MeloTTS / OpenVoice model card pattern and follow it.
+- If `language_id` is absent/None at prepare time, default to `"en"`.
+
+**Verification:** Unit test that `ChatterboxMultilingualTTS` exposes a non-empty `SUPPORTED_LANGUAGES` constant with 23 entries; integration test that an unsupported language code returns a 400 from the serving engine.
+
+---
+
 ## REQ-EXEC-01: TTS Model Execution
 
 **Description:** Implement model execution methods for Chatterbox TTS variants.
@@ -275,6 +307,25 @@
 
 ---
 
+## REQ-TEST-04: Unit Tests for Input Validation and Language Registration
+
+**Description:** Unit tests covering the `ValueError` validation contracts introduced in Phase 3 and the `SUPPORTED_LANGUAGES` constant on `ChatterboxMultilingualTTS`.
+
+**Details:**
+- Extend `test_chatterbox_inputs.py` with validation test cases:
+  - Assert `ValueError` is raised for each unsupported generation param per model variant when explicitly set to a non-None value
+  - Assert **no** error is raised when the same param is `None` (absent/default)
+  - Test all three affected variants: ChatterboxTTS, ChatterboxTurboTTS, ChatterboxMultilingualTTS
+  - Test VC conflict cases: both target_audio + target_embedding → `ValueError`; neither → `ValueError`
+  - Test TTS conflict case: both input_audio + input_embedding → `ValueError`
+- Verify `ChatterboxMultilingualTTS.SUPPORTED_LANGUAGES` is defined and contains exactly 23 entries
+- Verify model card for ChatterboxMultilingualTTS contains `LanguageOptions` entries matching `SUPPORTED_LANGUAGES`
+- Tests must not require a real model download (mock the model wrapper)
+
+**Verification:** `pytest tests/unit/inference_flow/test_chatterbox_inputs.py -v` passes, covering all validation branches.
+
+---
+
 ## REQ-DOC-01: API Documentation
 
 **Description:** Update API documentation for new model endpoints.
@@ -319,8 +370,8 @@
 
 | ID | Question | Status |
 |---|---|---|
-| OQ-01 | Should multilingual model languages be exposed in model card voices list? | Open — depends on API design preference |
-| OQ-02 | How to handle Turbo's ignored params (exaggeration, cfg_weight, min_p) — warn or silent ignore? | Open — need consistency with other model error handling |
+| OQ-01 | Should multilingual model languages be exposed in model card voices list? | **Resolved** — Languages register as `LanguageOptions` (not voices). Research MeloTTS/OpenVoice pattern; covered by REQ-INPUT-06 |
+| OQ-02 | How to handle Turbo's ignored params (exaggeration, cfg_weight, min_p) — warn or silent ignore? | **Resolved** — Raise `ValueError` for explicitly-set unsupported params; covered by REQ-INPUT-05 |
 | OQ-03 | Should we implement eager loading of Chatterbox models on startup, or lazy load? | Open — follow existing HSE pattern (lazy) |
 
 ---
@@ -336,6 +387,8 @@
 | REQ-INPUT-02 | Phase 3: Input Preparation | Pending |
 | REQ-INPUT-03 | Phase 3: Input Preparation | Pending |
 | REQ-INPUT-04 | Phase 3: Input Preparation | Pending |
+| REQ-INPUT-05 | Phase 3: Input Preparation | Pending |
+| REQ-INPUT-06 | Phase 3: Input Preparation | Pending |
 | REQ-EXEC-01 | Phase 4: Model Execution | Pending |
 | REQ-EXEC-02 | Phase 4: Model Execution | Pending |
 | REQ-EXEC-03 | Phase 4: Model Execution | Pending |
@@ -350,6 +403,7 @@
 | REQ-TEST-01 | Phase 7: Testing & Documentation | Pending |
 | REQ-TEST-02 | Phase 7: Testing & Documentation | Pending |
 | REQ-TEST-03 | Phase 7: Testing & Documentation | Pending |
+| REQ-TEST-04 | Phase 7: Testing & Documentation | Pending |
 | REQ-DOC-01 | Phase 7: Testing & Documentation | Pending |
 
-*Last updated: 2026-03-12*
+*Last updated: 2026-03-13*

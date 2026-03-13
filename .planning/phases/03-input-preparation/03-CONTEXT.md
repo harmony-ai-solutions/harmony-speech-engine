@@ -8,6 +8,8 @@
 
 Implement input preparation functions for all Chatterbox model variants: `prepare_chatterbox_tts_inputs()`, `prepare_chatterbox_multilingual_tts_inputs()`, `prepare_chatterbox_turbo_tts_inputs()`, `prepare_chatterbox_embedding_inputs()`, and `prepare_chatterbox_vc_inputs()`. These functions live in `harmonyspeech/task_handler/inputs.py` and transform incoming API requests into parameter tuples ready for model execution methods.
 
+Also includes: generation option validation (ValueError for unsupported params per model variant) and Chatterbox Multilingual language registration into the existing `LanguageOptions` / model card structure.
+
 This phase does NOT include model execution (Phase 4), routing logic (Phase 5), or tests (Phase 7).
 
 </domain>
@@ -29,7 +31,7 @@ This phase does NOT include model execution (Phase 4), routing logic (Phase 5), 
 - If `language_id` is absent/None, **default to English** (`"en"`).
 - The 23 supported Chatterbox Multilingual language codes live in the **model wrapper class** (in `harmonyspeech/modeling/models/chatterbox/chatterbox.py`), not in the prepare function. The prepare function imports the list from the model.
 - Language discoverability at the API level must align with the existing `LanguageOptions` / `model.languages` pattern in `serving_engine.py`. Chatterbox Multilingual registers its supported languages into that existing structure so they surface via `/v1/models`.
-- Whether to expose languages as "voices" in the model card is **OpenCode's Discretion** — research existing multilingual model patterns (e.g. MeloTTS, OpenVoice) and follow the same approach.
+- Languages are **not** added as "voices" in the model card — see Language Registration decision below (REQ-INPUT-06).
 
 ### VC Input Conflict Resolution
 
@@ -49,10 +51,26 @@ This phase does NOT include model execution (Phase 4), routing logic (Phase 5), 
 - `TextToSpeechGenerationOptions` is extended (not a separate class) with all 8 Chatterbox fields, all typed `Optional[T] = None`. The dataclass does NOT set model-specific defaults — those remain in the prepare functions.
 - `GenerationOptions` (Pydantic wire model in `protocol.py`) also gets the corresponding 8 fields added with `= None` defaults.
 
+### Generation Option Validation (REQ-INPUT-05)
+
+- Each prepare function validates generation options against the params its model variant supports.
+- Raise `ValueError` when a **non-None** unsupported param is explicitly passed:
+  - ChatterboxTTS / ChatterboxMultilingualTTS: reject `top_k`, `norm_loudness`
+  - ChatterboxTurboTTS: reject `exaggeration`, `cfg_weight`, `min_p`
+- Validation is symmetric — works both directions.
+- Error messages name the specific param and the model type.
+- This is a conscious departure from the existing silent-ignore pattern; existing models (KittenTTS, OpenVoice, MeloTTS) are NOT changed.
+
+### Language Registration for Multilingual Model (REQ-INPUT-06)
+
+- `ChatterboxMultilingualTTS` defines a `SUPPORTED_LANGUAGES` constant (23 language codes) in the model wrapper class.
+- During model card construction, each language is registered as a `LanguageOptions` entry so they appear via `/v1/models` and are validated by the serving engine automatically.
+- Languages are **not** added as voices — research the MeloTTS / OpenVoice model card pattern and follow it (or extend it to work for all architectures if needed).
+- The prepare function relies on the serving engine's existing language validation; it does NOT duplicate it.
+
 ### OpenCode's Discretion
 
-- Whether Chatterbox Multilingual languages are exposed as "voices" or as a separate language list in the model card — research existing patterns (MeloTTS, OpenVoice) and be consistent.
-- Exact `BytesIO` wrapping approach for embedding deserialization (follow existing `torch.load` pattern from OpenVoice as reference).
+- Exact `BytesIO` wrapping approach for embedding deserialization — follow the existing `torch.load` pattern from OpenVoice as reference.
 - `ThreadPoolExecutor` parallelism — follow the KittenTTS pattern (all existing prepare functions use it).
 
 </decisions>
@@ -60,8 +78,8 @@ This phase does NOT include model execution (Phase 4), routing logic (Phase 5), 
 <specifics>
 ## Specific Ideas
 
-- Chatterbox establishes a new validation standard in this codebase: unsupported params raise `ValueError` rather than being silently ignored. This is intentional and should be consistent across all 5 Chatterbox prepare functions.
-- The serving engine's language validation pipeline (`serving_engine.py` lines 89–120) is the authoritative validator for `language` — prepare functions should NOT re-implement this.
+- Chatterbox establishes a new validation standard: unsupported params raise `ValueError` rather than being silently ignored. This is intentional and consistent across all 5 Chatterbox prepare functions.
+- The serving engine's language validation pipeline (`serving_engine.py` lines 89–120) is the authoritative validator for `language` — prepare functions must NOT re-implement this.
 - Reference patterns to follow:
   - `prepare_kittentts_synthesizer_inputs()` — cleanest TTS prepare function structure (inner closure + ThreadPoolExecutor)
   - `prepare_openvoice_tone_converter_inputs()` — reference for BytesIO + torch.load embedding deserialization pattern
@@ -72,9 +90,8 @@ This phase does NOT include model execution (Phase 4), routing logic (Phase 5), 
 <deferred>
 ## Deferred Ideas
 
-- Shared language registry (a unified registry across all model families) — came up during discussion but is broader than Phase 3. The existing `LanguageOptions` pattern in `serving_engine.py` covers Phase 3 needs.
+- Shared language registry across all model families — broader than Phase 3. The existing `LanguageOptions` pattern in `serving_engine.py` covers Phase 3 needs.
 - Extending the unsupported-param validation pattern to existing models (KittenTTS, OpenVoice, MeloTTS) — this would change established behavior and belongs in a separate refactoring phase.
-- Test modifications for validation coverage — explicitly noted for Phase 7, but the Phase 3 prepare functions must be structured to be unit-testable (no side effects, clear ValueError contracts).
 
 </deferred>
 
