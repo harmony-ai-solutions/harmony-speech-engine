@@ -2,6 +2,7 @@
 import contextlib
 from typing import Type, Optional
 
+import perth
 import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
@@ -313,18 +314,26 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                 elif model_config.model_type == "ChatterboxTTS":
                     device = str(device_config.device)
                     model = ChatterboxTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, 'watermark', True):
+                        model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxTurboTTS":
                     device = str(device_config.device)
                     model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, 'watermark', True):
+                        model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxMultilingualTTS":
                     device = str(device_config.device)
                     model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, 'watermark', True):
+                        model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxVC":
                     device = str(device_config.device)
                     model = ChatterboxVCModel.from_pretrained(device=device)
+                    if not getattr(model_config, 'watermark', True):
+                        model.watermarker = perth.DummyWatermarker()
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)
