@@ -9,6 +9,7 @@ import torch
 
 # Import Chatterbox models from the chatterbox library
 from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
+from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
 
 
 class ChatterboxTTSModel:
@@ -79,6 +80,10 @@ class ChatterboxMultilingualTTSModel:
     
     ChatterboxMultilingualTTS provides TTS synthesis supporting multiple languages.
     """
+    
+    # 23 supported language codes mirroring upstream chatterbox library.
+    # Used by serving_engine for LanguageOptions registration and API validation.
+    SUPPORTED_LANGUAGES: dict = _CHATTERBOX_SUPPORTED_LANGUAGES.copy()
 
     @classmethod
     def from_pretrained(

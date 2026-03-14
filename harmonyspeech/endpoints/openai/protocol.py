@@ -55,6 +55,15 @@ class GenerationOptions(BaseModel):
     speed: Optional[float] = None
     pitch: Optional[float] = None
     energy: Optional[float] = None
+    # Chatterbox-specific fields
+    exaggeration: Optional[float] = None
+    cfg_weight: Optional[float] = None
+    temperature: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    top_p: Optional[float] = None
+    min_p: Optional[float] = None
+    top_k: Optional[int] = None
+    norm_loudness: Optional[bool] = None
 
 
 class AudioOutputOptions(BaseModel):

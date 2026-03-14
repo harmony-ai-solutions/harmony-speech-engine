@@ -11,6 +11,15 @@ class TextToSpeechGenerationOptions:
     speed: Optional[float]
     pitch: Optional[float]
     energy: Optional[float]
+    # Chatterbox-specific fields (None = use model default in prepare function)
+    exaggeration: Optional[float] = None
+    cfg_weight: Optional[float] = None
+    temperature: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    top_p: Optional[float] = None
+    min_p: Optional[float] = None
+    top_k: Optional[int] = None
+    norm_loudness: Optional[bool] = None
 
 
 class TextToSpeechAudioOutputOptions:
