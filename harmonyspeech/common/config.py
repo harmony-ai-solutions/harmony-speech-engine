@@ -61,6 +61,7 @@ class ModelConfig:
         revision: Optional[str] = None,
         code_revision: Optional[str] = None,
         enforce_eager: bool = True,
+        watermark: bool = True,
     ) -> None:
         self.name = name
         self.model = model
@@ -77,6 +78,7 @@ class ModelConfig:
         self.revision = revision
         self.code_revision = code_revision
         self.enforce_eager = enforce_eager
+        self.watermark = watermark
 
         self.dtype = _get_and_verify_dtype(dtype)
 
