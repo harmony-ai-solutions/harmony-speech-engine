@@ -312,11 +312,19 @@ class HarmonySpeechEngine:
                 request.input_embedding is None
             )
         ):
-            # Route to embedding model (Step 1 of multi-step, or standalone embed)
+            # Prefer dedicated ChatterboxEmbedding executor if configured
             for cfg in self.model_configs:
                 if cfg.model_type == "ChatterboxEmbedding":
                     request.model = cfg.name
                     break
+            else:
+                # Fallback: route embedding request to the TTS model executor
+                # (ChatterboxTTS also has prepare_conditionals — no separate model needed)
+                tts_type = _CHATTERBOX_TTS_TYPE_MAP.get(request.requested_model, "ChatterboxTTS")
+                for cfg in self.model_configs:
+                    if cfg.model_type == tts_type:
+                        request.model = cfg.name
+                        break
         elif (
             isinstance(request, TextToSpeechRequestInput) and
             (request.input_audio is None)  # direct path or Step 2 after embedding
