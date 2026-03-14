@@ -84,6 +84,16 @@ class ModelRunnerBase:
             outputs = self._execute_silero_vad(inputs, requests_to_batch)
         elif model_type == "KittenTTSSynthesizer":
             outputs = self._execute_kittentts_synthesizer(inputs, requests_to_batch)
+        elif model_type == "ChatterboxTTS":
+            outputs = self._execute_chatterbox_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxTurboTTS":
+            outputs = self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxMultilingualTTS":
+            outputs = self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxEmbedding":
+            outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+        elif model_type == "ChatterboxVC":
+            outputs = self._execute_chatterbox_vc(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
@@ -599,5 +609,178 @@ class ModelRunnerBase:
             initial_request = requests_to_batch[i]
             inference_result = synthesize_text(x)
             result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
+
+            if conditionals is not None:
+                # Pre-computed Conditionals provided — move to device and assign
+                self.model.conds = conditionals.to(self.device)
+            else:
+                # No pre-computed Conditionals — use raw audio bytes from request
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+
+            wav = self.model.generate(
+                text,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                min_p=min_p,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format='WAV')
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode('utf-8')
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize(x)
+            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_turbo_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxTurboTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
+
+            if conditionals is not None:
+                # Pre-computed Conditionals provided — move to device and assign
+                self.model.conds = conditionals.to(self.device)
+            else:
+                # No pre-computed Conditionals — use raw audio bytes from request
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, norm_loudness=norm_loudness)
+
+            wav = self.model.generate(
+                text,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                top_k=top_k,
+                norm_loudness=norm_loudness,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format='WAV')
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode('utf-8')
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize(x)
+            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_multilingual_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxMultilingualTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, language_id, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
+
+            if conditionals is not None:
+                self.model.conds = conditionals.to(self.device)
+            else:
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+
+            wav = self.model.generate(
+                text,
+                language_id=language_id,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                min_p=min_p,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format='WAV')
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode('utf-8')
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = synthesize(x)
+            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_embedding(self, inputs, requests_to_batch):
+        """Execute ChatterboxEmbedding to compute voice Conditionals from audio."""
+
+        def compute_embedding(audio_bytes):
+            audio_buf = io.BytesIO(audio_bytes)
+            self.model.prepare_conditionals(audio_buf)
+            conditionals = self.model.conds
+
+            # Serialize Conditionals to BytesIO using torch.save
+            buf = io.BytesIO()
+            arg_dict = dict(t3=conditionals.t3.__dict__, gen=conditionals.gen)
+            torch.save(arg_dict, buf)
+            buf.seek(0)
+            return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+        outputs = []
+        for i, audio_bytes in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = compute_embedding(audio_bytes)
+            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_vc(self, inputs, requests_to_batch):
+        """Execute ChatterboxVC to perform voice conversion."""
+
+        def convert(input_params):
+            source_bytes, target_conditionals, target_audio_bytes = input_params
+
+            if target_conditionals is not None:
+                # Pre-computed Conditionals — extract .gen dict and assign to model.ref_dict
+                self.model.ref_dict = target_conditionals.to(self.device).gen
+            else:
+                # Use target audio bytes to set target voice
+                target_buf = io.BytesIO(target_audio_bytes)
+                self.model.set_target_voice(target_buf)
+
+            source_buf = io.BytesIO(source_bytes)
+            wav = self.model.generate(audio=source_buf)
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format='WAV')
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode('utf-8')
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            inference_result = convert(x)
+            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
             outputs.append(result)
         return outputs
