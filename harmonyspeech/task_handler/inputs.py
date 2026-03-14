@@ -11,10 +11,13 @@ import numpy as np
 from loguru import logger
 from pydub import AudioSegment
 
+from chatterbox.tts import Conditionals
+
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import *
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.loader import get_model_flavour, get_model_config, get_model_speaker
+from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
@@ -170,6 +173,51 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                     f"SynthesisRequestInput"
                 )
         return prepare_kittentts_synthesizer_inputs(inputs)
+    elif model_config.model_type == "ChatterboxTTS":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                )
+        return prepare_chatterbox_tts_inputs(inputs)
+    elif model_config.model_type == "ChatterboxTurboTTS":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                )
+        return prepare_chatterbox_turbo_tts_inputs(inputs)
+    elif model_config.model_type == "ChatterboxMultilingualTTS":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                )
+        return prepare_chatterbox_multilingual_tts_inputs(inputs)
+    elif model_config.model_type == "ChatterboxVC":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, VoiceConversionRequestInput):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type VoiceConversionRequestInput"
+                )
+        return prepare_chatterbox_vc_inputs(inputs)
+    elif model_config.model_type == "ChatterboxEmbedding":
+        for r in requests_to_batch:
+            if isinstance(r.request_data, SpeechEmbeddingRequestInput):
+                inputs.append(r.request_data)
+            else:
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type SpeechEmbeddingRequestInput"
+                )
+        return prepare_chatterbox_embedding_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")
 
@@ -610,4 +658,223 @@ def prepare_kittentts_synthesizer_inputs(requests_to_batch: List[Union[
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
 
+    return inputs
+
+
+def prepare_chatterbox_tts_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    """
+    Prepare inputs for ChatterboxTTS model.
+
+    Returns list of tuples:
+        (input_text, conditionals_or_None, exaggeration, cfg_weight, temperature,
+         repetition_penalty, top_p, min_p)
+
+    Raises ValueError for:
+    - Non-None top_k or norm_loudness (Turbo-only params)
+    - Both input_audio AND input_embedding provided (conflict)
+    """
+    def prepare(request):
+        opts = request.generation_options
+
+        # Validate unsupported params — ChatterboxTTS rejects Turbo-only fields
+        if opts is not None:
+            if opts.top_k is not None:
+                raise ValueError("top_k is not supported by ChatterboxTTS")
+            if opts.norm_loudness is not None:
+                raise ValueError("norm_loudness is not supported by ChatterboxTTS")
+
+        # Conflict check: cannot have both audio AND embedding
+        if getattr(request, 'input_audio', None) is not None and getattr(request, 'input_embedding', None) is not None:
+            raise ValueError("Provide either input_audio or input_embedding, not both.")
+
+        # Deserialize pre-computed Conditionals if provided
+        conditionals = None
+        if getattr(request, 'input_embedding', None) is not None:
+            embedding_bytes = base64.b64decode(request.input_embedding)
+            embedding_buf = io.BytesIO(embedding_bytes)
+            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+
+        # Apply model-specific defaults for ChatterboxTTS
+        exaggeration = opts.exaggeration if opts is not None and opts.exaggeration is not None else 0.5
+        cfg_weight = opts.cfg_weight if opts is not None and opts.cfg_weight is not None else 0.5
+        temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
+        repetition_penalty = opts.repetition_penalty if opts is not None and opts.repetition_penalty is not None else 1.2
+        top_p = opts.top_p if opts is not None and opts.top_p is not None else 1.0
+        min_p = opts.min_p if opts is not None and opts.min_p is not None else 0.05
+
+        return request.input_text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+    return inputs
+
+
+def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    """
+    Prepare inputs for ChatterboxTurboTTS model.
+
+    Returns list of tuples:
+        (input_text, conditionals_or_None, temperature, repetition_penalty, top_p, top_k, norm_loudness)
+
+    Raises ValueError for:
+    - Non-None exaggeration, cfg_weight, or min_p (base-TTS-only params)
+    - Both input_audio AND input_embedding provided (conflict)
+    """
+    def prepare(request):
+        opts = request.generation_options
+
+        # Validate unsupported params — ChatterboxTurboTTS rejects base-TTS-only fields
+        if opts is not None:
+            if opts.exaggeration is not None:
+                raise ValueError("exaggeration is not supported by ChatterboxTurboTTS")
+            if opts.cfg_weight is not None:
+                raise ValueError("cfg_weight is not supported by ChatterboxTurboTTS")
+            if opts.min_p is not None:
+                raise ValueError("min_p is not supported by ChatterboxTurboTTS")
+
+        # Conflict check: cannot have both audio AND embedding
+        if getattr(request, 'input_audio', None) is not None and getattr(request, 'input_embedding', None) is not None:
+            raise ValueError("Provide either input_audio or input_embedding, not both.")
+
+        # Deserialize pre-computed Conditionals if provided
+        conditionals = None
+        if getattr(request, 'input_embedding', None) is not None:
+            embedding_bytes = base64.b64decode(request.input_embedding)
+            embedding_buf = io.BytesIO(embedding_bytes)
+            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+
+        # Apply Turbo-specific defaults
+        temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
+        repetition_penalty = opts.repetition_penalty if opts is not None and opts.repetition_penalty is not None else 1.2
+        top_p = opts.top_p if opts is not None and opts.top_p is not None else 0.95
+        top_k = opts.top_k if opts is not None and opts.top_k is not None else 1000
+        norm_loudness = opts.norm_loudness if opts is not None and opts.norm_loudness is not None else True
+
+        return request.input_text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+    return inputs
+
+
+def prepare_chatterbox_multilingual_tts_inputs(requests_to_batch: List[Union[
+    TextToSpeechRequestInput,
+    SynthesisRequestInput
+]]):
+    """
+    Prepare inputs for ChatterboxMultilingualTTS model.
+
+    Language validation is handled upstream by the serving engine.
+    This function only defaults language_id to 'en' when absent/None.
+
+    Returns list of tuples:
+        (input_text, language_id, conditionals_or_None, exaggeration, cfg_weight, temperature,
+         repetition_penalty, top_p, min_p)
+
+    Raises ValueError for:
+    - Non-None top_k or norm_loudness (Turbo-only params)
+    - Both input_audio AND input_embedding provided (conflict)
+    """
+    def prepare(request):
+        opts = request.generation_options
+
+        # Validate unsupported params — ChatterboxMultilingualTTS rejects Turbo-only fields
+        if opts is not None:
+            if opts.top_k is not None:
+                raise ValueError("top_k is not supported by ChatterboxMultilingualTTS")
+            if opts.norm_loudness is not None:
+                raise ValueError("norm_loudness is not supported by ChatterboxMultilingualTTS")
+
+        # Conflict check: cannot have both audio AND embedding
+        if getattr(request, 'input_audio', None) is not None and getattr(request, 'input_embedding', None) is not None:
+            raise ValueError("Provide either input_audio or input_embedding, not both.")
+
+        # Deserialize pre-computed Conditionals if provided
+        conditionals = None
+        if getattr(request, 'input_embedding', None) is not None:
+            embedding_bytes = base64.b64decode(request.input_embedding)
+            embedding_buf = io.BytesIO(embedding_bytes)
+            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+
+        # Default language_id to 'en' if not provided
+        language_id = request.language_id if request.language_id is not None else "en"
+
+        # Apply model-specific defaults for ChatterboxMultilingualTTS
+        exaggeration = opts.exaggeration if opts is not None and opts.exaggeration is not None else 0.5
+        cfg_weight = opts.cfg_weight if opts is not None and opts.cfg_weight is not None else 0.5
+        temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
+        repetition_penalty = opts.repetition_penalty if opts is not None and opts.repetition_penalty is not None else 1.2
+        top_p = opts.top_p if opts is not None and opts.top_p is not None else 1.0
+        min_p = opts.min_p if opts is not None and opts.min_p is not None else 0.05
+
+        return request.input_text, language_id, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+    return inputs
+
+
+def prepare_chatterbox_embedding_inputs(requests_to_batch: List[SpeechEmbeddingRequestInput]):
+    """
+    Prepare inputs for ChatterboxEmbedding model.
+
+    Returns list of raw audio bytes (base64-decoded, no filesystem I/O).
+    """
+    def prepare(request):
+        # Decode base64 audio to raw bytes
+        audio_bytes = base64.b64decode(request.input_audio)
+        return audio_bytes
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
+    return inputs
+
+
+def prepare_chatterbox_vc_inputs(requests_to_batch: List[VoiceConversionRequestInput]):
+    """
+    Prepare inputs for ChatterboxVC model.
+
+    Returns list of tuples:
+        (source_audio_bytes, target_conditionals_or_None, target_audio_bytes_or_None)
+
+    Raises ValueError for:
+    - Both target_audio AND target_embedding provided
+    - Neither target_audio NOR target_embedding provided
+    """
+    def prepare(request):
+        # Validate: must provide exactly one of target_audio or target_embedding
+        target_audio = getattr(request, 'target_audio', None)
+        target_embedding = getattr(request, 'target_embedding', None)
+
+        if target_audio is not None and target_embedding is not None:
+            raise ValueError("Provide either target_audio or target_embedding, not both.")
+        if target_audio is None and target_embedding is None:
+            raise ValueError("ChatterboxVC requires either target_audio or target_embedding.")
+
+        # Decode source audio
+        source_bytes = base64.b64decode(request.source_audio)
+
+        # Process target
+        target_conditionals = None
+        target_audio_bytes = None
+
+        if target_embedding is not None:
+            # Deserialize pre-computed Conditionals
+            embedding_bytes = base64.b64decode(target_embedding)
+            embedding_buf = io.BytesIO(embedding_bytes)
+            target_conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+        else:
+            # Decode target audio bytes
+            target_audio_bytes = base64.b64decode(target_audio)
+
+        return source_bytes, target_conditionals, target_audio_bytes
+
+    with ThreadPoolExecutor() as executor:
+        inputs = list(executor.map(prepare, requests_to_batch))
     return inputs

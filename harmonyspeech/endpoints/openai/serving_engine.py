@@ -140,6 +140,14 @@ class OpenAIServing:
                 for voice in config.voices:
                     voice_option = VoiceOptions(voice=voice)
                     lang_option.voices.append(voice_option)
+        
+        # Add ChatterboxMultilingualTTS language support (23 languages)
+        if config.model_type == "ChatterboxMultilingualTTS":
+            from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
+            for lang_code, lang_name in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES.items():
+                lang_option = LanguageOptions(language=lang_code)
+                card.languages.append(lang_option)
+        
         return card
 
     @staticmethod
