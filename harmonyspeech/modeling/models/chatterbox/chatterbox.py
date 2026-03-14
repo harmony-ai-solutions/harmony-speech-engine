@@ -10,6 +10,7 @@ import torch
 # Import Chatterbox models from the chatterbox library
 from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
 from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
+from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
 
 
 class ChatterboxTTSModel:
@@ -42,10 +43,11 @@ class ChatterboxTTSModel:
 
 
 class ChatterboxTurboTTSModel:
-    """Wrapper for ChatterboxTTS model in turbo mode.
+    """Wrapper for ChatterboxTurboTTS model.
     
-    ChatterboxTurboTTS provides faster TTS synthesis with potentially
-    reduced quality compared to the standard model.
+    ChatterboxTurboTTS is a separate, faster TTS model from chatterbox.tts_turbo.
+    It supports top_k and norm_loudness parameters and does NOT support
+    exaggeration, cfg_weight, or min_p.
     """
 
     @classmethod
@@ -53,26 +55,22 @@ class ChatterboxTurboTTSModel:
         cls,
         device: Optional[Union[str, torch.device]] = None,
         **kwargs
-    ) -> "ChatterboxTTS":
-        """Load ChatterboxTTS model in turbo mode from pretrained weights.
+    ) -> "_ChatterboxTurboTTS":
+        """Load ChatterboxTurboTTS model from pretrained weights.
         
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
-            **kwargs: Additional arguments passed to ChatterboxTTS.from_pretrained.
-                     May include turbo=True parameter.
-            
+            **kwargs: Additional arguments passed to ChatterboxTurboTTS.from_pretrained.
+        
         Returns:
-            ChatterboxTTS model instance in turbo mode.
+            ChatterboxTurboTTS model instance.
         """
         if device is None:
             device = "cpu"
         elif isinstance(device, torch.device):
             device = str(device)
-            
-        # Ensure turbo mode is enabled
-        kwargs.setdefault("turbo", True)
-            
-        return ChatterboxTTS.from_pretrained(device=device, **kwargs)
+        
+        return _ChatterboxTurboTTS.from_pretrained(device=device, **kwargs)
 
 
 class ChatterboxMultilingualTTSModel:
