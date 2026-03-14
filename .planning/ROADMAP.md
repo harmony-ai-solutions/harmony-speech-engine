@@ -12,7 +12,7 @@
 - [x] **Phase 2: Model Registration & Loading** - Register all 4 Chatterbox models in ModelRegistry with native loader pattern
 - [x] **Phase 3: Input Preparation** - Implement input preparation functions for TTS, embedding, and voice conversion
 - [x] **Phase 4: Model Execution** - Implement execution methods for TTS, embedding, and voice conversion models (completed 2026-03-14)
-- [ ] **Phase 5: Request Routing** - Implement routing logic for TTS, embedding, VC, and forward processing
+- [x] **Phase 5: Request Routing** - Implement routing logic for TTS, embedding, VC, and forward processing (completed 2026-03-14)
 - [ ] **Phase 6: Configuration & Performance** - Model config extensions, config examples, and performance requirements
 - [ ] **Phase 7: Testing & Documentation** - Unit, integration, E2E tests and API documentation
 
@@ -107,7 +107,10 @@ Plans:
 5. VoiceConversion requests route to ChatterboxVC model
 6. Forward processing correctly transfers embedding from embed step to synthesize step
 
-**Plans:** TBD
+**Plans:** 1 plan
+
+Plans:
+- [x] 05-01-PLAN.md — Implement routing logic for TTS, embedding, VC, and forward processing
 
 ---
 
