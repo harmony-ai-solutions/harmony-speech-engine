@@ -53,16 +53,17 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=xml",
 ]
-
-[tool.coverage.run]
-omit = [
-    "harmonyspeech/modeling/models/*",
-]
 markers = [
     "unit: marks tests as unit tests (fast, fully mocked)",
     "integration: marks tests as integration tests (component interaction, partially mocked)",
     "e2e: marks tests as end-to-end tests (real models, slow, CPU-only)",
     "slow: marks tests that take > 30 seconds to run",
+    "cuda: marks tests that require CUDA/GPU hardware",
+]
+
+[tool.coverage.run]
+omit = [
+    "harmonyspeech/modeling/models/*",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

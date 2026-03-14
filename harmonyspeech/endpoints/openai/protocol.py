@@ -56,14 +56,46 @@ class GenerationOptions(BaseModel):
     pitch: Optional[float] = None
     energy: Optional[float] = None
     # Chatterbox-specific fields
-    exaggeration: Optional[float] = None
-    cfg_weight: Optional[float] = None
-    temperature: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    top_p: Optional[float] = None
-    min_p: Optional[float] = None
-    top_k: Optional[int] = None
-    norm_loudness: Optional[bool] = None
+    exaggeration: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Multilingual) Emotion exaggeration factor. "
+                    "Higher values amplify emotional expressiveness. Default: 0.5"
+    )
+    cfg_weight: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Multilingual) Classifier-free guidance weight. "
+                    "Controls how closely the model follows the voice prompt. Default: 0.5"
+    )
+    temperature: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Turbo/Multilingual) Sampling temperature. "
+                    "Higher values increase randomness. Default: 0.8"
+    )
+    repetition_penalty: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Turbo/Multilingual) Repetition penalty applied during sampling. "
+                    "Values > 1.0 reduce repetition. Default: 1.2"
+    )
+    top_p: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Turbo/Multilingual) Top-p (nucleus) sampling probability. "
+                    "Default TTS: 1.0, Turbo: 0.95"
+    )
+    min_p: Optional[float] = Field(
+        None,
+        description="(Chatterbox TTS/Multilingual only) Minimum probability threshold for sampling. "
+                    "Default: 0.05. Not supported by Turbo variant."
+    )
+    top_k: Optional[int] = Field(
+        None,
+        description="(Chatterbox Turbo only) Top-k sampling - number of candidates kept. "
+                    "Default: 1000. Not supported by standard TTS or Multilingual variants."
+    )
+    norm_loudness: Optional[bool] = Field(
+        None,
+        description="(Chatterbox Turbo only) Apply pyloudnorm loudness normalization to output. "
+                    "Default: True. Not supported by standard TTS or Multilingual variants."
+    )
 
 
 class AudioOutputOptions(BaseModel):

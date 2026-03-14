@@ -86,7 +86,7 @@ class OpenAIServing:
                 status_code=HTTPStatus.NOT_FOUND)
 
         # Checks for Language and Voice parameters if the models have these
-        if len(model.languages) > 0:
+        if model.languages and len(model.languages) > 0:
             if not request.language:
                 return self.create_error_response(
                     message=f"The model `{request.model}` requires a language parameter.",
@@ -107,7 +107,7 @@ class OpenAIServing:
                     message=f"Issue while retrieving language option for the model.",
                     err_type="InternalServerError",
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-            if len(language_option.voices) > 0:
+            if language_option.voices and len(language_option.voices) > 0:
                 if not request.voice:
                     return self.create_error_response(
                         message=f"The model `{request.model}` requires a voice parameter for language `{request.language}`.",
@@ -135,10 +135,14 @@ class OpenAIServing:
         )
         if config.language is not None and config.language != "":
             lang_option = LanguageOptions(language=config.language)
+            if card.languages is None:
+                card.languages = []
             card.languages.append(lang_option)
             if config.voices is not None and len(config.voices) > 0:
                 for voice in config.voices:
                     voice_option = VoiceOptions(voice=voice)
+                    if lang_option.voices is None:
+                        lang_option.voices = []
                     lang_option.voices.append(voice_option)
         
         # Add ChatterboxMultilingualTTS language support (23 languages)
@@ -146,6 +150,8 @@ class OpenAIServing:
             from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
             for lang_code, lang_name in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES.items():
                 lang_option = LanguageOptions(language=lang_code)
+                if card.languages is None:
+                    card.languages = []
                 card.languages.append(lang_option)
         
         return card
@@ -155,29 +161,37 @@ class OpenAIServing:
         # Check for language - Merge language options if possible
         if config.language is not None and config.language != "":
             lang_option = None
-            for option in card.languages:
-                if option.language == config.language:
-                    lang_option = option
-                    break
+            if card.languages is not None:
+                for option in card.languages:
+                    if option.language == config.language:
+                        lang_option = option
+                        break
+            
             if lang_option is None:
                 lang_option = LanguageOptions(language=config.language)
+                if card.languages is None:
+                    card.languages = []
                 card.languages.append(lang_option)
 
             # Voices per language - merge voice options if possible
             if config.voices is not None and len(config.voices) > 0:
                 for voice in config.voices:
                     voice_option = None
-                    for option in lang_option.voices:
-                        if option.voice == voice:
-                            voice_option = option
-                            break
+                    if lang_option.voices is not None:
+                        for option in lang_option.voices:
+                            if option.voice == voice:
+                                voice_option = option
+                                break
                     if voice_option is None:
                         voice_option = VoiceOptions(voice=voice)
+                        if lang_option.voices is None:
+                            lang_option.voices = []
                         lang_option.voices.append(voice_option)
 
     @staticmethod
     def model_cards_from_config_groups(configured_models, individual_model_types, model_groups):
         model_cards = []
+        individual_model_ids = set()
         # create a copy of the model groups and remove each model_type of a group from it's list if an instance exits
         # only groups where all required model types to provide the API function exist will be enabled.
         check_dict = copy.deepcopy(model_groups)
@@ -193,6 +207,8 @@ class OpenAIServing:
                 if model_card is None:
                     model_card = OpenAIServing.model_card_from_config(m)
                     model_cards.append(model_card)
+                
+                individual_model_ids.add(m.name)
 
             for group_name, remaining_models in check_dict.items():
                 # Create or extend card for group
@@ -221,6 +237,7 @@ class OpenAIServing:
 
         # Safety check!
         # Only allow model groups which have the required models initialized
+        # BUT: do not filter out models that were also registered as individual models
         groups_with_remaining = [group_name for group_name, remaining_models in check_dict.items() if remaining_models]
-        model_cards = [card for card in model_cards if card.id not in groups_with_remaining]
+        model_cards = [card for card in model_cards if card.id not in groups_with_remaining or card.id in individual_model_ids]
         return model_cards

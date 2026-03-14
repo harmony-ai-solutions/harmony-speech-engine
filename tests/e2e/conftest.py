@@ -496,3 +496,62 @@ def models_cache_dir(tmp_path_factory):
     """
     return tmp_path_factory.mktemp("models_cache")
 
+
+@pytest.fixture(scope="session")
+def chatterbox_engine(models_cache_dir, device):
+    """Session-scoped engine fixture for Chatterbox TTS E2E tests.
+
+    Loads 2 models:
+    - chatterbox (ChatterboxTTS) — TTS + voice cloning
+    - chatterbox-vc (ChatterboxVC) — voice conversion
+
+    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("Chatterbox E2E requires CUDA")
+
+    from harmonyspeech.common.config import EngineConfig, ModelConfig, DeviceConfig
+    from harmonyspeech.engine.args_tools import AsyncEngineArgs
+    from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
+    from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+
+    model_configs = [
+        ModelConfig(
+            name="chatterbox",
+            model="resemble-ai/chatterbox",
+            model_type="ChatterboxTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+        ModelConfig(
+            name="chatterbox-vc",
+            model="resemble-ai/chatterbox",
+            model_type="ChatterboxVC",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_tts = OpenAIServingTextToSpeech(
+        engine,
+        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs),
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine,
+        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs),
+    )
+    serving_vc = OpenAIServingVoiceConversion(
+        engine,
+        OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs),
+    )
+    return (engine, serving_tts, serving_embed, serving_vc)
+

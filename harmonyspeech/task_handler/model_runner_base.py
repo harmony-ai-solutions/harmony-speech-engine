@@ -631,7 +631,7 @@ class ModelRunnerBase:
             if conditionals is not None:
                 # Pre-computed Conditionals provided — move to device and assign
                 self.model.conds = conditionals.to(self.device)
-            else:
+            elif hasattr(initial_request.request_data, 'input_audio') and initial_request.request_data.input_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
                 audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
                 audio_buf = io.BytesIO(audio_bytes)
@@ -671,7 +671,7 @@ class ModelRunnerBase:
             if conditionals is not None:
                 # Pre-computed Conditionals provided — move to device and assign
                 self.model.conds = conditionals.to(self.device)
-            else:
+            elif hasattr(initial_request.request_data, 'input_audio') and initial_request.request_data.input_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
                 audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
                 audio_buf = io.BytesIO(audio_bytes)
@@ -709,7 +709,7 @@ class ModelRunnerBase:
 
             if conditionals is not None:
                 self.model.conds = conditionals.to(self.device)
-            else:
+            elif hasattr(initial_request.request_data, 'input_audio') and initial_request.request_data.input_audio:
                 audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
@@ -786,7 +786,7 @@ class ModelRunnerBase:
             if target_conditionals is not None:
                 # Pre-computed Conditionals — extract .gen dict and assign to model.ref_dict
                 self.model.ref_dict = target_conditionals.to(self.device).gen
-            else:
+            elif target_audio_bytes:
                 # Use target audio bytes to set target voice
                 target_buf = io.BytesIO(target_audio_bytes)
                 self.model.set_target_voice(target_buf)
