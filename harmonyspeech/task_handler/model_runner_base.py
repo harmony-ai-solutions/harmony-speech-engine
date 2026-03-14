@@ -85,11 +85,21 @@ class ModelRunnerBase:
         elif model_type == "KittenTTSSynthesizer":
             outputs = self._execute_kittentts_synthesizer(inputs, requests_to_batch)
         elif model_type == "ChatterboxTTS":
-            outputs = self._execute_chatterbox_tts(inputs, requests_to_batch)
+            # Check if this is an embedding request routed to the TTS model
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_tts(inputs, requests_to_batch)
         elif model_type == "ChatterboxTurboTTS":
-            outputs = self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
         elif model_type == "ChatterboxMultilingualTTS":
-            outputs = self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
         elif model_type == "ChatterboxEmbedding":
             outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
         elif model_type == "ChatterboxVC":
@@ -731,7 +741,21 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_chatterbox_embedding(self, inputs, requests_to_batch):
-        """Execute ChatterboxEmbedding to compute voice Conditionals from audio."""
+        """Execute ChatterboxEmbedding to compute voice Conditionals from audio.
+
+        Architecture note (REQ-PERF-02):
+        The output is a base64-encoded serialized Conditionals object (via torch.save ->
+        BytesIO -> base64). This design supports a future embedding cache layer:
+
+            Cache key:   hash(audio_bytes)  or  user-provided voice_id
+            Cache value: base64 Conditionals string (returned by this method)
+            Cache hit:   skip this executor entirely; pass Conditionals directly to TTS
+
+        The cache intercept point is in check_forward_processing() in harmonyspeech_engine.py,
+        between the embed step completion and the TTS re-submission. No code changes required
+        to this method to enable caching -- only the engine's forward-processing block needs
+        a cache lookup before re-submitting the forwarding_request.
+        """
 
         def compute_embedding(audio_bytes):
             audio_buf = io.BytesIO(audio_bytes)
