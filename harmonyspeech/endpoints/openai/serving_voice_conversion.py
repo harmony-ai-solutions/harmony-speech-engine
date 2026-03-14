@@ -14,10 +14,12 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 _VOICE_CONVERSION_MODEL_TYPES = [
     "OpenVoiceV1ToneConverter",
     "OpenVoiceV2ToneConverter",
+    "ChatterboxVC",
 ]
 _VOICE_CONVERSION_MODEL_GROUPS = {
     "openvoice_v1": ["OpenVoiceV1ToneConverter"],
-    "openvoice_v2": ["OpenVoiceV2ToneConverter"]
+    "openvoice_v2": ["OpenVoiceV2ToneConverter"],
+    "chatterbox_vc": ["ChatterboxVC"],
 }
 
 

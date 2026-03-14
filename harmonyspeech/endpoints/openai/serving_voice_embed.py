@@ -15,12 +15,14 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 # Add new model classes which allow handling Embedding Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
 _EMBEDDING_MODEL_TYPES = [
-    "HarmonySpeechEncoder"
+    "HarmonySpeechEncoder",
+    "ChatterboxEmbedding",
 ]
 _EMBEDDING_MODEL_GROUPS = {
     "harmonyspeech": ["HarmonySpeechEncoder"],
     "openvoice_v1": ["FasterWhisper", "OpenVoiceV1ToneConverterEncoder"],
-    "openvoice_v2": ["FasterWhisper", "OpenVoiceV2ToneConverterEncoder"]
+    "openvoice_v2": ["FasterWhisper", "OpenVoiceV2ToneConverterEncoder"],
+    "chatterbox": ["ChatterboxEmbedding"],
 }
 
 

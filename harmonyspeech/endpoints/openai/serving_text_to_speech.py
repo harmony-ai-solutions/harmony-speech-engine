@@ -17,12 +17,18 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 _TTS_MODEL_TYPES = [
     "OpenVoiceV1Synthesizer",
     "MeloTTSSynthesizer",
-    "KittenTTSSynthesizer"
+    "KittenTTSSynthesizer",
+    "ChatterboxTTS",
+    "ChatterboxTurboTTS",
+    "ChatterboxMultilingualTTS",
 ]
 _TTS_MODEL_GROUPS = {
     "harmonyspeech": ["HarmonySpeechSynthesizer", "HarmonySpeechVocoder"],
     "openvoice_v1": ["OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter"],
-    "openvoice_v2": ["MeloTTSSynthesizer", "OpenVoiceV2ToneConverter"]
+    "openvoice_v2": ["MeloTTSSynthesizer", "OpenVoiceV2ToneConverter"],
+    "chatterbox": ["ChatterboxTTS"],
+    "chatterbox_turbo": ["ChatterboxTurboTTS"],
+    "chatterbox_multilingual": ["ChatterboxMultilingualTTS"],
 }
 
 

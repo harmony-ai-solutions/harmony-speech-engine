@@ -297,6 +297,45 @@ class HarmonySpeechEngine:
                         request.model = cfg.name
                         break
 
+    def reroute_request_chatterbox(self, request: RequestInput):
+        # Map sentinel name → TTS model_type
+        _CHATTERBOX_TTS_TYPE_MAP = {
+            "chatterbox": "ChatterboxTTS",
+            "chatterbox_turbo": "ChatterboxTurboTTS",
+            "chatterbox_multilingual": "ChatterboxMultilingualTTS",
+        }
+
+        if (isinstance(request, SpeechEmbeddingRequestInput) or
+            (
+                isinstance(request, TextToSpeechRequestInput) and
+                request.input_audio is not None and
+                request.input_embedding is None
+            )
+        ):
+            # Route to embedding model (Step 1 of multi-step, or standalone embed)
+            for cfg in self.model_configs:
+                if cfg.model_type == "ChatterboxEmbedding":
+                    request.model = cfg.name
+                    break
+        elif (
+            isinstance(request, TextToSpeechRequestInput) and
+            (request.input_audio is None)  # direct path or Step 2 after embedding
+        ):
+            # Route to the appropriate TTS variant
+            tts_type = _CHATTERBOX_TTS_TYPE_MAP.get(request.requested_model)
+            if tts_type:
+                for cfg in self.model_configs:
+                    if cfg.model_type == tts_type:
+                        request.model = cfg.name
+                        break
+
+    def reroute_request_chatterbox_vc(self, request: RequestInput):
+        if isinstance(request, VoiceConversionRequestInput):
+            for cfg in self.model_configs:
+                if cfg.model_type == "ChatterboxVC":
+                    request.model = cfg.name
+                    break
+
     def check_reroute_request_to_model(self, request: RequestInput):
         # Harmonyspeech TTS Processing
         if request.requested_model == "harmonyspeech":
@@ -310,6 +349,18 @@ class HarmonySpeechEngine:
         # VoiceFixer Audio Conversion Processing
         if request.requested_model == "voicefixer":
             self.reroute_request_voicefixer(request)
+        # Chatterbox TTS (standard)
+        if request.requested_model == "chatterbox":
+            self.reroute_request_chatterbox(request)
+        # Chatterbox Turbo TTS
+        if request.requested_model == "chatterbox_turbo":
+            self.reroute_request_chatterbox(request)
+        # Chatterbox Multilingual TTS
+        if request.requested_model == "chatterbox_multilingual":
+            self.reroute_request_chatterbox(request)
+        # Chatterbox Voice Conversion
+        if request.requested_model == "chatterbox_vc":
+            self.reroute_request_chatterbox_vc(request)
 
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED
@@ -410,6 +461,24 @@ class HarmonySpeechEngine:
                     metrics=result.result_data.metrics if result.result_data.metrics else None
                 )
                 result.result_data = tts_result
+
+        # Multi-step TTS Processing (Chatterbox — embed then synthesize)
+        if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
+            "chatterbox",
+            "chatterbox_turbo",
+            "chatterbox_multilingual"
+        ]:
+            forwarding_request = input_data
+
+            if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
+                # Embedding step finished — forward to TTS synthesize step
+                # Mark as forwarded in scheduler
+                new_status = RequestStatus.FINISHED_FORWARDED
+                self.scheduler.update_request_status(result.request_id, new_status)
+                # Embedding result becomes input_embedding; clear input_audio
+                forwarding_request.input_audio = None
+                forwarding_request.input_embedding = result.result_data.output
+                self.add_request(result.request_id, forwarding_request)
 
         # Multi-Step Audio Conversion Processing (VoiceFixer)
         if isinstance(input_data, AudioConversionRequestInput) and requested_model == "voicefixer":
