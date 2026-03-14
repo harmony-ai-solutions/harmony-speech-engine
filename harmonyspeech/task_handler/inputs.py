@@ -174,32 +174,54 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
                 )
         return prepare_kittentts_synthesizer_inputs(inputs)
     elif model_config.model_type == "ChatterboxTTS":
+        tts_inputs = []
+        embed_inputs = []
         for r in requests_to_batch:
-            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                inputs.append(r.request_data)
+            if isinstance(r.request_data, SpeechEmbeddingRequestInput):
+                # Embedding request routed to TTS model (no dedicated ChatterboxEmbedding)
+                embed_inputs.append(r.request_data)
+            elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                tts_inputs.append(r.request_data)
             else:
                 raise ValueError(
-                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                    f"ChatterboxTTS prepare_inputs: request ID {r.request_id} is not "
+                    f"TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
                 )
-        return prepare_chatterbox_tts_inputs(inputs)
+        if embed_inputs:
+            return prepare_chatterbox_embedding_inputs(embed_inputs)
+        return prepare_chatterbox_tts_inputs(tts_inputs)
     elif model_config.model_type == "ChatterboxTurboTTS":
+        tts_inputs = []
+        embed_inputs = []
         for r in requests_to_batch:
-            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                inputs.append(r.request_data)
+            if isinstance(r.request_data, SpeechEmbeddingRequestInput):
+                embed_inputs.append(r.request_data)
+            elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                tts_inputs.append(r.request_data)
             else:
                 raise ValueError(
-                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                    f"ChatterboxTurboTTS prepare_inputs: request ID {r.request_id} is not "
+                    f"TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
                 )
-        return prepare_chatterbox_turbo_tts_inputs(inputs)
+        if embed_inputs:
+            return prepare_chatterbox_embedding_inputs(embed_inputs)
+        return prepare_chatterbox_turbo_tts_inputs(tts_inputs)
     elif model_config.model_type == "ChatterboxMultilingualTTS":
+        tts_inputs = []
+        embed_inputs = []
         for r in requests_to_batch:
-            if isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                inputs.append(r.request_data)
+            if isinstance(r.request_data, SpeechEmbeddingRequestInput):
+                embed_inputs.append(r.request_data)
+            elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
+                tts_inputs.append(r.request_data)
             else:
                 raise ValueError(
-                    f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
+                    f"ChatterboxMultilingualTTS prepare_inputs: request ID {r.request_id} is not "
+                    f"TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
                 )
-        return prepare_chatterbox_multilingual_tts_inputs(inputs)
+        if embed_inputs:
+            return prepare_chatterbox_embedding_inputs(embed_inputs)
+        return prepare_chatterbox_multilingual_tts_inputs(tts_inputs)
     elif model_config.model_type == "ChatterboxVC":
         for r in requests_to_batch:
             if isinstance(r.request_data, VoiceConversionRequestInput):
