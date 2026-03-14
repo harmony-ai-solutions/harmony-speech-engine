@@ -17,12 +17,17 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 _EMBEDDING_MODEL_TYPES = [
     "HarmonySpeechEncoder",
     "ChatterboxEmbedding",
+    "ChatterboxTTS",              # handles embed when no ChatterboxEmbedding configured
+    "ChatterboxTurboTTS",
+    "ChatterboxMultilingualTTS",
 ]
 _EMBEDDING_MODEL_GROUPS = {
     "harmonyspeech": ["HarmonySpeechEncoder"],
     "openvoice_v1": ["FasterWhisper", "OpenVoiceV1ToneConverterEncoder"],
     "openvoice_v2": ["FasterWhisper", "OpenVoiceV2ToneConverterEncoder"],
-    "chatterbox": ["ChatterboxEmbedding"],
+    "chatterbox": ["ChatterboxEmbedding", "ChatterboxTTS"],    # ChatterboxTTS fallback
+    "chatterbox_turbo": ["ChatterboxTurboTTS"],
+    "chatterbox_multilingual": ["ChatterboxMultilingualTTS"],
 }
 
 
