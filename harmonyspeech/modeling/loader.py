@@ -101,6 +101,9 @@ _MODEL_CONFIGS = {
     "ChatterboxMultilingualTTS": {
         "default": "native"
     },
+    "ChatterboxEmbedding": {
+        "default": "native"
+    },
     "ChatterboxVC": {
         "default": "native"
     }
@@ -165,6 +168,9 @@ _MODEL_WEIGHTS = {
         "default": "native"
     },
     "ChatterboxMultilingualTTS": {
+        "default": "native"
+    },
+    "ChatterboxEmbedding": {
         "default": "native"
     },
     "ChatterboxVC": {
@@ -334,6 +340,16 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     model = ChatterboxVCModel.from_pretrained(device=device)
                     if not getattr(model_config, 'watermark', True):
                         model.watermarker = perth.DummyWatermarker()
+                    return model
+                elif model_config.model_type == "ChatterboxEmbedding":
+                    device = str(device_config.device)
+                    model_name = getattr(model_config, 'model', '') or ''
+                    if 'turbo' in model_name.lower():
+                        model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    elif 'multilingual' in model_name.lower():
+                        model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    else:
+                        model = ChatterboxTTSModel.from_pretrained(device=device)
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)

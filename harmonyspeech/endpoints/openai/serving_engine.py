@@ -70,6 +70,9 @@ class OpenAIServing:
                 return model_card
         return None
 
+    # Chatterbox model IDs that support both single_speaker_tts and voice_cloning
+    _CHATTERBOX_MODEL_IDS = {"chatterbox", "chatterbox_turbo", "chatterbox_multilingual"}
+
     async def _check_model(self, request) -> Optional[ErrorResponse]:
         if isinstance(request, TextToSpeechRequest) and request.mode not in ["voice_cloning", "single_speaker_tts"]:
             # TODO: Evaluate this based on model toolchain capability
@@ -78,6 +81,20 @@ class OpenAIServing:
                 err_type="BadRequestError",
                 status_code=HTTPStatus.BAD_REQUEST)
 
+        # Validate mode vs input_audio/input_embedding consistency for Chatterbox models
+        if isinstance(request, TextToSpeechRequest) and request.model in self._CHATTERBOX_MODEL_IDS:
+            has_reference = request.input_audio is not None or request.input_embedding is not None
+            if request.mode == "voice_cloning" and not has_reference:
+                return self.create_error_response(
+                    message=f"Chatterbox model '{request.model}' with mode 'voice_cloning' requires either `input_audio` (reference audio) or `input_embedding` (pre-computed embedding).",
+                    err_type="BadRequestError",
+                    status_code=HTTPStatus.BAD_REQUEST)
+            if request.mode == "single_speaker_tts" and has_reference:
+                return self.create_error_response(
+                    message=f"Chatterbox model '{request.model}' with mode 'single_speaker_tts' should not have `input_audio` or `input_embedding`. Use 'voice_cloning' mode for voice cloning.",
+                    err_type="BadRequestError",
+                    status_code=HTTPStatus.BAD_REQUEST)
+
         model = self.get_model_by_id(request.model)
         if model is None:
             return self.create_error_response(
@@ -85,8 +102,10 @@ class OpenAIServing:
                 err_type="NotFoundError",
                 status_code=HTTPStatus.NOT_FOUND)
 
-        # Checks for Language and Voice parameters if the models have these
-        if model.languages and len(model.languages) > 0:
+        # Checks for Language and Voice parameters if the models have these.
+        # Only validate when the request type actually has a 'language' field
+        # (EmbedSpeakerRequest and similar endpoint requests do not).
+        if model.languages and len(model.languages) > 0 and hasattr(request, 'language'):
             if not request.language:
                 return self.create_error_response(
                     message=f"The model `{request.model}` requires a language parameter.",
@@ -144,6 +163,16 @@ class OpenAIServing:
                     if lang_option.voices is None:
                         lang_option.voices = []
                     lang_option.voices.append(voice_option)
+        elif config.voices is not None and len(config.voices) > 0:
+            # Handle models with voices but no specific language (e.g. KittenTTS)
+            # We map these under a "default" language so they show up in the API and UI
+            lang_option = LanguageOptions(language="default")
+            card.languages = [lang_option]
+            for voice in config.voices:
+                voice_option = VoiceOptions(voice=voice)
+                if lang_option.voices is None:
+                    lang_option.voices = []
+                lang_option.voices.append(voice_option)
         
         # Add ChatterboxMultilingualTTS language support (23 languages)
         if config.model_type == "ChatterboxMultilingualTTS":

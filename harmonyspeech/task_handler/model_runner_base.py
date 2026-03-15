@@ -1,9 +1,13 @@
 import base64
 import io
 import json
+import logging
 import time
+import traceback
 from dataclasses import asdict
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import soundfile as sf
@@ -109,6 +113,34 @@ class ModelRunnerBase:
 
         return outputs
 
+    def _build_error_result(self, initial_request, exception: Exception):
+        """Build an error ExecutorResult for a single request that failed during inference.
+        Wraps in ExecutorResult so _process_model_outputs / check_forward_processing can handle it
+        without crashing. The serving layer then checks finish_reason == 'error' on result_data
+        and returns an HTTP error to the caller.
+        """
+        request_id = initial_request.request_id
+        metrics = initial_request.metrics
+        metrics.finished_time = time.time()
+        # Log full stack trace so the server-side cause is always visible in logs
+        logger.error(
+            "Inference error for request %s: %s\n%s",
+            request_id,
+            exception,
+            traceback.format_exc(),
+        )
+        error_output = RequestOutput(
+            request_id=request_id,
+            finish_reason="error",
+            error=str(exception),
+            metrics=metrics,
+        )
+        return ExecutorResult(
+            request_id=request_id,
+            input_data=initial_request.request_data,
+            result_data=error_output,
+        )
+
     def _build_result(self, initial_request, inference_result, result_cls):
         request_id = initial_request.request_id
         metrics = initial_request.metrics
@@ -155,8 +187,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = embed_utterance(x)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            try:
+                inference_result = embed_utterance(x)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -200,8 +235,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -237,8 +275,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = vocode_mel(x)
-            result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
+            try:
+                inference_result = vocode_mel(x)
+                result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -281,8 +322,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_converter_encoder(x)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            try:
+                inference_result = run_converter_encoder(x)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -329,8 +373,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_converter_encoder(x)
-            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            try:
+                inference_result = run_converter_encoder(x)
+                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -355,8 +402,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_batched_transcribe(x)
-            result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            try:
+                inference_result = run_batched_transcribe(x)
+                result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -403,8 +453,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -471,8 +524,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -502,8 +558,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = restore_audio(x)
-            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            try:
+                inference_result = restore_audio(x)
+                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -537,8 +596,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = vocode_mel(x)
-            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            try:
+                inference_result = vocode_mel(x)
+                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -582,8 +644,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_vad(x)
-            result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+            try:
+                inference_result = run_vad(x)
+                result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -617,8 +682,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -657,8 +725,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize(x)
-            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -696,8 +767,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize(x)
-            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -735,8 +809,11 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize(x)
-            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -759,7 +836,12 @@ class ModelRunnerBase:
 
         def compute_embedding(audio_bytes):
             audio_buf = io.BytesIO(audio_bytes)
-            self.model.prepare_conditionals(audio_buf)
+            try:
+                self.model.prepare_conditionals(audio_buf)
+            except AssertionError as e:
+                # Upstream library uses AssertionError for input validation (e.g. "Audio prompt must be longer than 5 seconds!")
+                # Re-raise as ValueError so the engine can return a 400 Bad Request instead of crashing.
+                raise ValueError(str(e)) from e
             conditionals = self.model.conds
 
             # Serialize Conditionals to BytesIO using torch.save
@@ -772,8 +854,11 @@ class ModelRunnerBase:
         outputs = []
         for i, audio_bytes in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = compute_embedding(audio_bytes)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            try:
+                inference_result = compute_embedding(audio_bytes)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -804,7 +889,10 @@ class ModelRunnerBase:
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = convert(x)
-            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            try:
+                inference_result = convert(x)
+                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs

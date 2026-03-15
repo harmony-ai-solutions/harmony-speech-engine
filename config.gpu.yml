@@ -5,7 +5,7 @@ model_configs:
     max_batch_size: 10
     dtype: "float32"
     device_config:
-      device: "cuda"
+      device: "cpu"
 
   - name: "hs1-synthesizer"
     model: "harmony-ai/harmony-speech-v1"
@@ -13,7 +13,7 @@ model_configs:
     max_batch_size: 10
     dtype: "float32"
     device_config:
-      device: "cuda"
+      device: "cpu"
 
   - name: "hs1-vocoder"
     model: "harmony-ai/harmony-speech-v1"
@@ -21,7 +21,7 @@ model_configs:
     max_batch_size: 10
     dtype: "float32"
     device_config:
-      device: "cuda"
+      device: "cpu"
 
   - name: "ov1-synthesizer-en"
     model: "myshell-ai/openvoice"
@@ -33,15 +33,15 @@ model_configs:
     device_config:
       device: "cuda"
 
-  - name: "ov1-synthesizer-zh"
-    model: "myshell-ai/openvoice"
-    model_type: "OpenVoiceV1Synthesizer"
-    language: "ZH"
-    voices: ["default"]
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cuda"
+#  - name: "ov1-synthesizer-zh"
+#    model: "myshell-ai/openvoice"
+#    model_type: "OpenVoiceV1Synthesizer"
+#    language: "ZH"
+#    voices: ["default"]
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cuda"
 
   - name: "ov1-tone-converter"
     model: "myshell-ai/openvoice"
@@ -69,15 +69,15 @@ model_configs:
     device_config:
       device: "cuda"
 
-  - name: "ov2-synthesizer-zh"
-    model: "myshell-ai/MeloTTS-Chinese"
-    model_type: "MeloTTSSynthesizer"
-    language: "ZH"
-    voices: [ "ZH" ]
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cuda"
+#  - name: "ov2-synthesizer-zh"
+#    model: "myshell-ai/MeloTTS-Chinese"
+#    model_type: "MeloTTSSynthesizer"
+#    language: "ZH"
+#    voices: [ "ZH" ]
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cuda"
 
   - name: "ov2-synthesizer-es"
     model: "myshell-ai/MeloTTS-Spanish"
@@ -88,26 +88,26 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda"
-
-  - name: "ov2-synthesizer-fr"
-    model: "myshell-ai/MeloTTS-French"
-    model_type: "MeloTTSSynthesizer"
-    language: "FR"
-    voices: [ "FR" ]
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cuda"
-
-  - name: "ov2-synthesizer-ja"
-    model: "myshell-ai/MeloTTS-Japanese"
-    model_type: "MeloTTSSynthesizer"
-    language: "JA"
-    voices: [ "JP" ]
-    max_batch_size: 10
-    dtype: "float32"
-    device_config:
-      device: "cuda"
+#
+#  - name: "ov2-synthesizer-fr"
+#    model: "myshell-ai/MeloTTS-French"
+#    model_type: "MeloTTSSynthesizer"
+#    language: "FR"
+#    voices: [ "FR" ]
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cuda"
+#
+#  - name: "ov2-synthesizer-ja"
+#    model: "myshell-ai/MeloTTS-Japanese"
+#    model_type: "MeloTTSSynthesizer"
+#    language: "JA"
+#    voices: [ "JP" ]
+#    max_batch_size: 10
+#    dtype: "float32"
+#    device_config:
+#      device: "cuda"
 
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
@@ -227,34 +227,34 @@ model_configs:
       device: "cuda"
 
   # Chatterbox Turbo TTS - faster synthesis with loudness normalization
-  # - name: "chatterbox_turbo"
-  #   model: "resemble-ai/chatterbox"
-  #   model_type: "ChatterboxTurboTTS"
-  #   watermark: true
-  #   max_batch_size: 1
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cuda"
+  - name: "chatterbox_turbo"
+    model: "resemble-ai/chatterbox-turbo"
+    model_type: "ChatterboxTurboTTS"
+    watermark: true
+    max_batch_size: 1
+    dtype: "float32"
+    device_config:
+     device: "cuda"
 
   # Chatterbox Multilingual TTS - 23-language support with voice cloning
-  # - name: "chatterbox_multilingual"
-  #   model: "resemble-ai/chatterbox"
-  #   model_type: "ChatterboxMultilingualTTS"
-  #   watermark: true
-  #   max_batch_size: 1
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cuda"
+  - name: "chatterbox_multilingual"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxMultilingualTTS"
+    watermark: true
+    max_batch_size: 1
+    dtype: "float32"
+    device_config:
+     device: "cuda"
 
   # Chatterbox Voice Conversion - convert speech from one voice to another
-  # - name: "chatterbox_vc"
-  #   model: "resemble-ai/chatterbox"
-  #   model_type: "ChatterboxVC"
-  #   watermark: true
-  #   max_batch_size: 1
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cuda"
+  - name: "chatterbox_vc"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxVC"
+    watermark: true
+    max_batch_size: 1
+    dtype: "float32"
+    device_config:
+     device: "cuda"
 
   # Chatterbox Embedding (OPTIONAL) - dedicated executor for /v1/embeddings endpoint
   # If omitted, embedding requests are handled by the ChatterboxTTS executor above.

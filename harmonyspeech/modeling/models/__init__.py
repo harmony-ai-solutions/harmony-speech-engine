@@ -33,6 +33,7 @@ _MODELS = {
     "ChatterboxTTS": ("chatterbox", "native"),
     "ChatterboxTurboTTS": ("chatterbox", "native"),
     "ChatterboxMultilingualTTS": ("chatterbox", "native"),
+    "ChatterboxEmbedding": ("chatterbox", "native"),
     "ChatterboxVC": ("chatterbox", "native"),
 }
 

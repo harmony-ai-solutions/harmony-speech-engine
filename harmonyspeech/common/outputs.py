@@ -9,16 +9,19 @@ class RequestOutput:
     Args:
         request_id: The unique ID of the request.
         finish_reason: Reason why this request finished, if set.
+        error: Error message if finish_reason is "error", otherwise None.
         metrics: Metrics associated with the request.
     """
     def __init__(
         self,
         request_id: str,
         finish_reason: Optional[str] = None,
+        error: Optional[str] = None,
         metrics: Optional[RequestMetrics] = None,
     ) -> None:
         self.request_id = request_id
         self.finish_reason = finish_reason
+        self.error = error
         self.metrics = metrics
 
     def finished(self) -> bool:

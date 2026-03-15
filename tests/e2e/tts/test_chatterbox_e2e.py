@@ -63,7 +63,7 @@ def test_chatterbox_tts_with_precomputed_embedding(chatterbox_engine, mock_raw_r
         model="chatterbox",
         input=TEXT_INPUT,
         input_embedding=embed_response.data,
-        mode="single_speaker_tts",
+        mode="voice_cloning",
     )
     tts_response = asyncio.run(serving_tts.create_text_to_speech(tts_request, mock_raw_request))
     assert isinstance(tts_response, TextToSpeechResponse), f"Got: {tts_response}"

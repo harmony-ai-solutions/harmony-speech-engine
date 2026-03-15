@@ -498,6 +498,101 @@ def models_cache_dir(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def chatterbox_turbo_engine(models_cache_dir):
+    """Session-scoped engine fixture for ChatterboxTurboTTS E2E tests.
+
+    Loads 1 model:
+    - chatterbox_turbo (ChatterboxTurboTTS) — faster TTS with top_k/norm_loudness support
+
+    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("ChatterboxTurbo E2E requires CUDA")
+
+    model_configs = [
+        ModelConfig(
+            name="chatterbox_turbo",
+            model="ResembleAI/chatterbox-turbo",
+            model_type="ChatterboxTurboTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+        ModelConfig(
+            name="chatterbox_turbo_embedding",
+            model="ResembleAI/chatterbox-turbo",
+            model_type="ChatterboxEmbedding",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_tts = OpenAIServingTextToSpeech(
+        engine,
+        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs),
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine,
+        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs),
+    )
+    return (engine, serving_tts, serving_embed)
+
+
+@pytest.fixture(scope="session")
+def chatterbox_multilingual_engine(models_cache_dir):
+    """Session-scoped engine fixture for ChatterboxMultilingualTTS E2E tests.
+
+    Loads 2 models:
+    - chatterbox_multilingual (ChatterboxMultilingualTTS) — multilingual TTS
+    - chatterbox_multilingual_embedding (ChatterboxEmbedding) — embedding for multilingual voice cloning
+
+    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("ChatterboxMultilingual E2E requires CUDA")
+
+    model_configs = [
+        ModelConfig(
+            name="chatterbox_multilingual",
+            model="ResembleAI/chatterbox-multilingual",
+            model_type="ChatterboxMultilingualTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+        ModelConfig(
+            name="chatterbox_multilingual_embedding",
+            model="ResembleAI/chatterbox-multilingual",
+            model_type="ChatterboxEmbedding",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device="cuda"),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=True
+    )
+    serving_tts = OpenAIServingTextToSpeech(
+        engine,
+        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs),
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine,
+        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs),
+    )
+    return (engine, serving_tts, serving_embed)
+
+
+@pytest.fixture(scope="session")
 def chatterbox_engine(models_cache_dir, device):
     """Session-scoped engine fixture for Chatterbox TTS E2E tests.
 

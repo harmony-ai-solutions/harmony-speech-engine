@@ -69,6 +69,7 @@ omegaconf
 conformer==0.3.2
 s3tokenizer
 spacy-pkuseg
+peft
 # pykakasi already listed above (MeloTTS Japanese); also used by Chatterbox MTL tokenizer
 
 # Testing

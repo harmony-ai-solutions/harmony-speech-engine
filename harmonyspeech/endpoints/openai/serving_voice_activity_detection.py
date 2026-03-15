@@ -82,6 +82,8 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
         # Ensure we're receiving a proper VAD Output here
         # We may also receive transcription output instead, which is technically also a VAD result
         assert final_res is not None
+        if final_res.finish_reason == "error":
+            return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, DetectVoiceActivityRequestOutput) or isinstance(final_res, SpeechTranscriptionRequestOutput)
 
         # load result data and determine what will be returned

@@ -3,14 +3,21 @@
 This module provides wrapper classes for the Chatterbox TTS and VC models,
 exposing a consistent interface for model loading and inference.
 """
+import os
+import types
 from typing import Optional, Union
 
+import numpy as np
 import torch
+from huggingface_hub import snapshot_download
 
 # Import Chatterbox models from the chatterbox library
 from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
 from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
 from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
+
+# HuggingFace repo ID for ChatterboxTurboTTS (mirrors tts_turbo.py REPO_ID)
+_CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
 
 
 class ChatterboxTTSModel:
@@ -57,11 +64,21 @@ class ChatterboxTurboTTSModel:
         **kwargs
     ) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
-        
+
+        Workaround: The upstream `_ChatterboxTurboTTS.from_pretrained()` contains a bug
+        where it calls `snapshot_download(token=os.getenv("HF_TOKEN") or True)`.
+        When HF_TOKEN is not set, `None or True` evaluates to `True`, which instructs
+        huggingface_hub to require a locally-cached token — causing a
+        `LocalTokenNotFoundError` even though the model repo is public.
+
+        We bypass this by calling `snapshot_download` ourselves with
+        `token=os.getenv("HF_TOKEN") or None` (so unauthenticated downloads work for
+        public repos), then delegating to `from_local`.
+
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
-            **kwargs: Additional arguments passed to ChatterboxTurboTTS.from_pretrained.
-        
+            **kwargs: Additional keyword arguments (unused; kept for API compatibility).
+
         Returns:
             ChatterboxTurboTTS model instance.
         """
@@ -69,8 +86,58 @@ class ChatterboxTurboTTSModel:
             device = "cpu"
         elif isinstance(device, torch.device):
             device = str(device)
-        
-        return _ChatterboxTurboTTS.from_pretrained(device=device, **kwargs)
+
+        # Use the caller-supplied token if available, otherwise None (allow anonymous
+        # access to this public repo rather than forcing token=True).
+        hf_token = os.getenv("HF_TOKEN") or None
+
+        local_path = snapshot_download(
+            repo_id=_CHATTERBOX_TURBO_REPO_ID,
+            token=hf_token,
+            allow_patterns=["*.safetensors", "*.json", "*.txt", "*.pt", "*.model"],
+        )
+
+        model = _ChatterboxTurboTTS.from_local(local_path, device)
+
+        # Workaround: librosa.load / librosa.resample inside prepare_conditionals
+        # return float64 numpy arrays by default. Two downstream consumers both
+        # crash when receiving float64 input:
+        #
+        # 1. s3tokenizer.log_mel_spectrogram — does torch.from_numpy(audio) preserving
+        #    float64, then tries `_mel_filters (float32) @ magnitudes (float64)`:
+        #      RuntimeError: expected scalar type Float but found Double
+        #
+        # 2. voice_encoder.forward (via ve.embeds_from_wavs) — LSTM rejects float64:
+        #      ValueError: input must have the type torch.float32, got type torch.float64
+        #
+        # Fix: monkey-patch both consumers on the loaded model instance to cast
+        # numpy arrays / tensors to float32 at entry.
+
+        # --- Patch 1: s3tokenizer.log_mel_spectrogram ---
+        _orig_log_mel = model.s3gen.tokenizer.log_mel_spectrogram.__func__
+
+        def _log_mel_float32(self_tok, audio, padding=0):
+            if isinstance(audio, np.ndarray):
+                audio = audio.astype(np.float32)
+            elif torch.is_tensor(audio) and audio.dtype != torch.float32:
+                audio = audio.float()
+            return _orig_log_mel(self_tok, audio, padding)
+
+        model.s3gen.tokenizer.log_mel_spectrogram = types.MethodType(
+            _log_mel_float32, model.s3gen.tokenizer
+        )
+
+        # --- Patch 2: voice_encoder.forward (mels input to LSTM) ---
+        _orig_ve_forward = model.ve.forward
+
+        def _ve_forward_float32(mels, *args, **kwargs):
+            if torch.is_tensor(mels) and mels.dtype != torch.float32:
+                mels = mels.float()
+            return _orig_ve_forward(mels, *args, **kwargs)
+
+        model.ve.forward = _ve_forward_float32
+
+        return model
 
 
 class ChatterboxMultilingualTTSModel:
@@ -102,8 +169,20 @@ class ChatterboxMultilingualTTSModel:
             device = "cpu"
         elif isinstance(device, torch.device):
             device = str(device)
-            
-        return ChatterboxMultilingualTTS.from_pretrained(device=device, **kwargs)
+
+        model = ChatterboxMultilingualTTS.from_pretrained(device=device, **kwargs)
+
+        # Workaround: newer transformers defaults to attn_implementation="sdpa" for LlamaModel.
+        # The upstream AlignmentStreamAnalyzer (used only for multilingual inference) sets
+        #   tfmr.config.output_attentions = True
+        # which raises a ValueError when attn_implementation is "sdpa":
+        #   "The `output_attentions` attribute is not supported when using the `attn_implementation` set to sdpa"
+        # Fix: force _attn_implementation back to "eager" on the T3's LlamaModel config directly
+        # so that the AlignmentStreamAnalyzer can enable output_attentions without crashing.
+        if hasattr(model, 't3') and hasattr(model.t3, 'tfmr') and hasattr(model.t3.tfmr, 'config'):
+            model.t3.tfmr.config._attn_implementation = "eager"
+
+        return model
 
 
 class ChatterboxVCModel:

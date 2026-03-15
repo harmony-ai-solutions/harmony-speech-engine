@@ -92,6 +92,8 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
         # Ensure we're receiving a proper TTS Output here
         assert final_res is not None
+        if final_res.finish_reason == "error":
+            return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, SpeechEmbeddingRequestOutput)
 
         response = EmbedSpeakerResponse(

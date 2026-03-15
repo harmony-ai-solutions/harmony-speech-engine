@@ -24,6 +24,7 @@ def test_kittentts_mini_single_speaker(kittentts_mini_engine, mock_raw_request):
         input=TEXT_INPUT,
         mode="single_speaker_tts",
         voice="Jasper",
+        language="default",
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Expected TextToSpeechResponse, got: {response}"
@@ -41,6 +42,7 @@ def test_kittentts_micro_single_speaker(kittentts_micro_engine, mock_raw_request
         input=TEXT_INPUT,
         mode="single_speaker_tts",
         voice="Jasper",
+        language="default",
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Expected TextToSpeechResponse, got: {response}"
@@ -58,6 +60,7 @@ def test_kittentts_nano_single_speaker(kittentts_nano_engine, mock_raw_request):
         input=TEXT_INPUT,
         mode="single_speaker_tts",
         voice="Jasper",
+        language="default",
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Expected TextToSpeechResponse, got: {response}"
@@ -75,6 +78,7 @@ def test_kittentts_nano_int8_single_speaker(kittentts_nano_int8_engine, mock_raw
         input=TEXT_INPUT,
         mode="single_speaker_tts",
         voice="Jasper",
+        language="default",
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Expected TextToSpeechResponse, got: {response}"
