@@ -40,6 +40,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Run unit and integration tests
         run: |
