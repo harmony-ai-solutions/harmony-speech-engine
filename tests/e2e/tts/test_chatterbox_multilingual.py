@@ -5,8 +5,7 @@ Coverage added based on bugs discovered during manual testing:
   - Embedding requests to multilingual models crashing _check_model (missing language field)
   - Engine crash on inference errors (too-short audio, etc.) leaking through the async loop
 
-All tests require CUDA and load the real models from HuggingFace.
-Tests are automatically skipped when CUDA is unavailable.
+Tests load real models from HuggingFace and support both CPU and CUDA devices.
 
 Test audio samples (tests/test-data/samples/):
   wanda4.wav               — short voice sample (< 5 seconds); used for negative-path embedding tests
@@ -29,7 +28,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 )
 from tests.e2e.conftest import load_sample_audio_b64
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.cuda]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 TEXT_INPUT = "Hello, world. This is a test of the Chatterbox voice cloning system."
 

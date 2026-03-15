@@ -57,7 +57,6 @@ markers = [
     "integration: marks tests as integration tests (component interaction, partially mocked)",
     "e2e: marks tests as end-to-end tests (real models, slow, CPU-only)",
     "slow: marks tests that take > 30 seconds to run",
-    "cuda: marks tests that require CUDA/GPU hardware",
 ]
 
 [tool.coverage.run]

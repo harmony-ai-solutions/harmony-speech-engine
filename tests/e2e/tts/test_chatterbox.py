@@ -18,7 +18,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 )
 from tests.e2e.conftest import load_sample_audio_b64
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.cuda]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 TEXT_INPUT = "Hello, world. This is a test of the Chatterbox voice cloning system."
 REFERENCE_AUDIO = load_sample_audio_b64("wanda4")

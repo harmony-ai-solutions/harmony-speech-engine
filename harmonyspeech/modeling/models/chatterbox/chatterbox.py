@@ -19,6 +19,62 @@ from huggingface_hub import snapshot_download
 # HuggingFace repo ID for ChatterboxTurboTTS (mirrors tts_turbo.py REPO_ID)
 _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
 
+# ---------------------------------------------------------------------------
+# Monkey-patch for ChatterboxMultilingualTTS to support CPU loading
+# ---------------------------------------------------------------------------
+# The upstream ChatterboxMultilingualTTS.from_local doesn't pass map_location
+# to torch.load, causing failures on CPU when the checkpoint was saved on CUDA.
+# This patch adds proper CPU mapping when device="cpu" is specified.
+import chatterbox.mtl_tts as _mtl_module
+
+_original_torch_load = _mtl_module.torch.load
+
+
+def _patched_torch_load(*args, map_location=None, **kwargs):
+    """Patched torch.load that defaults to CPU map_location when device is cpu."""
+    if map_location is None:
+        # Check if we're being called from the multilingual model loading path
+        # by inspecting the first argument (the file path)
+        if args and isinstance(args[0], (str, object)) and hasattr(args[0], "__str__"):
+            # Default to CPU if no map_location specified
+            map_location = torch.device("cpu")
+    kwargs["map_location"] = map_location
+    return _original_torch_load(*args, **kwargs)
+
+
+# Apply the patch to the chatterbox.mtl_tts module
+_mtl_module.torch.load = _patched_torch_load
+
+# ---------------------------------------------------------------------------
+# Monkey-patch for perth package to handle missing PerthImplicitWatermarker
+# ---------------------------------------------------------------------------
+# The perth package may fail to import PerthImplicitWatermarker on some platforms
+# (e.g., missing optional dependencies), causing it to be None. When chatterbox
+# tries to instantiate it, we get "TypeError: 'NoneType' object is not callable".
+# This patch provides a fallback that uses DummyWatermarker when the real one is unavailable.
+import perth as _perth_module
+
+if _perth_module.PerthImplicitWatermarker is None:
+
+    class _FallbackPerthImplicitWatermarker:
+        """Fallback watermarker that uses DummyWatermarker when PerthImplicitWatermarker is unavailable."""
+
+        def __init__(self, *args, **kwargs):
+            # Use DummyWatermarker as fallback
+            self._dummy = _perth_module.DummyWatermarker(*args, **kwargs)
+
+        def __getattr__(self, name):
+            # Delegate all attribute access to the dummy
+            return getattr(self._dummy, name)
+
+        def apply_watermark(self, *args, **kwargs):
+            return self._dummy.apply_watermark(*args, **kwargs)
+
+        def detect_watermark(self, *args, **kwargs):
+            return self._dummy.detect_watermark(*args, **kwargs)
+
+    _perth_module.PerthImplicitWatermarker = _FallbackPerthImplicitWatermarker
+
 
 class ChatterboxTTSModel:
     """Wrapper for ChatterboxTTS model.
