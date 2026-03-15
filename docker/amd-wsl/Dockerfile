@@ -24,14 +24,28 @@ RUN set -eux; \
 RUN ln -s /usr/bin/python3 /usr/bin/python || true
 RUN apt-get install --only-upgrade python3-pip
 
+# Build argument for CI (use --build-arg CLONE_FROM_GITHUB=1 in GitHub Actions)
+ARG CLONE_FROM_GITHUB=0
+
+# Always COPY local source first (used for local/dev builds)
+COPY . $HOME
+
 # Clone Repo and install requirements
-RUN git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME
-COPY entrypoint.sh docker/amd-wsl/entrypoint.sh
-RUN chmod +x docker/amd-wsl/entrypoint.sh
+# Default: use local source (already copied above)
+# With --build-arg CLONE_FROM_GITHUB=1: wipe local copy and clone from GitHub for CI
+RUN if [ "$CLONE_FROM_GITHUB" = "1" ]; then \
+      echo "Cloning from GitHub for CI"; \
+      find $HOME -mindepth 1 -delete; \
+      git clone https://github.com/harmony-ai-solutions/harmony-speech-engine.git $HOME; \
+    else \
+      echo "Using local source files"; \
+    fi && \
+    chmod +x docker/amd-wsl/entrypoint.sh
 # Install requirements but skip torch and torchaudio (already in base image)
 RUN grep -v '^torch$' requirements-common.txt | grep -v '^torchaudio$' > requirements-common-notorch.txt && \
     echo "-r requirements-common-notorch.txt" > requirements-rocm-notorch.txt && \
-    pip3 install -r requirements-rocm-notorch.txt --break-system-packages
+    pip3 install -r requirements-rocm-notorch.txt --break-system-packages && \
+    pip3 install --no-deps -r requirements-chatterbox.txt --break-system-packages
 
 # Download NLTK modules required by OpenVoice
 RUN python -m nltk.downloader all

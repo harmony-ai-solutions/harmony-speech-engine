@@ -92,6 +92,7 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-cpu:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-cpu:latest
+          build-args: CLONE_FROM_GITHUB=1
 
   build-and-push-amd:
     runs-on: ubuntu-latest
@@ -187,6 +188,7 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-amd:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-amd:latest
+          build-args: CLONE_FROM_GITHUB=1
 
   build-and-push-amd-wsl:
     runs-on: ubuntu-latest
@@ -269,6 +271,7 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-amd-wsl:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-amd-wsl:latest
+          build-args: CLONE_FROM_GITHUB=1
 
   build-and-push-nvidia:
     runs-on: ubuntu-latest
@@ -364,3 +367,4 @@ jobs:
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-nvidia:${{ env.VERSION }}
             ${{ secrets.DOCKER_HUB_USERNAME }}/harmonyspeech-engine-nvidia:latest
+          build-args: CLONE_FROM_GITHUB=1
