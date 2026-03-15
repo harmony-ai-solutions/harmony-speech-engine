@@ -1,9 +1,8 @@
 from dataclasses import dataclass, fields
-from typing import Optional, Union, List
-from loguru import logger
 
 import torch
 import yaml
+from loguru import logger
 
 from harmonyspeech.common.utils import is_cpu, is_hip
 
@@ -50,15 +49,15 @@ class ModelConfig:
         model_type: str,
         max_batch_size: int,
         device_config: DeviceConfig,
-        language: Optional[str] = None,
-        voices: Optional[List[str]] = None,
-        trust_remote_code: Optional[bool] = False,
-        download_dir: Optional[str] = None,
-        load_format: Optional[str] = "auto",
-        dtype: Optional[Union[str, torch.dtype]] = "bfloat16",
-        seed: Optional[int] = 0,
-        revision: Optional[str] = None,
-        code_revision: Optional[str] = None,
+        language: str | None = None,
+        voices: list[str] | None = None,
+        trust_remote_code: bool | None = False,
+        download_dir: str | None = None,
+        load_format: str | None = "auto",
+        dtype: str | torch.dtype | None = "bfloat16",
+        seed: int | None = 0,
+        revision: str | None = None,
+        code_revision: str | None = None,
         enforce_eager: bool = True,
         watermark: bool = True,
     ) -> None:
@@ -107,7 +106,7 @@ class EngineConfig:
     simplifies passing around the distinct configurations in the codebase.
     """
 
-    model_configs: List[ModelConfig]
+    model_configs: list[ModelConfig]
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
@@ -119,7 +118,7 @@ class EngineConfig:
 
     @classmethod
     def load_config_from_yaml(cls, yaml_file_path: str) -> "EngineConfig":
-        with open(yaml_file_path, "r") as file:
+        with open(yaml_file_path) as file:
             config_data = yaml.safe_load(file)
 
         model_configs = []
@@ -142,7 +141,7 @@ _STR_DTYPE_TO_TORCH_DTYPE = {
 _ROCM_NOT_SUPPORTED_DTYPE = ["float", "float32"]
 
 
-def _get_and_verify_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
+def _get_and_verify_dtype(dtype: str | torch.dtype) -> torch.dtype:
 
     config_dtype = torch.float32
 

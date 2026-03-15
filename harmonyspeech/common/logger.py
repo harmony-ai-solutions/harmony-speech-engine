@@ -8,7 +8,7 @@ import os
 from loguru import logger
 from rich.console import Console
 from rich.markup import escape
-from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TaskProgressColumn, MofNCompleteColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 
 RICH_CONSOLE = Console()
 LOG_LEVEL = os.getenv("HARMONYSPEECH_LOG_LEVEL", "INFO").upper()

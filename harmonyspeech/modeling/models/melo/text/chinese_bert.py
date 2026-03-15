@@ -1,7 +1,7 @@
 import sys
-import torch
 
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+import torch
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 # model_id = 'hfl/chinese-roberta-wwm-ext-large'
 local_path = "./bert/chinese-roberta-wwm-ext-large"

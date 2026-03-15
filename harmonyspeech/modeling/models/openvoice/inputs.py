@@ -1,10 +1,10 @@
 import re
+
 import torch
 
 from harmonyspeech.modeling.models.openvoice import commons
 from harmonyspeech.modeling.models.openvoice.text import text_to_sequence
 from harmonyspeech.modeling.models.openvoice.utils import split_sentence
-
 
 _supported_languages = ["EN", "ZH"]
 

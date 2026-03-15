@@ -1,8 +1,9 @@
 """Root conftest.py — shared fixtures and pytest CLI hooks for all tests."""
 
+from pathlib import Path
+
 import pytest
 import torch
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # CLI option registration

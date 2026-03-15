@@ -1,5 +1,4 @@
 import importlib
-from typing import List
 
 import gruut
 from gruut_ipa import IPA  # pip install gruut_ipa
@@ -114,7 +113,7 @@ class Gruut(BasePhonemizer):
         return gruut.is_language_supported(language)
 
     @staticmethod
-    def supported_languages() -> List:
+    def supported_languages() -> list:
         """Get a dictionary of supported languages.
 
         Returns:
@@ -137,8 +136,9 @@ class Gruut(BasePhonemizer):
 
 
 if __name__ == "__main__":
-    from cleaner import french_cleaners
     import json
+
+    from cleaner import french_cleaners
 
     e = Gruut(language="fr-fr", keep_puncs=True, keep_stress=True, use_espeak_phonemes=True)
     symbols = [  # en + sp
@@ -218,7 +218,7 @@ if __name__ == "__main__":
         "ʎ",
         "ː",
     ]
-    with open("/home/xumin/workspace/VITS-Training-Multiling/230715_fr/metadata.txt", "r") as f:
+    with open("/home/xumin/workspace/VITS-Training-Multiling/230715_fr/metadata.txt") as f:
         lines = f.readlines()
 
     used_sym = []

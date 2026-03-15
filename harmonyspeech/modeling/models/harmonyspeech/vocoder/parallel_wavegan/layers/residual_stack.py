@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2020 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 
@@ -39,7 +37,7 @@ class ResidualStack(torch.nn.Module):
             use_causal_conv (bool): Whether to use causal convolution.
 
         """
-        super(ResidualStack, self).__init__()
+        super().__init__()
 
         # defile residual stack part
         if not use_causal_conv:

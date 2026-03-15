@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set, Tuple
+
 from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
@@ -27,7 +27,7 @@ class ExecutorBase(ABC):
         pass
 
     @abstractmethod
-    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 
@@ -40,7 +40,7 @@ class ExecutorBase(ABC):
 
 class ExecutorAsyncBase(ExecutorBase):
     @abstractmethod
-    async def execute_model_async(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    async def execute_model_async(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 

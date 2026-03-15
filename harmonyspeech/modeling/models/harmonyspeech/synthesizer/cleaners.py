@@ -11,7 +11,7 @@ hyperparameter. Some cleaners are English-specific. You"ll typically want to use
 """
 
 import re
-from typing import Any, Dict
+from typing import Any
 
 from unidecode import unidecode
 
@@ -144,7 +144,7 @@ class Cleaner:
         return text
 
     @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> "Cleaner":
+    def from_config(cls, config: dict[str, Any]) -> "Cleaner":
         return Cleaner(
             cleaner_name=config["preprocessing"]["cleaner_name"],
             use_phonemes=config["preprocessing"]["use_phonemes"],

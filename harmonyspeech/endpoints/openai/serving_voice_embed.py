@@ -1,5 +1,5 @@
 import time
-from typing import AsyncGenerator, AsyncIterator, List, Union
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from fastapi import Request
 
@@ -31,18 +31,18 @@ _EMBEDDING_MODEL_GROUPS = {
 
 
 class OpenAIServingVoiceEmbedding(OpenAIServing):
-    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
-    def models_from_config(configured_models: List[ModelConfig]):
+    def models_from_config(configured_models: list[ModelConfig]):
         return OpenAIServing.model_cards_from_config_groups(
             configured_models, _EMBEDDING_MODEL_TYPES, _EMBEDDING_MODEL_GROUPS
         )
 
     async def create_voice_embedding(
         self, request: EmbedSpeakerRequest, raw_request: Request
-    ) -> Union[ErrorResponse, AsyncGenerator[str, None], EmbedSpeakerResponse]:
+    ) -> ErrorResponse | AsyncGenerator[str, None] | EmbedSpeakerResponse:
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
@@ -68,7 +68,7 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
         raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
         request_id: str,
-    ) -> Union[ErrorResponse, EmbedSpeakerResponse]:
+    ) -> ErrorResponse | EmbedSpeakerResponse:
 
         model_name = request.model
         created_time = int(time.time())

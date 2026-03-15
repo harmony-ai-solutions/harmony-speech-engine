@@ -6,12 +6,13 @@ FasterWhisper (VAD mode) → DetectVoiceActivityResponse.
 """
 
 import asyncio
-import struct
 import base64
+import struct
+
 import pytest
 
-from tests.e2e.conftest import load_sample_audio_b64
 from harmonyspeech.endpoints.openai.protocol import DetectVoiceActivityRequest, DetectVoiceActivityResponse
+from tests.e2e.conftest import load_sample_audio_b64
 
 
 def _make_silent_wav_b64(sample_rate: int = 16000, duration_secs: float = 1.0) -> str:

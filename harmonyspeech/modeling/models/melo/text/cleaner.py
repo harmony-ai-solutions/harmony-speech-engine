@@ -1,6 +1,6 @@
 import copy
 
-from harmonyspeech.modeling.models.melo.text import chinese, japanese, english, chinese_mix, korean, french, spanish
+from harmonyspeech.modeling.models.melo.text import chinese, chinese_mix, english, french, japanese, korean, spanish
 from harmonyspeech.modeling.models.melo.text.base import cleaned_text_to_sequence
 
 language_module_map = {

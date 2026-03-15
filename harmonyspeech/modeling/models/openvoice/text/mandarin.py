@@ -1,11 +1,8 @@
-import os
-import sys
 import re
-from pypinyin import lazy_pinyin, BOPOMOFO
-import jieba
-import cn2an
-import logging
 
+import cn2an
+import jieba
+from pypinyin import BOPOMOFO, lazy_pinyin
 
 # List of (Latin alphabet, bopomofo) pairs:
 _latin_to_bopomofo = [

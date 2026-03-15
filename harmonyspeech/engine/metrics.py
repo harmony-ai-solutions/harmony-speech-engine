@@ -1,6 +1,5 @@
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 from loguru import logger
@@ -14,7 +13,7 @@ disable_created_metrics()
 
 # begin-metrics-definitions
 class Metrics:
-    def __init__(self, labelnames: List[str]):
+    def __init__(self, labelnames: list[str]):
         # Unregister any existing Aphrodite collectors
         for collector in list(REGISTRY._collector_to_names):
             if hasattr(collector, "_name") and "aphrodite" in collector._name:
@@ -122,14 +121,14 @@ class Stats:
 class StatLogger:
     """StatLogger is used AphroditeEngine to log to Promethus and Stdout."""
 
-    def __init__(self, local_interval: float, labels: Dict[str, str]) -> None:
+    def __init__(self, local_interval: float, labels: dict[str, str]) -> None:
         # Metadata for logging locally.
         self.last_local_log = time.monotonic()
         self.local_interval = local_interval
 
         # Tracked stats over current local logging interval.
-        self.num_prompt_tokens: List[int] = []
-        self.num_generation_tokens: List[int] = []
+        self.num_prompt_tokens: list[int] = []
+        self.num_generation_tokens: list[int] = []
 
         # Prometheus metrics
         self.labels = labels
@@ -139,7 +138,7 @@ class StatLogger:
         if type == "cache_config":
             self.metrics.info_cache_config.info(obj.metrics_info())
 
-    def _get_throughput(self, tracked_stats: List[int], now: float) -> float:
+    def _get_throughput(self, tracked_stats: list[int], now: float) -> float:
         return float(np.sum(tracked_stats) / (now - self.last_local_log))
 
     def _local_interval_elapsed(self, now: float) -> bool:

@@ -2,17 +2,19 @@ import asyncio
 import enum
 import gc
 import os
+import socket
 import subprocess
 import uuid
-from functools import lru_cache, partial
-import socket
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Hashable
+from functools import cache, partial
 from platform import uname
-from typing import Hashable, Optional, OrderedDict, Generic, TypeVar, Any, Callable, Awaitable, List
-from loguru import logger
-from packaging.version import Version, parse
+from typing import Any, Generic, TypeVar
 
 import psutil
 import torch
+from loguru import logger
+from packaging.version import Version, parse
 
 T = TypeVar("T")
 
@@ -60,7 +62,7 @@ class LRUCache(Generic[T]):
     def touch(self, key: Hashable) -> None:
         self.cache.move_to_end(key)
 
-    def get(self, key: Hashable, default_value: Optional[T] = None) -> Optional[T]:
+    def get(self, key: Hashable, default_value: T | None = None) -> T | None:
         if key in self.cache:
             value = self.cache[key]
             self.cache.move_to_end(key)
@@ -86,7 +88,7 @@ class LRUCache(Generic[T]):
         while len(self.cache) > self.capacity:
             self.remove_oldest()
 
-    def pop(self, key: Hashable, default_value: Optional[Any] = None) -> T:
+    def pop(self, key: Hashable, default_value: Any | None = None) -> T:
         run_on_remove = key in self.cache
         value = self.cache.pop(key, default_value)
         if run_on_remove:
@@ -103,7 +105,7 @@ def is_hip() -> bool:
     return torch.version.hip is not None
 
 
-@lru_cache(maxsize=None)
+@cache
 def is_cpu() -> bool:
     from importlib.metadata import PackageNotFoundError, version
 
@@ -122,7 +124,7 @@ def random_uuid() -> str:
     return str(uuid.uuid4().hex)
 
 
-@lru_cache(maxsize=None)
+@cache
 def in_wsl() -> bool:
     # Reference: https://github.com/microsoft/WSL/issues/4071
     return "microsoft" in " ".join(uname()).lower()
@@ -176,7 +178,7 @@ def get_open_port() -> int:
             return s.getsockname()[1]
 
 
-def set_cuda_visible_devices(device_ids: List[int]) -> None:
+def set_cuda_visible_devices(device_ids: list[int]) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, device_ids))
 
 
@@ -190,8 +192,8 @@ def cdiv(a: int, b: int) -> int:
     return -(a // -b)
 
 
-@lru_cache(maxsize=None)
-def get_nvcc_cuda_version() -> Optional[Version]:
+@cache
+def get_nvcc_cuda_version() -> Version | None:
     cuda_home = os.environ.get("CUDA_HOME")
     if not cuda_home:
         cuda_home = "/usr/local/cuda"

@@ -1,10 +1,11 @@
+import logging
 import math
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from harmonyspeech.modeling.models.openvoice import commons
-import logging
 
 logger = logging.getLogger(__name__)
 

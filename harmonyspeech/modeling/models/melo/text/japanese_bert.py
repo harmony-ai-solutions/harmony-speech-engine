@@ -1,7 +1,7 @@
 import sys
 
 import torch
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 models = {}
 tokenizers = {}

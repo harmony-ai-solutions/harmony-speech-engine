@@ -5,13 +5,14 @@ Supports both CPU and CUDA based on the device fixture.
 
 import asyncio
 import base64
+
 import pytest
 
 from harmonyspeech.endpoints.openai.protocol import (
-    TextToSpeechRequest,
-    TextToSpeechResponse,
     EmbedSpeakerRequest,
     EmbedSpeakerResponse,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
     VoiceConversionRequest,
     VoiceConversionResponse,
 )

@@ -1,8 +1,10 @@
-from misaki import en, espeak
+from misaki import en, espeak  # noqa: F401
+
 import numpy as np
+import onnxruntime as ort
 import phonemizer
 import soundfile as sf
-import onnxruntime as ort
+
 from harmonyspeech.modeling.models.kittentts.preprocess import TextPreprocessor
 
 

@@ -1,7 +1,7 @@
 import os
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Union, Iterable, Tuple
 
 from loguru import logger
 
@@ -14,8 +14,8 @@ from harmonyspeech.common.inputs import (
     SpeechTranscribeRequestInput,
     SynthesisRequestInput,
     TextToSpeechRequestInput,
-    VoiceConversionRequestInput,
     VocodeRequestInput,
+    VoiceConversionRequestInput,
 )
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import (
@@ -28,7 +28,7 @@ from harmonyspeech.common.outputs import (
 )
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
-from harmonyspeech.engine.metrics import Stats, StatLogger
+from harmonyspeech.engine.metrics import StatLogger, Stats
 from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
@@ -40,7 +40,7 @@ class HarmonySpeechEngine:
 
     """
 
-    def __init__(self, model_configs: Optional[List[ModelConfig]], log_stats: bool):
+    def __init__(self, model_configs: list[ModelConfig] | None, log_stats: bool):
         self.model_configs = model_configs
         self.log_stats = log_stats
         self._verify_args()
@@ -495,7 +495,7 @@ class HarmonySpeechEngine:
 
         return new_status, forwarding_request
 
-    def add_request(self, request_id: str, request_data: RequestInput, arrival_time: Optional[float] = None) -> None:
+    def add_request(self, request_id: str, request_data: RequestInput, arrival_time: float | None = None) -> None:
         """Add a Text-to-Speech request to the engine's request pool.
 
         The request is added to the request pool and will be processed by the
@@ -523,7 +523,7 @@ class HarmonySpeechEngine:
             EngineRequest(request_id=request_id, request_data=request_data, arrival_time=arrival_time)
         )
 
-    def abort_request(self, request_id: Union[str, Iterable[str]]) -> None:
+    def abort_request(self, request_id: str | Iterable[str]) -> None:
         """Aborts a request(s) with the given ID.
 
         Args:
@@ -542,7 +542,7 @@ class HarmonySpeechEngine:
         """
         self.scheduler.update_request_status(request_id, RequestStatus.FINISHED_ABORTED)
 
-    def get_model_configs(self) -> List[ModelConfig]:
+    def get_model_configs(self) -> list[ModelConfig]:
         """Gets the model configuration."""
         return self.model_configs
 
@@ -555,16 +555,16 @@ class HarmonySpeechEngine:
         return self.scheduler.has_unfinished_requests()
 
     def _process_model_outputs(
-        self, outputs: List[ExecutorResult], ignored_requests: List[EngineRequest]
-    ) -> Tuple[List[RequestOutput], List[RequestInput]]:
+        self, outputs: list[ExecutorResult], ignored_requests: list[EngineRequest]
+    ) -> tuple[list[RequestOutput], list[RequestInput]]:
         """Apply the model output to the sequences in the scheduled seq groups.
 
         Returns RequestOutputs that can be returned to the client.
         """
 
         # Forward Processing or create the outputs and update the requests
-        request_outputs: List[RequestOutput] = []
-        forwarded_requests: List[RequestInput] = []
+        request_outputs: list[RequestOutput] = []
+        forwarded_requests: list[RequestInput] = []
         for result in outputs:
             # Check for Re-Schedule conditions
             new_status, forwarding_request = self.check_forward_processing(result)
@@ -587,7 +587,7 @@ class HarmonySpeechEngine:
 
         return request_outputs, forwarded_requests
 
-    def step(self) -> Tuple[List[RequestOutput], List[RequestInput]]:
+    def step(self) -> tuple[list[RequestOutput], list[RequestInput]]:
         """Performs one decoding iteration and returns newly generated results.
 
         .. figure:: https://i.imgur.com/sv2HssD.png
@@ -668,7 +668,7 @@ class HarmonySpeechEngine:
         if self.log_stats:
             self.stat_logger.log(self._get_stats(scheduler_outputs=None))
 
-    def _get_stats(self, scheduler_outputs: Optional[SchedulerOutputs]) -> Stats:
+    def _get_stats(self, scheduler_outputs: SchedulerOutputs | None) -> Stats:
         """Get Stats to be Logged to Prometheus.
         Args:
             scheduler_outputs: Optional, used to populate metrics related to

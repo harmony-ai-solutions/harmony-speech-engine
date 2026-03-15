@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -14,6 +13,6 @@ class RequestMetrics:
     """
 
     arrival_time: float
-    first_scheduled_time: Optional[float]
-    time_in_queue: Optional[float]
-    finished_time: Optional[float] = None
+    first_scheduled_time: float | None
+    time_in_queue: float | None
+    finished_time: float | None = None

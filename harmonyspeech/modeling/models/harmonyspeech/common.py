@@ -1,15 +1,13 @@
 import io
 import logging
 import struct
-from typing import Optional
 
-from librosa.feature import melspectrogram
-from scipy.ndimage.morphology import binary_dilation
 import librosa
 import numpy as np
 import webrtcvad
 from audioread import NoBackendError
-
+from librosa.feature import melspectrogram
+from scipy.ndimage.morphology import binary_dilation
 
 int16_max = (2**15) - 1
 
@@ -74,11 +72,11 @@ def trim_long_silences(
 def preprocess_wav(
     wav,
     sample_rate=16000,
-    source_sr: Optional[int] = None,
-    normalize: Optional[bool] = True,
-    trim_silence: Optional[bool] = True,
-    rescale: Optional[bool] = True,
-    rescaling_max: Optional[float] = 0.9,
+    source_sr: int | None = None,
+    normalize: bool | None = True,
+    trim_silence: bool | None = True,
+    rescale: bool | None = True,
+    rescaling_max: float | None = 0.9,
 ):
     """
     Applies the preprocessing operations used in training the Speaker Encoder to a waveform
@@ -103,7 +101,7 @@ def preprocess_wav(
             wav, source_sr = librosa.load(io.BytesIO(wav), sr=None)
         except (ValueError, RuntimeError, NoBackendError) as err:
             # Unable to load.
-            logging.error("Unable to load audio: {0}".format(err))
+            logging.error(f"Unable to load audio: {err}")
             return []
 
     # Resample the wav if needed
@@ -112,7 +110,7 @@ def preprocess_wav(
             wav = librosa.resample(y=wav, orig_sr=source_sr, target_sr=sample_rate)
         except ValueError as err:
             # Unable to resample.
-            print("Unable to resample audio: {0}".format(err))
+            print(f"Unable to resample audio: {err}")
             return []
 
     # Apply the preprocessing: rescale, normalize volume and shorten long silences

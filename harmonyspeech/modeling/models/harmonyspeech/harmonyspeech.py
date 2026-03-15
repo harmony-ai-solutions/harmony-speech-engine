@@ -1,16 +1,13 @@
-import json
-import logging
-from typing import Callable, Optional, List, Dict
+from collections.abc import Callable
 
-from torch.nn import Embedding
-from torch.nn.utils import clip_grad_norm_
-from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
-from torch import nn
-import torch.nn.functional as F
 import numpy as np
 import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.nn import Embedding
+from torch.nn.utils import clip_grad_norm_
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 
-from harmonyspeech.modeling.hf_downloader import load_or_download_config, load_or_download_model
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import (
     CausalConv1d,
     CausalConvTranspose1d,
@@ -475,13 +472,13 @@ class MelGANGenerator(torch.nn.Module):
         kernel_size: int,
         channels: int,
         bias: bool,
-        upsample_scales: List[int],
+        upsample_scales: list[int],
         stack_kernel_size: int,
         stacks: int,
         nonlinear_activation: str,
-        nonlinear_activation_params: Dict,
+        nonlinear_activation_params: dict,
         pad: str,
-        pad_params: Dict,
+        pad_params: dict,
         use_final_nonlinear_activation: bool,
         use_weight_norm: bool,
         use_causal_conv: bool,
@@ -507,7 +504,7 @@ class MelGANGenerator(torch.nn.Module):
             use_causal_conv (bool): Whether to use causal convolution.
 
         """
-        super(MelGANGenerator, self).__init__()
+        super().__init__()
 
         # check hyper parameters is valid
         assert channels >= np.prod(upsample_scales)

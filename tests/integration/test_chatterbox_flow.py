@@ -5,18 +5,18 @@ by mocking the engine and testing the serving method signatures and responses.
 """
 
 import base64
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
 
 from harmonyspeech.endpoints.openai.protocol import (
-    TextToSpeechRequest,
-    TextToSpeechResponse,
     EmbedSpeakerRequest,
     EmbedSpeakerResponse,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
     VoiceConversionRequest,
     VoiceConversionResponse,
 )
-
 
 # Mock raw_request for serving handler calls
 mock_raw_request = MagicMock()
@@ -32,8 +32,8 @@ mock_raw_request.is_disconnected = AsyncMock(return_value=False)
 def mock_chatterbox_serving():
     """Mock serving handlers that simulate Chatterbox TTS behavior."""
     from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
     from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 
     # Create mock engine
     mock_engine = MagicMock()

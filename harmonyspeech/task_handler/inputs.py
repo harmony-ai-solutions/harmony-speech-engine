@@ -2,17 +2,15 @@ import base64
 import io
 import json
 import os
-from typing import List, Union
 from concurrent.futures import ThreadPoolExecutor
 from tempfile import NamedTemporaryFile
 
-import torch
 import librosa
 import numpy as np
+import torch
+from chatterbox.tts import Conditionals
 from loguru import logger
 from pydub import AudioSegment
-
-from chatterbox.tts import Conditionals
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import (
@@ -22,20 +20,19 @@ from harmonyspeech.common.inputs import (
     SpeechTranscribeRequestInput,
     SynthesisRequestInput,
     TextToSpeechRequestInput,
-    VoiceConversionRequestInput,
     VocodeRequestInput,
+    VoiceConversionRequestInput,
 )
 from harmonyspeech.common.request import EngineRequest
-from harmonyspeech.modeling.loader import get_model_flavour, get_model_config, get_model_speaker
-from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
+from harmonyspeech.modeling.loader import get_model_config, get_model_flavour, get_model_speaker
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
-from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs as ov1_normalize_inputs
 from harmonyspeech.modeling.models.melo.inputs import normalize_text_inputs as melo_normalize_inputs
+from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs as ov1_normalize_inputs
 
 
-def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequest]):
+def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
     """
     Prepares the request data depending on the model type this runner is executing.
     Throws a NotImplementedError if the model type is unknown
@@ -239,7 +236,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: List[EngineRequ
 
 
 def prepare_harmonyspeech_encoder_inputs(
-    requests_to_batch: List[Union[TextToSpeechRequestInput, SpeechEmbeddingRequestInput]],
+    requests_to_batch: list[TextToSpeechRequestInput | SpeechEmbeddingRequestInput],
 ):
     # We're expecting audio in waveform format in the requests
     def prepare(request):
@@ -256,7 +253,7 @@ def prepare_harmonyspeech_encoder_inputs(
     return inputs
 
 
-def prepare_voicefixer_restorer_inputs(requests_to_batch: List[AudioConversionRequestInput]):
+def prepare_voicefixer_restorer_inputs(requests_to_batch: list[AudioConversionRequestInput]):
     """
     Prepare inputs for VoiceFixerRestorer model.
     Expects audio data in base64 format and converts to tensor format.
@@ -288,7 +285,7 @@ def prepare_voicefixer_restorer_inputs(requests_to_batch: List[AudioConversionRe
     return inputs
 
 
-def prepare_voicefixer_vocoder_inputs(requests_to_batch: List[AudioConversionRequestInput]):
+def prepare_voicefixer_vocoder_inputs(requests_to_batch: list[AudioConversionRequestInput]):
     """
     Prepare inputs for VoiceFixerVocoder model.
     Expects mel spectrogram data in base64 format and converts to tensor format.
@@ -317,9 +314,7 @@ def prepare_voicefixer_vocoder_inputs(requests_to_batch: List[AudioConversionReq
     return inputs
 
 
-def prepare_harmonyspeech_synthesizer_inputs(
-    requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]],
-):
+def prepare_harmonyspeech_synthesizer_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
     # We're recieving a text, a voice embedding and voice modifiers
     def prepare(request):
         input_text, input_embedding = prepare_synthesis_inputs(request.input_text, request.input_embedding)
@@ -345,7 +340,7 @@ def prepare_harmonyspeech_synthesizer_inputs(
     return inputs
 
 
-def prepare_harmonyspeech_vocoder_inputs(requests_to_batch: List[Union[TextToSpeechRequestInput, VocodeRequestInput]]):
+def prepare_harmonyspeech_vocoder_inputs(requests_to_batch: list[TextToSpeechRequestInput | VocodeRequestInput]):
     # We're expecting a synthesized mel spectogram and breaks
     def prepare(request):
         # TODO: Adapt this after optimizing synthesis step encoding
@@ -377,7 +372,7 @@ def prepare_harmonyspeech_vocoder_inputs(requests_to_batch: List[Union[TextToSpe
 
 
 def prepare_openvoice_tone_converter_encoder_inputs(
-    model_config: ModelConfig, requests_to_batch: List[Union[SpeechEmbeddingRequestInput, TextToSpeechRequestInput]]
+    model_config: ModelConfig, requests_to_batch: list[SpeechEmbeddingRequestInput | TextToSpeechRequestInput]
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
@@ -458,7 +453,7 @@ def prepare_openvoice_tone_converter_encoder_inputs(
 
 def prepare_openvoice_tone_converter_inputs(
     model_config: ModelConfig,
-    requests_to_batch: List[Union[SpeechEmbeddingRequestInput, TextToSpeechRequestInput, VoiceConversionRequestInput]],
+    requests_to_batch: list[SpeechEmbeddingRequestInput | TextToSpeechRequestInput | VoiceConversionRequestInput],
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
@@ -512,9 +507,7 @@ def prepare_openvoice_tone_converter_inputs(
 
 
 def prepare_faster_whisper_inputs(
-    requests_to_batch: List[
-        Union[TextToSpeechRequestInput, SpeechTranscribeRequestInput, DetectVoiceActivityRequestInput]
-    ],
+    requests_to_batch: list[TextToSpeechRequestInput | SpeechTranscribeRequestInput | DetectVoiceActivityRequestInput],
 ):
     def prepare(request):
         # Make sure Audio data is decoded from Base64
@@ -531,7 +524,7 @@ def prepare_faster_whisper_inputs(
 
 
 def prepare_openvoice_synthesizer_inputs(
-    model_config: ModelConfig, requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]]
+    model_config: ModelConfig, requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
@@ -559,7 +552,7 @@ def prepare_openvoice_synthesizer_inputs(
 
 
 def prepare_melotts_synthesizer_inputs(
-    model_config: ModelConfig, requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]]
+    model_config: ModelConfig, requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
@@ -586,7 +579,7 @@ def prepare_melotts_synthesizer_inputs(
     return inputs
 
 
-def prepare_silero_vad_inputs(requests_to_batch: List[DetectVoiceActivityRequestInput]):
+def prepare_silero_vad_inputs(requests_to_batch: list[DetectVoiceActivityRequestInput]):
     """
     Prepare inputs for Silero VAD model.
     Expects audio data in base64 format and converts to tensor format.
@@ -622,9 +615,7 @@ def prepare_silero_vad_inputs(requests_to_batch: List[DetectVoiceActivityRequest
     return inputs
 
 
-def prepare_kittentts_synthesizer_inputs(
-    requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]],
-):
+def prepare_kittentts_synthesizer_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
     """
     Prepare inputs for KittenTTSSynthesizer model.
     Extracts text, voice name, and speed from the request.
@@ -651,7 +642,7 @@ def prepare_kittentts_synthesizer_inputs(
     return inputs
 
 
-def prepare_chatterbox_tts_inputs(requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]]):
+def prepare_chatterbox_tts_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
     """
     Prepare inputs for ChatterboxTTS model.
 
@@ -702,9 +693,7 @@ def prepare_chatterbox_tts_inputs(requests_to_batch: List[Union[TextToSpeechRequ
     return inputs
 
 
-def prepare_chatterbox_turbo_tts_inputs(
-    requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]],
-):
+def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
     """
     Prepare inputs for ChatterboxTurboTTS model.
 
@@ -756,7 +745,7 @@ def prepare_chatterbox_turbo_tts_inputs(
 
 
 def prepare_chatterbox_multilingual_tts_inputs(
-    requests_to_batch: List[Union[TextToSpeechRequestInput, SynthesisRequestInput]],
+    requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput],
 ):
     """
     Prepare inputs for ChatterboxMultilingualTTS model.
@@ -824,7 +813,7 @@ def prepare_chatterbox_multilingual_tts_inputs(
     return inputs
 
 
-def prepare_chatterbox_embedding_inputs(requests_to_batch: List[SpeechEmbeddingRequestInput]):
+def prepare_chatterbox_embedding_inputs(requests_to_batch: list[SpeechEmbeddingRequestInput]):
     """
     Prepare inputs for ChatterboxEmbedding model.
 
@@ -841,7 +830,7 @@ def prepare_chatterbox_embedding_inputs(requests_to_batch: List[SpeechEmbeddingR
     return inputs
 
 
-def prepare_chatterbox_vc_inputs(requests_to_batch: List[VoiceConversionRequestInput]):
+def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestInput]):
     """
     Prepare inputs for ChatterboxVC model.
 

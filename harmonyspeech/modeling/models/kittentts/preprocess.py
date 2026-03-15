@@ -5,8 +5,6 @@ A comprehensive text preprocessing library for NLP pipelines.
 
 import re
 import unicodedata
-from typing import Optional
-
 
 # ─────────────────────────────────────────────
 # Number → Words conversion
@@ -778,7 +776,7 @@ def expand_contractions(text: str) -> str:
     return text
 
 
-def remove_stopwords(text: str, stopwords: Optional[set] = None) -> str:
+def remove_stopwords(text: str, stopwords: set | None = None) -> str:
     """
     Remove stopwords from text.
 
@@ -895,7 +893,7 @@ class TextPreprocessor:
         remove_mentions: bool = False,
         remove_punctuation: bool = True,
         remove_stopwords: bool = False,
-        stopwords: Optional[set] = None,
+        stopwords: set | None = None,
         normalize_unicode: bool = True,
         remove_accents: bool = False,
         remove_extra_whitespace: bool = True,

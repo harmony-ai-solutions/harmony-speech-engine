@@ -6,10 +6,10 @@ Scheduler → CPUExecutor → CPUWorker → CPUModelRunner → KittenTTSSynthesi
 """
 
 import asyncio
+
 import pytest
 
 from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest, TextToSpeechResponse
-
 
 # Test input text
 TEXT_INPUT = "Hello, world."

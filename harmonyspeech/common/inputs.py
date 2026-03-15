@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import List, Optional
 
 from harmonyspeech.common.metrics import RequestMetrics
 from harmonyspeech.endpoints.openai.protocol import (
@@ -16,26 +15,26 @@ from harmonyspeech.endpoints.openai.protocol import (
 
 @dataclass
 class TextToSpeechGenerationOptions:
-    seed: Optional[int]
-    style: Optional[int]
-    speed: Optional[float]
-    pitch: Optional[float]
-    energy: Optional[float]
+    seed: int | None
+    style: int | None
+    speed: float | None
+    pitch: float | None
+    energy: float | None
     # Chatterbox-specific fields (None = use model default in prepare function)
-    exaggeration: Optional[float] = None
-    cfg_weight: Optional[float] = None
-    temperature: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    top_p: Optional[float] = None
-    min_p: Optional[float] = None
-    top_k: Optional[int] = None
-    norm_loudness: Optional[bool] = None
+    exaggeration: float | None = None
+    cfg_weight: float | None = None
+    temperature: float | None = None
+    repetition_penalty: float | None = None
+    top_p: float | None = None
+    min_p: float | None = None
+    top_k: int | None = None
+    norm_loudness: bool | None = None
 
 
 class TextToSpeechAudioOutputOptions:
-    format: Optional[str] = "wav"
-    sample_rate: Optional[int] = None
-    stream: Optional[bool] = False
+    format: str | None = "wav"
+    sample_rate: int | None = None
+    stream: bool | None = False
 
 
 class RequestInput:
@@ -43,7 +42,7 @@ class RequestInput:
     The base class for model input data
     """
 
-    def __init__(self, request_id: str, requested_model: str, model: str, metrics: Optional[RequestMetrics] = None):
+    def __init__(self, request_id: str, requested_model: str, model: str, metrics: RequestMetrics | None = None):
         self.request_id = request_id
         self.requested_model = requested_model
         self.model = model
@@ -61,9 +60,9 @@ class AudioConversionRequestInput(RequestInput):
         requested_model: str,
         model: str,
         source_audio: str,
-        input_mel_spectrogram: Optional[str] = None,
-        output_options: Optional[TextToSpeechAudioOutputOptions] = None,
-        metrics: Optional[RequestMetrics] = None,
+        input_mel_spectrogram: str | None = None,
+        output_options: TextToSpeechAudioOutputOptions | None = None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.source_audio = source_audio
@@ -93,11 +92,11 @@ class VoiceConversionRequestInput(RequestInput):
         requested_model: str,
         model: str,
         source_audio: str,
-        target_audio: Optional[str],
-        target_embedding: Optional[str],
-        generation_options: Optional[TextToSpeechGenerationOptions],
-        output_options: Optional[TextToSpeechAudioOutputOptions],
-        metrics: Optional[RequestMetrics] = None,
+        target_audio: str | None,
+        target_embedding: str | None,
+        generation_options: TextToSpeechGenerationOptions | None,
+        output_options: TextToSpeechAudioOutputOptions | None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.source_audio = source_audio
@@ -132,16 +131,16 @@ class TextToSpeechRequestInput(RequestInput):
         model: str,
         input_text: str,
         mode: str,
-        language_id: Optional[str] = None,
-        voice_id: Optional[str] = None,
-        input_audio: Optional[str] = None,
-        input_vad_mode: Optional[str] = None,
-        input_vad_data: Optional[str] = None,
-        input_embedding: Optional[str] = None,
-        generation_options: Optional[TextToSpeechGenerationOptions] = None,
-        output_options: Optional[TextToSpeechAudioOutputOptions] = None,
-        post_generation_filters: Optional[List[AudioConversionRequestInput]] = None,
-        metrics: Optional[RequestMetrics] = None,
+        language_id: str | None = None,
+        voice_id: str | None = None,
+        input_audio: str | None = None,
+        input_vad_mode: str | None = None,
+        input_vad_data: str | None = None,
+        input_embedding: str | None = None,
+        generation_options: TextToSpeechGenerationOptions | None = None,
+        output_options: TextToSpeechAudioOutputOptions | None = None,
+        post_generation_filters: list[AudioConversionRequestInput] | None = None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_text = input_text
@@ -186,10 +185,10 @@ class SpeechEmbeddingRequestInput(RequestInput):
         request_id: str,
         requested_model: str,
         model: str,
-        input_audio: Optional[str] = None,
-        input_vad_mode: Optional[str] = None,
-        input_vad_data: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        input_audio: str | None = None,
+        input_vad_mode: str | None = None,
+        input_vad_data: str | None = None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio
@@ -219,11 +218,11 @@ class SynthesisRequestInput(RequestInput):
         requested_model: str,
         model: str,
         input_text: str = "",
-        language_id: Optional[str] = None,
-        voice_id: Optional[str] = None,
+        language_id: str | None = None,
+        voice_id: str | None = None,
         input_embedding: str = "",
-        generation_options: Optional[TextToSpeechGenerationOptions] = None,
-        metrics: Optional[RequestMetrics] = None,
+        generation_options: TextToSpeechGenerationOptions | None = None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_text = input_text
@@ -256,8 +255,8 @@ class VocodeRequestInput(RequestInput):
         request_id: str,
         requested_model: str,
         model: str,
-        input_audio: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        input_audio: str | None = None,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio
@@ -282,10 +281,10 @@ class SpeechTranscribeRequestInput(RequestInput):
         request_id: str,
         requested_model: str,
         model: str,
-        input_audio: Optional[str] = None,
-        get_language: Optional[bool] = False,
-        get_timestamps: Optional[bool] = False,
-        metrics: Optional[RequestMetrics] = None,
+        input_audio: str | None = None,
+        get_language: bool | None = False,
+        get_timestamps: bool | None = False,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio
@@ -314,14 +313,14 @@ class DetectVoiceActivityRequestInput(RequestInput):
         request_id: str,
         requested_model: str,
         model: str,
-        input_audio: Optional[str] = None,
-        get_timestamps: Optional[bool] = False,
-        threshold: Optional[float] = 0.5,
-        min_speech_duration_ms: Optional[int] = 250,
-        min_silence_duration_ms: Optional[int] = 100,
-        speech_pad_ms: Optional[int] = 30,
-        return_seconds: Optional[bool] = False,
-        metrics: Optional[RequestMetrics] = None,
+        input_audio: str | None = None,
+        get_timestamps: bool | None = False,
+        threshold: float | None = 0.5,
+        min_speech_duration_ms: int | None = 250,
+        min_silence_duration_ms: int | None = 100,
+        speech_pad_ms: int | None = 30,
+        return_seconds: bool | None = False,
+        metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio

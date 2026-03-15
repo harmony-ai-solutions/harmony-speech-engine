@@ -2,8 +2,8 @@
 
 import pytest
 import torch
-from harmonyspeech.common.config import _get_and_verify_dtype, EngineConfig
 
+from harmonyspeech.common.config import EngineConfig, _get_and_verify_dtype
 
 # ── _get_and_verify_dtype ─────────────────────────────────────────────────────
 

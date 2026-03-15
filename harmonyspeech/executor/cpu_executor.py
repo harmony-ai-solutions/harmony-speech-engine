@@ -1,6 +1,3 @@
-import os
-from typing import Dict, List, Set
-
 import torch
 from loguru import logger
 
@@ -33,11 +30,11 @@ class CPUExecutor(ExecutorBase):
         self.driver_worker.init_device()
         self.driver_worker.load_model()
 
-    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         output = self.driver_worker.execute_model(requests_to_batch=requests_to_batch)
         return output
 
-    async def execute_model_async(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    async def execute_model_async(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         output = await make_async(self.driver_worker.execute_model)(requests_to_batch=requests_to_batch)
         return output
 

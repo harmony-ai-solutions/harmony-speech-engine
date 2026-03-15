@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """Residual block modules.
 
 References:
@@ -21,7 +19,7 @@ class Conv1d(torch.nn.Conv1d):
 
     def __init__(self, *args, **kwargs):
         """Initialize Conv1d module."""
-        super(Conv1d, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def reset_parameters(self):
         """Reset parameters."""
@@ -35,7 +33,7 @@ class Conv1d1x1(Conv1d):
 
     def __init__(self, in_channels, out_channels, bias):
         """Initialize 1x1 Conv1d module."""
-        super(Conv1d1x1, self).__init__(in_channels, out_channels, kernel_size=1, padding=0, dilation=1, bias=bias)
+        super().__init__(in_channels, out_channels, kernel_size=1, padding=0, dilation=1, bias=bias)
 
 
 class WaveNetResidualBlock(torch.nn.Module):

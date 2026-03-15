@@ -1,8 +1,8 @@
 # Convert Japanese text to phonemes which is
 # compatible with Julius https://github.com/julius-speech/segmentation-kit
 import re
-
 import unicodedata
+
 from transformers import AutoTokenizer
 
 from harmonyspeech.modeling.models.melo.text.symbols import symbols
@@ -514,7 +514,7 @@ rep_map = {"：": ",", "；": ",", "，": ",", "。": ".", "！": "!", "？": "?
 
 
 def replace_punctuation(text):
-    pattern = re.compile("|".join(re.escape(p) for p in rep_map.keys()))
+    pattern = re.compile("|".join(re.escape(p) for p in rep_map))
 
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
 

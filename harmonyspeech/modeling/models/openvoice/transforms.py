@@ -1,8 +1,6 @@
+import numpy as np
 import torch
 from torch.nn import functional as F
-
-import numpy as np
-
 
 DEFAULT_MIN_BIN_WIDTH = 1e-3
 DEFAULT_MIN_BIN_HEIGHT = 1e-3
@@ -74,7 +72,7 @@ def unconstrained_rational_quadratic_spline(
         outputs[outside_interval_mask] = inputs[outside_interval_mask]
         logabsdet[outside_interval_mask] = 0
     else:
-        raise RuntimeError("{} tails are not implemented.".format(tails))
+        raise RuntimeError(f"{tails} tails are not implemented.")
 
     (outputs[inside_interval_mask], logabsdet[inside_interval_mask]) = rational_quadratic_spline(
         inputs=inputs[inside_interval_mask],

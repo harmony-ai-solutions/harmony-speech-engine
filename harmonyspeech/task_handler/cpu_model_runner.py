@@ -1,9 +1,4 @@
-from typing import Dict, List, Optional, Tuple
-
-import torch
-
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 _PAD_SLOT_ID = -1

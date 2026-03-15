@@ -1,5 +1,5 @@
 import time
-from typing import AsyncGenerator, AsyncIterator, List, Union
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from fastapi import Request
 
@@ -27,18 +27,18 @@ _VOICE_CONVERSION_MODEL_GROUPS = {
 
 
 class OpenAIServingVoiceConversion(OpenAIServing):
-    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
-    def models_from_config(configured_models: List[ModelConfig]):
+    def models_from_config(configured_models: list[ModelConfig]):
         return OpenAIServing.model_cards_from_config_groups(
             configured_models, _VOICE_CONVERSION_MODEL_TYPES, _VOICE_CONVERSION_MODEL_GROUPS
         )
 
     async def convert_voice(
         self, request: VoiceConversionRequest, raw_request: Request
-    ) -> Union[ErrorResponse, AsyncGenerator[str, None], VoiceConversionResponse]:
+    ) -> ErrorResponse | AsyncGenerator[str, None] | VoiceConversionResponse:
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
@@ -64,7 +64,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
         raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
         request_id: str,
-    ) -> Union[ErrorResponse, VoiceConversionResponse]:
+    ) -> ErrorResponse | VoiceConversionResponse:
 
         model_name = request.model
         created_time = int(time.time())

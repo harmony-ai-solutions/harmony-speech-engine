@@ -2,7 +2,7 @@
 # Inspiration taken from PygmalionAI / Aphrodite Engine & OpenAI API definitions
 
 import time
-from typing import Dict, Literal, Optional, List, Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, Field
 
@@ -13,18 +13,18 @@ class ErrorResponse(BaseModel):
     object: str = "error"
     message: str
     type: str
-    param: Optional[str] = None
+    param: str | None = None
     code: int
 
 
 class VoiceOptions(BaseModel):
     voice: str = "default"
-    styles: Optional[List[str]] = Field(default_factory=list)
+    styles: list[str] | None = Field(default_factory=list)
 
 
 class LanguageOptions(BaseModel):
     language: str = "default"
-    voices: Optional[List[VoiceOptions]] = Field(default_factory=list)
+    voices: list[VoiceOptions] | None = Field(default_factory=list)
 
 
 class ModelCard(BaseModel):
@@ -32,15 +32,15 @@ class ModelCard(BaseModel):
     object: str = "model"
     created: int = Field(default_factory=lambda: int(time.time()))
     owned_by: str = "harmony-ai-solutions"
-    languages: Optional[List[LanguageOptions]] = Field(default_factory=list)
-    root: Optional[str] = None
-    parent: Optional[str] = None
+    languages: list[LanguageOptions] | None = Field(default_factory=list)
+    root: str | None = None
+    parent: str | None = None
     # permission: List[ModelPermission] = Field(default_factory=list)
 
 
 class ModelList(BaseModel):
     object: str = "list"
-    data: List[ModelCard] = Field(default_factory=list)
+    data: list[ModelCard] = Field(default_factory=list)
 
 
 class ResponseFormat(BaseModel):
@@ -49,50 +49,50 @@ class ResponseFormat(BaseModel):
 
 
 class GenerationOptions(BaseModel):
-    seed: Optional[int] = None
-    style: Optional[int] = None
-    speed: Optional[float] = None
-    pitch: Optional[float] = None
-    energy: Optional[float] = None
+    seed: int | None = None
+    style: int | None = None
+    speed: float | None = None
+    pitch: float | None = None
+    energy: float | None = None
     # Chatterbox-specific fields
-    exaggeration: Optional[float] = Field(
+    exaggeration: float | None = Field(
         None,
         description="(Chatterbox TTS/Multilingual) Emotion exaggeration factor. Higher values amplify emotional expressiveness. Default: 0.5",
     )
-    cfg_weight: Optional[float] = Field(
+    cfg_weight: float | None = Field(
         None,
         description="(Chatterbox TTS/Multilingual) Classifier-free guidance weight. Controls how closely the model follows the voice prompt. Default: 0.5",
     )
-    temperature: Optional[float] = Field(
+    temperature: float | None = Field(
         None,
         description="(Chatterbox TTS/Turbo/Multilingual) Sampling temperature. Higher values increase randomness. Default: 0.8",
     )
-    repetition_penalty: Optional[float] = Field(
+    repetition_penalty: float | None = Field(
         None,
         description="(Chatterbox TTS/Turbo/Multilingual) Repetition penalty applied during sampling. Values > 1.0 reduce repetition. Default: 1.2",
     )
-    top_p: Optional[float] = Field(
+    top_p: float | None = Field(
         None,
         description="(Chatterbox TTS/Turbo/Multilingual) Top-p (nucleus) sampling probability. Default TTS: 1.0, Turbo: 0.95",
     )
-    min_p: Optional[float] = Field(
+    min_p: float | None = Field(
         None,
         description="(Chatterbox TTS/Multilingual only) Minimum probability threshold for sampling. Default: 0.05. Not supported by Turbo variant.",
     )
-    top_k: Optional[int] = Field(
+    top_k: int | None = Field(
         None,
         description="(Chatterbox Turbo only) Top-k sampling - number of candidates kept. Default: 1000. Not supported by standard TTS or Multilingual variants.",
     )
-    norm_loudness: Optional[bool] = Field(
+    norm_loudness: bool | None = Field(
         None,
         description="(Chatterbox Turbo only) Apply pyloudnorm loudness normalization to output. Default: True. Not supported by standard TTS or Multilingual variants.",
     )
 
 
 class AudioOutputOptions(BaseModel):
-    format: Optional[str] = "wav"
-    sample_rate: Optional[int] = None
-    stream: Optional[bool] = False
+    format: str | None = "wav"
+    sample_rate: int | None = None
+    stream: bool | None = False
 
 
 class BaseRequest(BaseModel):
@@ -107,10 +107,10 @@ class AudioConversionRequest(BaseRequest):
     """
 
     source_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
-    output_options: Optional[AudioOutputOptions] = Field(
+    output_options: AudioOutputOptions | None = Field(
         default=None, description="Options for returning the generated audio, see documentation for possible values"
     )
-    pre_processing_filters: Optional[List[Self]] = Field(
+    pre_processing_filters: list[Self] | None = Field(
         default_factory=list, description="List of Preprocessing filters to apply to the generated audio."
     )
 
@@ -122,15 +122,15 @@ class VoiceConversionRequest(AudioConversionRequest):
     Depending on model selection, the caller may need to provide additional params.
     """
 
-    target_audio: Optional[str] = Field(
+    target_audio: str | None = Field(
         default=None,
         description="Binary audio data of the reference speaker for converting the source, encoded in base64",
     )
-    target_embedding: Optional[str] = Field(
+    target_embedding: str | None = Field(
         default=None,
         description="Binary embedding of the reference speaker for converting the source, encoded in base64. Faster than providing a target audio file",
     )
-    generation_options: Optional[GenerationOptions] = Field(
+    generation_options: GenerationOptions | None = Field(
         default=None, description="Options for generating a speech request, see documentation for possible values"
     )
 
@@ -145,39 +145,39 @@ class TextToSpeechRequest(BaseRequest):
 
     input: str = Field(default="", description="the text to synthesize")
     mode: str = Field(default="", description="the operation mode for the model to process the request")
-    language: Optional[str] = Field(
+    language: str | None = Field(
         default=None,
         description="language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable.",
     )
-    voice: Optional[str] = Field(
+    voice: str | None = Field(
         default=None,
         description="ID of the voice to synthesize. Only if the model supports voice IDs. Please refer to the model's documentation for which values are availiable.",
     )
-    input_audio: Optional[str] = Field(
+    input_audio: str | None = Field(
         default=None,
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
-    input_vad_mode: Optional[str] = Field(
+    input_vad_mode: str | None = Field(
         default=None,
         description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing",
     )
-    input_vad_data: Optional[str] = Field(
+    input_vad_data: str | None = Field(
         default=None, description="result data from VAD step to be processed in follow-up TTS or VC steps"
     )
-    input_embedding: Optional[str] = Field(
+    input_embedding: str | None = Field(
         default=None,
         description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. Faster than providing a target audio file",
     )
-    generation_options: Optional[GenerationOptions] = Field(
+    generation_options: GenerationOptions | None = Field(
         default=None, description="Options for generating a speech request, see documentation for possible values"
     )
-    output_options: Optional[AudioOutputOptions] = Field(
+    output_options: AudioOutputOptions | None = Field(
         default=None, description="Options for returning the generated audio, see documentation for possible values"
     )
-    pre_processing_filters: Optional[List[AudioConversionRequest]] = Field(
+    pre_processing_filters: list[AudioConversionRequest] | None = Field(
         default_factory=list, description="List of Preprocessing filters to apply to the generated audio."
     )
-    post_generation_filters: Optional[List[AudioConversionRequest]] = Field(
+    post_generation_filters: list[AudioConversionRequest] | None = Field(
         default_factory=list, description="List of Post-Generation filters to apply to the generated audio."
     )
 
@@ -236,10 +236,10 @@ class SpeechTranscribeRequest(BaseRequest):
         default="",
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
-    get_language: Optional[bool] = Field(
+    get_language: bool | None = Field(
         default=False, description="whether to return the source language tag. Check model description if supported."
     )
-    get_timestamps: Optional[bool] = Field(
+    get_timestamps: bool | None = Field(
         default=False, description="whether to return the word timestamps. Check model description if supported."
     )
 
@@ -252,8 +252,8 @@ class SpeechToTextResponse(BaseResponse):
 
     id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
     text: str = Field(default="", description="text retrieved from the input audio")
-    language: Optional[str] = Field(default=None, description="tag of the detected language")
-    timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
+    language: str | None = Field(default=None, description="tag of the detected language")
+    timestamps: list[dict] | None = Field(default_factory=list, description="list of the detected timestamps")
 
 
 class DetectVoiceActivityRequest(BaseRequest):
@@ -267,23 +267,23 @@ class DetectVoiceActivityRequest(BaseRequest):
         default="",
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
-    get_timestamps: Optional[bool] = Field(
+    get_timestamps: bool | None = Field(
         default=False, description="whether to return the word timestamps. Check model description if supported."
     )
     # Dynamic Silero VAD parameters
-    threshold: Optional[float] = Field(
+    threshold: float | None = Field(
         default=0.5, description="Speech threshold. Probabilities above this value are considered as speech."
     )
-    min_speech_duration_ms: Optional[int] = Field(
+    min_speech_duration_ms: int | None = Field(
         default=250, description="Final speech chunks shorter than this duration (in ms) are discarded."
     )
-    min_silence_duration_ms: Optional[int] = Field(
+    min_silence_duration_ms: int | None = Field(
         default=100, description="Minimum silence duration (in ms) before separating speech chunks."
     )
-    speech_pad_ms: Optional[int] = Field(
+    speech_pad_ms: int | None = Field(
         default=30, description="Speech chunks are padded by this duration (in ms) on each side."
     )
-    return_seconds: Optional[bool] = Field(
+    return_seconds: bool | None = Field(
         default=False, description="Whether to return timestamps in seconds (default: samples)."
     )
 
@@ -296,7 +296,7 @@ class DetectVoiceActivityResponse(BaseResponse):
 
     id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
     speech_activity: bool = Field(default=False, description="whether speech activity was detected")
-    timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
+    timestamps: list[dict] | None = Field(default_factory=list, description="list of the detected timestamps")
 
 
 class EmbedSpeakerRequest(BaseRequest):
@@ -334,15 +334,15 @@ class SynthesizeAudioRequest(BaseRequest):
         default="",
         description="language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable.",
     )
-    voice: Optional[str] = Field(
+    voice: str | None = Field(
         default=None,
         description="ID of the voice to synthesize. Only if the model supports voice IDs. Please refer to the model's documentation for which values are availiable.",
     )
-    input_embedding: Optional[str] = Field(
+    input_embedding: str | None = Field(
         default=None,
         description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. Faster than providing a target audio file",
     )
-    generation_options: Optional[GenerationOptions] = Field(
+    generation_options: GenerationOptions | None = Field(
         default=None, description="Options for generating a speech request, see documentation for possible values"
     )
 

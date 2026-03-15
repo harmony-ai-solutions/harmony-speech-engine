@@ -1,14 +1,14 @@
 import asyncio
 import os
 import time
+from collections.abc import AsyncIterator, Callable, Iterable
 from functools import partial
-from typing import Type, Optional, Dict, Union, Callable, Tuple, List, Set, AsyncIterator, Iterable
 
 from loguru import logger
 
 from harmonyspeech import HarmonySpeechEngine
-from harmonyspeech.common.config import ModelConfig, EngineConfig
-from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput, SpeechEmbeddingRequestInput
+from harmonyspeech.common.config import EngineConfig, ModelConfig
+from harmonyspeech.common.inputs import RequestInput, SpeechEmbeddingRequestInput, TextToSpeechRequestInput
 from harmonyspeech.common.outputs import RequestOutput
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 
@@ -47,7 +47,7 @@ class AsyncStream:
         self._queue = asyncio.Queue()
         self._finished = False
 
-    def put(self, item: Union[RequestOutput, Exception]) -> None:
+    def put(self, item: RequestOutput | Exception) -> None:
         if self._finished:
             return
         self._queue.put_nowait(item)
@@ -74,9 +74,9 @@ class RequestTracker:
     """Synchronous abstraction for tracking requests."""
 
     def __init__(self) -> None:
-        self._request_streams: Dict[str, AsyncStream] = {}
+        self._request_streams: dict[str, AsyncStream] = {}
         self._finished_requests: asyncio.Queue[str] = asyncio.Queue()
-        self._new_requests: asyncio.Queue[Tuple[AsyncStream, dict]] = asyncio.Queue()
+        self._new_requests: asyncio.Queue[tuple[AsyncStream, dict]] = asyncio.Queue()
         self.new_requests_event = asyncio.Event()
 
     def __contains__(self, item):
@@ -85,7 +85,7 @@ class RequestTracker:
     def __len__(self) -> int:
         return len(self._request_streams)
 
-    def propagate_exception(self, exc: Exception, request_id: Optional[str] = None) -> None:
+    def propagate_exception(self, exc: Exception, request_id: str | None = None) -> None:
         """Propagate an exception to request streams
         (all if request_id is None)."""
         if request_id is not None:
@@ -139,11 +139,11 @@ class RequestTracker:
 
         self._request_streams[request_id].finish()
 
-    def get_new_and_finished_requests(self) -> Tuple[List[Dict], Set[str]]:
+    def get_new_and_finished_requests(self) -> tuple[list[dict], set[str]]:
         """Get the new requests and finished requests to be
         sent to the engine."""
-        new_requests: List[Dict] = []
-        finished_requests: Set[str] = set()
+        new_requests: list[dict] = []
+        finished_requests: set[str] = set()
 
         while not self._finished_requests.empty():
             request_id = self._finished_requests.get_nowait()
@@ -173,7 +173,7 @@ class RequestTracker:
 class _AsyncHarmonySpeech(HarmonySpeechEngine):
     """Extension of HarmonySpeechEngine to add async methods."""
 
-    async def step_async(self) -> Tuple[List[RequestOutput], List[RequestInput]]:
+    async def step_async(self) -> tuple[list[RequestOutput], list[RequestInput]]:
         """Performs one decoding iteration and returns newly generated results.
         The workers are ran asynchronously if possible.
 
@@ -203,7 +203,7 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         return request_outputs, forwarded_requests
 
     async def add_request_async(
-        self, request_id: str, request_data: RequestInput, arrival_time: Optional[float] = None
+        self, request_id: str, request_data: RequestInput, arrival_time: float | None = None
     ) -> None:
 
         if arrival_time is None:
@@ -233,7 +233,7 @@ class AsyncHarmonySpeech:
 
     """
 
-    _engine_class: Type[_AsyncHarmonySpeech] = _AsyncHarmonySpeech
+    _engine_class: type[_AsyncHarmonySpeech] = _AsyncHarmonySpeech
 
     def __init__(
         self, *args, log_requests: bool = True, max_log_len: int = 50, start_engine_loop: bool = True, **kwargs
@@ -248,8 +248,8 @@ class AsyncHarmonySpeech:
         # collected
         self._background_loop_unshielded = None
         self.start_engine_loop = start_engine_loop
-        self._request_tracker: Optional[RequestTracker] = None
-        self._errored_with: Optional[BaseException] = None
+        self._request_tracker: RequestTracker | None = None
+        self._errored_with: BaseException | None = None
 
     @classmethod
     def from_engine_args_and_config(
@@ -357,7 +357,7 @@ class AsyncHarmonySpeech:
                 # (eg. NCCL timeouts).
                 try:
                     has_requests_in_progress = await asyncio.wait_for(self.engine_step(), ENGINE_ITERATION_TIMEOUT_S)
-                except asyncio.TimeoutError as exc:
+                except TimeoutError as exc:
                     logger.error("Engine iteration timed out. This should never happen!")
                     self.set_errored(exc)
                     raise
@@ -366,7 +366,7 @@ class AsyncHarmonySpeech:
             logger.info("Engine loop interrupted. Exiting gracefully.")
 
     async def add_request(
-        self, request_id: str, request_data: RequestInput, arrival_time: Optional[float] = None
+        self, request_id: str, request_data: RequestInput, arrival_time: float | None = None
     ) -> AsyncStream:
         if self.log_requests:
             # Log TTS request
@@ -453,7 +453,7 @@ class AsyncHarmonySpeech:
         """
         self._request_tracker.abort_request(request_id, verbose=self.log_requests)
 
-    async def get_model_configs(self) -> List[ModelConfig]:
+    async def get_model_configs(self) -> list[ModelConfig]:
         """Get the model configuration of the HarmonySpeech engine."""
         return self.engine.get_model_configs()
 

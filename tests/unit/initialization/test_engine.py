@@ -1,7 +1,9 @@
 """Unit tests for HarmonySpeechEngine initialization logic."""
 
-import pytest
 from unittest.mock import MagicMock, patch
+
+import pytest
+
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 

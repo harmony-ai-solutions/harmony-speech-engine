@@ -1,21 +1,20 @@
 """E2E test conftest.py — marks all e2e tests and provides model download fixtures."""
 
-import struct
 import base64
-
-import pytest
+import struct
 from unittest.mock import AsyncMock, MagicMock
 
-from harmonyspeech.common.config import EngineConfig, ModelConfig, DeviceConfig
+import pytest
+
+from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
+from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
+from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
+from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
+from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
-from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
-from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
-from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
-from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
-from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
-
 
 # KittenTTS voices available across all variants
 KITTENTTS_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
@@ -318,8 +317,6 @@ def harmonyspeech_engine(models_cache_dir):
     For direct synthesis/vocode stage tests, use engine.generate() directly with
     SynthesisRequestInput or VocodeRequestInput.
     """
-    from harmonyspeech.common.inputs import SynthesisRequestInput, VocodeRequestInput
-    from harmonyspeech.common.outputs import SpeechSynthesisRequestOutput, VocodeRequestOutput
 
     device_config = DeviceConfig(device="cpu")
     model_configs = [
@@ -575,12 +572,12 @@ def chatterbox_engine(models_cache_dir, device):
 
     Supports both CPU and CUDA based on the device fixture.
     """
-    from harmonyspeech.common.config import EngineConfig, ModelConfig, DeviceConfig
+    from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+    from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
     from harmonyspeech.engine.args_tools import AsyncEngineArgs
     from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
-    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
-    from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 
     model_configs = [
         ModelConfig(

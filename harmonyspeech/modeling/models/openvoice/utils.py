@@ -1,12 +1,13 @@
-import re
 import json
+import re
+
 import numpy as np
 
 from harmonyspeech.modeling.models.openvoice.text import cleaners
 
 
 def get_hparams_from_file(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         data = f.read()
     config = json.loads(data)
 
@@ -224,7 +225,7 @@ def text_to_sequence(text, symbols, cleaner_names):
     print(clean_text)
     print(f" length:{len(clean_text)}")
     for symbol in clean_text:
-        if symbol not in symbol_to_id.keys():
+        if symbol not in symbol_to_id:
             continue
         symbol_id = symbol_to_id[symbol]
         sequence += [symbol_id]

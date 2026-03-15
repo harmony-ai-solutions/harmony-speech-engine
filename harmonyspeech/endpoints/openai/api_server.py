@@ -3,7 +3,6 @@ import http
 import importlib
 import inspect
 import os
-from typing import Optional
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from threading import Thread
@@ -13,9 +12,14 @@ import uvicorn
 from fastapi import APIRouter, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
+from prometheus_client import make_asgi_app
 
 import harmonyspeech
+
+# Harmony Auth
+from auth.apikeys import ApiKeyCacheManager
 from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
@@ -38,24 +42,19 @@ from harmonyspeech.endpoints.openai.protocol import (
 from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
-from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
-from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
-from fastapi.responses import JSONResponse
-from prometheus_client import make_asgi_app
-
-# Harmony Auth
-from auth.apikeys import ApiKeyCacheManager
+from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "harmony-speech-engine")
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
-engine: Optional[AsyncHarmonySpeech] = None
-engine_args: Optional[AsyncEngineArgs] = None
-engine_config: Optional[EngineConfig] = None
+engine: AsyncHarmonySpeech | None = None
+engine_args: AsyncEngineArgs | None = None
+engine_config: EngineConfig | None = None
 openai_serving_tts: OpenAIServingTextToSpeech = None
 openai_serving_stt: OpenAIServingSpeechToText = None
 openai_serving_vc: OpenAIServingVoiceConversion = None
@@ -135,7 +134,7 @@ async def health() -> JSONResponse:
 
 
 @router.get("/version", description="Fetch the Harmony Speech Engine version.", response_model=dict)
-async def show_version(x_api_key: Optional[str] = Header(None)):
+async def show_version(x_api_key: str | None = Header(None)):
     """Fetch the Harmony Speech Engine version."""
     ver = {"version": harmonyspeech.__version__}
     return JSONResponse(content=ver)
@@ -143,7 +142,7 @@ async def show_version(x_api_key: Optional[str] = Header(None)):
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createSpeech
 @router.post("/v1/audio/speech", response_model=TextToSpeechResponse)
-async def create_speech(request: TextToSpeechRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
+async def create_speech(request: TextToSpeechRequest, raw_request: Request, x_api_key: str | None = Header(None)):
     """Generate speech Audio from text."""
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -155,14 +154,14 @@ async def create_speech(request: TextToSpeechRequest, raw_request: Request, x_ap
 
 
 @router.get("/v1/audio/speech/models", response_model=ModelList)
-async def show_available_speech_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_speech_models(x_api_key: str | None = Header(None)):
     """Show available speech models."""
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/embed/speaker", response_model=EmbedSpeakerResponse)
-async def create_embedding(request: EmbedSpeakerRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
+async def create_embedding(request: EmbedSpeakerRequest, raw_request: Request, x_api_key: str | None = Header(None)):
     """Create a speaker embedding."""
     generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -174,7 +173,7 @@ async def create_embedding(request: EmbedSpeakerRequest, raw_request: Request, x
 
 
 @router.get("/v1/embed/models", response_model=ModelList)
-async def show_available_embedding_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_embedding_models(x_api_key: str | None = Header(None)):
     """Show available embedding models."""
     models = await openai_serving_embedding.show_available_models()
     return JSONResponse(content=models.model_dump())
@@ -183,7 +182,7 @@ async def show_available_embedding_models(x_api_key: Optional[str] = Header(None
 # Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
 @router.post("/v1/audio/transcriptions", response_model=SpeechToTextResponse)
 async def create_transcription(
-    request: SpeechTranscribeRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)
+    request: SpeechTranscribeRequest, raw_request: Request, x_api_key: str | None = Header(None)
 ):
     """Create a transcription from audio."""
     generator = await openai_serving_stt.create_transcription(request, raw_request)
@@ -196,14 +195,14 @@ async def create_transcription(
 
 
 @router.get("/v1/audio/transcriptions/models", response_model=ModelList)
-async def show_available_transcription_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_transcription_models(x_api_key: str | None = Header(None)):
     """Show available transcription models."""
     models = await openai_serving_stt.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/voice/convert", response_model=VoiceConversionResponse)
-async def convert_voice(request: VoiceConversionRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
+async def convert_voice(request: VoiceConversionRequest, raw_request: Request, x_api_key: str | None = Header(None)):
     """Convert the voice in an audio file or stream to a desired target voice."""
     generator = await openai_serving_vc.convert_voice(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -215,16 +214,14 @@ async def convert_voice(request: VoiceConversionRequest, raw_request: Request, x
 
 
 @router.get("/v1/voice/convert/models")
-async def show_available_voice_conversion_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_voice_conversion_models(x_api_key: str | None = Header(None)):
     """Show available voice conversion models."""
     models = await openai_serving_vc.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/audio/vad", response_model=DetectVoiceActivityResponse)
-async def create_vad(
-    request: DetectVoiceActivityRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)
-):
+async def create_vad(request: DetectVoiceActivityRequest, raw_request: Request, x_api_key: str | None = Header(None)):
     """Create a vad from audio."""
     generator = await openai_serving_vad.check_voice_activity(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -236,14 +233,14 @@ async def create_vad(
 
 
 @router.get("/v1/audio/vad/models", response_model=ModelList)
-async def show_available_vad_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_vad_models(x_api_key: str | None = Header(None)):
     """Show available vad models."""
     models = await openai_serving_vad.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/audio/convert", response_model=AudioConversionResponse)
-async def convert_audio(request: AudioConversionRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
+async def convert_audio(request: AudioConversionRequest, raw_request: Request, x_api_key: str | None = Header(None)):
     """Create a vad from audio."""
     generator = await openai_serving_ac.convert_audio(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -255,7 +252,7 @@ async def convert_audio(request: AudioConversionRequest, raw_request: Request, x
 
 
 @router.get("/v1/audio/convert/models", response_model=ModelList)
-async def show_available_audio_conversion_models(x_api_key: Optional[str] = Header(None)):
+async def show_available_audio_conversion_models(x_api_key: str | None = Header(None)):
     """Show available vad models."""
     models = await openai_serving_ac.show_available_models()
     return JSONResponse(content=models.model_dump())

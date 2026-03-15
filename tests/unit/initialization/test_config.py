@@ -2,8 +2,8 @@
 
 import pytest
 import torch
-from harmonyspeech.common.config import DeviceConfig, ModelConfig, EngineConfig
 
+from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
 
 # ── DeviceConfig ──────────────────────────────────────────────────────────────
 

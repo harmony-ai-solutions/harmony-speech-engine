@@ -3,7 +3,7 @@ import os
 import re
 
 import cn2an
-from pypinyin import lazy_pinyin, Style
+from pypinyin import Style, lazy_pinyin
 
 from harmonyspeech.modeling.models.melo.text import chinese_bert
 from harmonyspeech.modeling.models.melo.text.symbols import punctuation
@@ -16,7 +16,6 @@ pinyin_to_symbol_map = {
 }
 
 import jieba.posseg as psg
-
 
 rep_map = {
     "：": ",",
@@ -56,7 +55,7 @@ tone_modifier = ToneSandhi()
 
 def replace_punctuation(text):
     text = text.replace("嗯", "恩").replace("呣", "母")
-    pattern = re.compile("|".join(re.escape(p) for p in rep_map.keys()))
+    pattern = re.compile("|".join(re.escape(p) for p in rep_map))
 
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
 
@@ -141,19 +140,19 @@ def _g2p(segments):
                 if c:
                     # 多音节
                     v_rep_map = {"uei": "ui", "iou": "iu", "uen": "un"}
-                    if v_without_tone in v_rep_map.keys():
+                    if v_without_tone in v_rep_map:
                         pinyin = c + v_rep_map[v_without_tone]
                 else:
                     # 单音节
                     pinyin_rep_map = {"ing": "ying", "i": "yi", "in": "yin", "u": "wu"}
-                    if pinyin in pinyin_rep_map.keys():
+                    if pinyin in pinyin_rep_map:
                         pinyin = pinyin_rep_map[pinyin]
                     else:
                         single_rep_map = {"v": "yu", "e": "e", "i": "y", "u": "w"}
-                        if pinyin[0] in single_rep_map.keys():
+                        if pinyin[0] in single_rep_map:
                             pinyin = single_rep_map[pinyin[0]] + pinyin[1:]
 
-                assert pinyin in pinyin_to_symbol_map.keys(), (pinyin, seg, raw_pinyin)
+                assert pinyin in pinyin_to_symbol_map, (pinyin, seg, raw_pinyin)
                 phone = pinyin_to_symbol_map[pinyin].split(" ")
                 word2ph.append(len(phone))
 

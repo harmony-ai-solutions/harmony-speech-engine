@@ -1,6 +1,5 @@
 import enum
 import time
-from typing import Union
 
 from harmonyspeech.common.inputs import RequestInput
 from harmonyspeech.common.metrics import RequestMetrics
@@ -35,7 +34,7 @@ class RequestStatus(enum.Enum):
         ]
 
     @staticmethod
-    def get_finished_reason(status: "RequestStatus") -> Union[str, None]:
+    def get_finished_reason(status: "RequestStatus") -> str | None:
         if status == RequestStatus.FINISHED_STOPPED:
             finish_reason = "stop"
         elif status == RequestStatus.FINISHED_ABORTED:

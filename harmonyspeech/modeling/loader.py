@@ -1,29 +1,28 @@
 """Utilities for selecting and loading models."""
 
 import contextlib
-from typing import Type, Optional
 
 import perth
 import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
-from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
-from harmonyspeech.modeling.models.chatterbox.chatterbox import (
-    ChatterboxTTSModel,
-    ChatterboxTurboTTSModel,
-    ChatterboxMultilingualTTSModel,
-    ChatterboxVCModel,
-)
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.modeling.models import ModelRegistry
 from harmonyspeech.modeling.hf_downloader import (
     initialize_dummy_weights,
     load_or_download_config,
     load_or_download_file,
     load_or_download_model,
 )
+from harmonyspeech.modeling.models import ModelRegistry
+from harmonyspeech.modeling.models.chatterbox.chatterbox import (
+    ChatterboxMultilingualTTSModel,
+    ChatterboxTTSModel,
+    ChatterboxTurboTTSModel,
+    ChatterboxVCModel,
+)
+from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
 
 
 @contextlib.contextmanager
@@ -35,7 +34,7 @@ def _set_default_torch_dtype(dtype: torch.dtype):
     torch.set_default_dtype(old_dtype)
 
 
-def _get_model_cls(model_config: ModelConfig) -> Type[nn.Module]:
+def _get_model_cls(model_config: ModelConfig) -> type[nn.Module]:
     model_type = getattr(model_config, "model_type", None)
     model_cls = ModelRegistry.load_model_cls(model_type)
     if model_cls is not None:
@@ -148,7 +147,7 @@ _MODEL_SPEAKERS = {
 def get_model_speaker(
     model_name_or_path: str,
     model_type: str,
-    revision: Optional[str] = None,
+    revision: str | None = None,
     language: str = "default",
     speaker: str = "default",
 ):
@@ -166,9 +165,7 @@ def get_model_speaker(
     return speaker_data
 
 
-def get_model_config(
-    model_name_or_path: str, model_type: str, revision: Optional[str] = None, flavour: str = "default"
-):
+def get_model_config(model_name_or_path: str, model_type: str, revision: str | None = None, flavour: str = "default"):
     if model_type not in _MODEL_CONFIGS:
         raise NotImplementedError(f"model type {model_type} is not implemented.")
     if flavour not in _MODEL_CONFIGS[model_type]:
@@ -184,11 +181,7 @@ def get_model_config(
 
 
 def get_model_weights(
-    model_name_or_path: str,
-    model_type: str,
-    revision: Optional[str] = None,
-    device: str = "cpu",
-    flavour: str = "default",
+    model_name_or_path: str, model_type: str, revision: str | None = None, device: str = "cpu", flavour: str = "default"
 ):
     if model_type not in _MODEL_WEIGHTS:
         raise NotImplementedError(f"model type {model_type} is not implemented.")

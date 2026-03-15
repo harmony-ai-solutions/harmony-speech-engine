@@ -1,7 +1,5 @@
 """Integration tests for CLI argument parsing."""
 
-import sys
-import pytest
 from unittest.mock import patch
 
 

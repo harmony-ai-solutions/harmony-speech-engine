@@ -1,5 +1,3 @@
-from typing import Optional
-
 from harmonyspeech.common.metrics import RequestMetrics
 
 
@@ -16,9 +14,9 @@ class RequestOutput:
     def __init__(
         self,
         request_id: str,
-        finish_reason: Optional[str] = None,
-        error: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        finish_reason: str | None = None,
+        error: str | None = None,
+        metrics: RequestMetrics | None = None,
     ) -> None:
         self.request_id = request_id
         self.finish_reason = finish_reason
@@ -46,8 +44,8 @@ class TextToSpeechRequestOutput(RequestOutput):
         request_id: str,
         text: str,
         output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        finish_reason: str | None = None,
+        metrics: RequestMetrics | None = None,
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.input_text = text
@@ -69,11 +67,7 @@ class SpeechEmbeddingRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -94,11 +88,7 @@ class SpeechSynthesisRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -119,11 +109,7 @@ class VocodeRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -144,11 +130,7 @@ class AudioConversionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -169,11 +151,7 @@ class VoiceConversionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -194,11 +172,7 @@ class SpeechTranscriptionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
@@ -219,11 +193,7 @@ class DetectVoiceActivityRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
         super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output

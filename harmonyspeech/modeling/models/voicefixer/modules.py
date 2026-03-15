@@ -3,11 +3,12 @@ VoiceFixer modules with proper dimension handling and original vocoder architect
 Based on the original VoiceFixer implementation.
 """
 
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import numpy as np
 
 
 def init_layer(layer):
@@ -38,11 +39,11 @@ def init_gru(rnn):
         nn.init.uniform_(tensor, -math.sqrt(3 / fan_in), math.sqrt(3 / fan_in))
 
     for i in range(rnn.num_layers):
-        _concat_init(getattr(rnn, "weight_ih_l{}".format(i)), [_inner_uniform, _inner_uniform, _inner_uniform])
-        torch.nn.init.constant_(getattr(rnn, "bias_ih_l{}".format(i)), 0)
+        _concat_init(getattr(rnn, f"weight_ih_l{i}"), [_inner_uniform, _inner_uniform, _inner_uniform])
+        torch.nn.init.constant_(getattr(rnn, f"bias_ih_l{i}"), 0)
 
-        _concat_init(getattr(rnn, "weight_hh_l{}".format(i)), [_inner_uniform, _inner_uniform, nn.init.orthogonal_])
-        torch.nn.init.constant_(getattr(rnn, "bias_hh_l{}".format(i)), 0)
+        _concat_init(getattr(rnn, f"weight_hh_l{i}"), [_inner_uniform, _inner_uniform, nn.init.orthogonal_])
+        torch.nn.init.constant_(getattr(rnn, f"bias_hh_l{i}"), 0)
 
 
 def act(x, activation):
@@ -106,7 +107,7 @@ class ConvBlockRes(nn.Module):
     """Residual convolution block."""
 
     def __init__(self, in_channels, out_channels, size, activation, momentum):
-        super(ConvBlockRes, self).__init__()
+        super().__init__()
 
         self.activation = activation
         if type(size) == type((3, 4)):
@@ -172,7 +173,7 @@ class EncoderBlockRes(nn.Module):
     """Encoder block with residual connections."""
 
     def __init__(self, in_channels, out_channels, downsample, activation, momentum):
-        super(EncoderBlockRes, self).__init__()
+        super().__init__()
         size = 3
 
         self.conv_block1 = ConvBlockRes(in_channels, out_channels, size, activation, momentum)
@@ -194,7 +195,7 @@ class DecoderBlockRes(nn.Module):
     """Decoder block with residual connections and dimension management."""
 
     def __init__(self, in_channels, out_channels, stride, activation, momentum):
-        super(DecoderBlockRes, self).__init__()
+        super().__init__()
         size = 3
         self.activation = activation
 
@@ -245,7 +246,7 @@ class UNetResComplex_100Mb(nn.Module):
     """
 
     def __init__(self, channels, nsrc=1):
-        super(UNetResComplex_100Mb, self).__init__()
+        super().__init__()
         activation = "relu"
         momentum = 0.01
 
@@ -359,7 +360,7 @@ class UpsampleNet(nn.Module):
     """Original VoiceFixer upsampling network with skip connections and smoothing."""
 
     def __init__(self, input_size, output_size, upsample_factor, hp=None, index=0):
-        super(UpsampleNet, self).__init__()
+        super().__init__()
         self.input_size = input_size
         self.output_size = output_size
         self.upsample_factor = upsample_factor
@@ -409,7 +410,7 @@ class ResStack(nn.Module):
     """Original VoiceFixer residual stack with dilated convolutions."""
 
     def __init__(self, channel, kernel_size=3, resstack_depth=4, hp=None):
-        super(ResStack, self).__init__()
+        super().__init__()
 
         self.use_wn = False  # Weight normalization disabled by default
         self.use_shift_scale = False  # Shift-scale disabled by default
@@ -453,7 +454,7 @@ class PQMF(nn.Module):
     """Pseudo Quadrature Mirror Filter for multi-band processing."""
 
     def __init__(self, subbands=4, taps=64, cutoff_ratio=0.142, beta=9.0):
-        super(PQMF, self).__init__()
+        super().__init__()
         self.subbands = subbands
         self.taps = taps
         self.cutoff_ratio = cutoff_ratio
@@ -470,8 +471,8 @@ class PQMF(nn.Module):
 
     def _get_qmf_filter(self):
         """Generate QMF filter coefficients."""
-        from scipy.signal import kaiser
         import numpy as np
+        from scipy.signal import kaiser
 
         # Generate prototype filter
         h = kaiser(self.taps + 1, self.beta)

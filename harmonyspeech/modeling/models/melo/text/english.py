@@ -6,11 +6,11 @@ from g2p_en import G2p
 from transformers import AutoTokenizer
 
 from harmonyspeech.modeling.models.melo.text import english_bert
-from harmonyspeech.modeling.models.melo.text.symbols import symbols
 from harmonyspeech.modeling.models.melo.text.english_utils.abbreviations import expand_abbreviations
 from harmonyspeech.modeling.models.melo.text.english_utils.number_norm import normalize_numbers
 from harmonyspeech.modeling.models.melo.text.english_utils.time_norm import expand_time_english
 from harmonyspeech.modeling.models.melo.text.japanese import distribute_phone
+from harmonyspeech.modeling.models.melo.text.symbols import symbols
 
 current_file_path = os.path.dirname(__file__)
 CMU_DICT_PATH = os.path.join(current_file_path, "cmudict.rep")
@@ -106,7 +106,7 @@ def post_replace_ph(ph):
         "...": "…",
         "v": "V",
     }
-    if ph in rep_map.keys():
+    if ph in rep_map:
         ph = rep_map[ph]
     if ph in symbols:
         return ph

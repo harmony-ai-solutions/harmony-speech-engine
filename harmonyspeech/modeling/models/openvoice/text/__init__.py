@@ -1,8 +1,7 @@
 """from https://github.com/keithito/tacotron"""
 
 from harmonyspeech.modeling.models.openvoice.text import cleaners
-from harmonyspeech.modeling.models.openvoice.text.symbols import symbols, language_tone_start_map
-
+from harmonyspeech.modeling.models.openvoice.text.symbols import language_tone_start_map, symbols
 
 # Mappings from symbol to numeric ID and vice versa:
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
@@ -23,7 +22,7 @@ def text_to_sequence(text, symbols, cleaner_names):
     print(clean_text)
     print(f" length:{len(clean_text)}")
     for symbol in clean_text:
-        if symbol not in symbol_to_id.keys():
+        if symbol not in symbol_to_id:
             continue
         symbol_id = symbol_to_id[symbol]
         sequence += [symbol_id]
@@ -39,7 +38,7 @@ def cleaned_text_to_sequence(cleaned_text, symbols):
       List of integers corresponding to the symbols in the text
     """
     symbol_to_id = {s: i for i, s in enumerate(symbols)}
-    sequence = [symbol_to_id[symbol] for symbol in cleaned_text if symbol in symbol_to_id.keys()]
+    sequence = [symbol_to_id[symbol] for symbol in cleaned_text if symbol in symbol_to_id]
     return sequence
 
 

@@ -7,6 +7,7 @@ VoiceFixerRestorer → VoiceFixerVocoder → AudioConversionResponse.
 """
 
 import asyncio
+
 import pytest
 
 from harmonyspeech.endpoints.openai.protocol import AudioConversionRequest, AudioConversionResponse

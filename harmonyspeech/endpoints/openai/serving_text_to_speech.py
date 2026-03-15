@@ -1,5 +1,5 @@
 import time
-from typing import AsyncGenerator, AsyncIterator, List, Union
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from fastapi import Request
 from loguru import logger
@@ -33,16 +33,16 @@ _TTS_MODEL_GROUPS = {
 
 
 class OpenAIServingTextToSpeech(OpenAIServing):
-    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
-    def models_from_config(configured_models: List[ModelConfig]):
+    def models_from_config(configured_models: list[ModelConfig]):
         return OpenAIServing.model_cards_from_config_groups(configured_models, _TTS_MODEL_TYPES, _TTS_MODEL_GROUPS)
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request
-    ) -> Union[ErrorResponse, AsyncGenerator[str, None], TextToSpeechResponse]:
+    ) -> ErrorResponse | AsyncGenerator[str, None] | TextToSpeechResponse:
 
         error_check_model = await self._check_model(request)
         if error_check_model is not None:
@@ -75,7 +75,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
         request_id: str,
-    ) -> Union[ErrorResponse, TextToSpeechResponse]:
+    ) -> ErrorResponse | TextToSpeechResponse:
 
         model_name = request.model
         created_time = int(time.time())

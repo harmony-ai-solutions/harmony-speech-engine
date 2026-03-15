@@ -12,16 +12,14 @@ import asyncio
 import pytest
 
 from harmonyspeech.endpoints.openai.protocol import (
+    EmbedSpeakerRequest,
+    EmbedSpeakerResponse,
     TextToSpeechRequest,
     TextToSpeechResponse,
     VoiceConversionRequest,
     VoiceConversionResponse,
-    EmbedSpeakerRequest,
-    EmbedSpeakerResponse,
-    ErrorResponse,
 )
 from tests.e2e.conftest import load_sample_audio_b64
-
 
 TEXT_INPUT = "Hello, world."
 REFERENCE_AUDIO = load_sample_audio_b64("wanda4")

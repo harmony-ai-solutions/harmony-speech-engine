@@ -2,22 +2,21 @@ import asyncio
 import copy
 import json
 from http import HTTPStatus
-from typing import List, Optional, Union
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.endpoints.openai.protocol import (
-    ModelList,
-    ModelCard,
     ErrorResponse,
     LanguageOptions,
-    VoiceOptions,
+    ModelCard,
+    ModelList,
     TextToSpeechRequest,
+    VoiceOptions,
 )
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 
 class OpenAIServing:
-    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
         self.engine = engine
         self.available_models = available_models
 
@@ -57,7 +56,7 @@ class OpenAIServing:
         )
         return json_str
 
-    def get_model_by_id(self, model: str) -> Union[ModelCard, None]:
+    def get_model_by_id(self, model: str) -> ModelCard | None:
         for model_card in self.available_models:
             if model_card.id == model:
                 return model_card
@@ -66,11 +65,11 @@ class OpenAIServing:
     # Chatterbox model IDs that support both single_speaker_tts and voice_cloning
     _CHATTERBOX_MODEL_IDS = {"chatterbox", "chatterbox_turbo", "chatterbox_multilingual"}
 
-    async def _check_model(self, request) -> Optional[ErrorResponse]:
+    async def _check_model(self, request) -> ErrorResponse | None:
         if isinstance(request, TextToSpeechRequest) and request.mode not in ["voice_cloning", "single_speaker_tts"]:
             # TODO: Evaluate this based on model toolchain capability
             return self.create_error_response(
-                message=f"Parameter `mode` must either be 'single_speaker_tts' or 'voice_cloning'.",
+                message="Parameter `mode` must either be 'single_speaker_tts' or 'voice_cloning'.",
                 err_type="BadRequestError",
                 status_code=HTTPStatus.BAD_REQUEST,
             )
@@ -122,7 +121,7 @@ class OpenAIServing:
             language_option = next((lang for lang in model.languages if lang.language == request.language), None)
             if language_option is None:
                 return self.create_error_response(
-                    message=f"Issue while retrieving language option for the model.",
+                    message="Issue while retrieving language option for the model.",
                     err_type="InternalServerError",
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
@@ -144,7 +143,7 @@ class OpenAIServing:
                 voice_option = next((voice for voice in language_option.voices if voice.voice == request.voice), None)
                 if voice_option is None:
                     return self.create_error_response(
-                        message=f"Issue while processing the voice option for the model.",
+                        message="Issue while processing the voice option for the model.",
                         err_type="InternalServerError",
                         status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                     )

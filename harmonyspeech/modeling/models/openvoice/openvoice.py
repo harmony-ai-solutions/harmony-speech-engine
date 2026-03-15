@@ -1,16 +1,14 @@
 import math
+
 import torch
 from torch import nn
+from torch.nn import Conv1d, ConvTranspose1d
 from torch.nn import functional as F
-
-from torch.nn import Conv1d, ConvTranspose1d, Conv2d
-from torch.nn.utils import remove_weight_norm, spectral_norm
+from torch.nn.utils import remove_weight_norm
 from torch.nn.utils.parametrizations import weight_norm
 
-from harmonyspeech.modeling.models.openvoice import commons
-from harmonyspeech.modeling.models.openvoice import modules
-from harmonyspeech.modeling.models.openvoice import attentions
-from harmonyspeech.modeling.models.openvoice.commons import init_weights, get_padding
+from harmonyspeech.modeling.models.openvoice import attentions, commons, modules
+from harmonyspeech.modeling.models.openvoice.commons import init_weights
 
 
 class TextEncoder(nn.Module):
@@ -202,7 +200,7 @@ class Generator(torch.nn.Module):
         upsample_kernel_sizes,
         gin_channels=0,
     ):
-        super(Generator, self).__init__()
+        super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
         self.conv_pre = Conv1d(initial_channel, upsample_initial_channel, 7, 1, padding=3)

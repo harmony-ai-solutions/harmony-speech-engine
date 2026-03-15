@@ -3,13 +3,13 @@ VoiceFixer models adapted for Harmony Speech Engine.
 Based on the original VoiceFixer implementation by Haohe Liu.
 """
 
-import numpy as np
+from typing import Any
+
 import torch
 import torch.nn as nn
-from typing import Optional, Dict, Any
 
-from .utils import from_log, to_log, FDomainHelper, MelScale, tr_normalize, tr_amp_to_db, tr_pre, get_mel_weight_torch
-from .modules import UNetResComplex_100Mb, BN_GRU, UpsampleNet, ResStack, PQMF
+from .modules import BN_GRU, PQMF, ResStack, UNetResComplex_100Mb, UpsampleNet
+from .utils import FDomainHelper, MelScale, from_log, get_mel_weight_torch, to_log, tr_amp_to_db, tr_normalize, tr_pre
 
 
 class VoiceFixerGenerator(nn.Module):
@@ -42,7 +42,7 @@ class VoiceFixerGenerator(nn.Module):
         # UNet for enhancement - use the proper original architecture
         self.unet = UNetResComplex_100Mb(channels=channels)
 
-    def forward(self, sp: torch.Tensor, mel_orig: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, sp: torch.Tensor, mel_orig: torch.Tensor) -> dict[str, torch.Tensor]:
         # Denoising
         noisy = mel_orig.clone()
         clean = self.denoiser(noisy) * noisy
@@ -284,7 +284,7 @@ class VoiceFixerRestorer(nn.Module):
 
         return output_mel
 
-    def load_weights(self, checkpoint: Dict[str, Any], hf_config: Optional[Dict] = None):
+    def load_weights(self, checkpoint: dict[str, Any], hf_config: dict | None = None):
         """Load weights from VoiceFixer checkpoint."""
         if isinstance(checkpoint, dict):
             # Handle different checkpoint formats
@@ -335,7 +335,7 @@ class VoiceFixerVocoderGenerator(nn.Module):
     """Original VoiceFixer Generator with conditional network and sophisticated upsampling."""
 
     def __init__(self, in_channels=128, use_elu=False, hp=None):
-        super(VoiceFixerVocoderGenerator, self).__init__()
+        super().__init__()
         self.hp = hp
 
         # Configuration parameters (from original VoiceFixer Config for 44.1kHz)
@@ -506,7 +506,7 @@ class VoiceFixerVocoder(nn.Module):
         audio = self.model(mel)
         return audio
 
-    def load_weights(self, checkpoint: Dict[str, Any], hf_config: Optional[Dict] = None):
+    def load_weights(self, checkpoint: dict[str, Any], hf_config: dict | None = None):
         """Load weights from VoiceFixer vocoder checkpoint."""
         if isinstance(checkpoint, dict):
             # Handle different checkpoint formats
@@ -541,11 +541,9 @@ class VoiceFixerVocoder(nn.Module):
 
     def _init_weights(self, module):
         """Initialize weights for modules."""
-        if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.ConvTranspose2d)):
-            nn.init.xavier_uniform_(module.weight)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Linear):
+        if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.ConvTranspose1d, nn.ConvTranspose2d)) or isinstance(
+            module, nn.Linear
+        ):
             nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:
                 nn.init.zeros_(module.bias)

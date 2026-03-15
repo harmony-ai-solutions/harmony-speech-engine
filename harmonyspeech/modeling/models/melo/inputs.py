@@ -1,7 +1,7 @@
 import re
 
-from harmonyspeech.modeling.models.melo.utils import get_text_for_tts_infer
 from harmonyspeech.modeling.models.melo.split_utils import split_sentence
+from harmonyspeech.modeling.models.melo.utils import get_text_for_tts_infer
 
 _supported_languages = ["EN", "ZH", "ZH_MIX_EN", "FR", "ES", "SP", "JP", "KR"]
 

@@ -7,7 +7,6 @@ import huggingface_hub.constants
 import torch
 from huggingface_hub import hf_hub_download
 
-
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
 
@@ -73,7 +72,7 @@ class HParams:
 
 
 def get_hparams_from_file(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         data = f.read()
     config = json.loads(data)
 

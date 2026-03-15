@@ -3,9 +3,9 @@ import re
 from transformers import AutoTokenizer
 
 from harmonyspeech.modeling.models.melo.text import spanish_bert
-from harmonyspeech.modeling.models.melo.text.symbols import symbols
 from harmonyspeech.modeling.models.melo.text.es_phonemizer import cleaner as es_cleaner
 from harmonyspeech.modeling.models.melo.text.es_phonemizer import es_to_ipa
+from harmonyspeech.modeling.models.melo.text.symbols import symbols
 
 
 def distribute_phone(n_phone, n_word):
@@ -35,7 +35,7 @@ def post_replace_ph(ph):
         "、": ",",
         "...": "…",
     }
-    if ph in rep_map.keys():
+    if ph in rep_map:
         ph = rep_map[ph]
     if ph in symbols:
         return ph

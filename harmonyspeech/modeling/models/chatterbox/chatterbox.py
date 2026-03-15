@@ -6,16 +6,15 @@ exposing a consistent interface for model loading and inference.
 
 import os
 import types
-from typing import Optional, Union
 
 import numpy as np
 import torch
-from huggingface_hub import snapshot_download
 
 # Import Chatterbox models from the chatterbox library
 from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
 from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
 from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
+from huggingface_hub import snapshot_download
 
 # HuggingFace repo ID for ChatterboxTurboTTS (mirrors tts_turbo.py REPO_ID)
 _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
@@ -28,7 +27,7 @@ class ChatterboxTTSModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "ChatterboxTTS":
+    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxTTS":
         """Load ChatterboxTTS model from pretrained weights.
 
         Args:
@@ -55,7 +54,7 @@ class ChatterboxTurboTTSModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "_ChatterboxTurboTTS":
+    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
 
         Workaround: The upstream `_ChatterboxTurboTTS.from_pretrained()` contains a bug
@@ -142,9 +141,7 @@ class ChatterboxMultilingualTTSModel:
     SUPPORTED_LANGUAGES: dict = _CHATTERBOX_SUPPORTED_LANGUAGES.copy()
 
     @classmethod
-    def from_pretrained(
-        cls, device: Optional[Union[str, torch.device]] = None, **kwargs
-    ) -> "ChatterboxMultilingualTTS":
+    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxMultilingualTTS":
         """Load ChatterboxMultilingualTTS model from pretrained weights.
 
         Args:
@@ -182,7 +179,7 @@ class ChatterboxVCModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "ChatterboxVC":
+    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxVC":
         """Load ChatterboxVC model from pretrained weights.
 
         Args:

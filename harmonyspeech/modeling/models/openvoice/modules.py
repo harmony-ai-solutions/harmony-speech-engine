@@ -1,16 +1,16 @@
 import math
+
 import torch
 from torch import nn
-from torch.nn import functional as F
-
 from torch.nn import Conv1d
+from torch.nn import functional as F
 from torch.nn.utils import remove_weight_norm
 from torch.nn.utils.parametrizations import weight_norm
 
 from harmonyspeech.modeling.models.openvoice import commons
-from harmonyspeech.modeling.models.openvoice.commons import init_weights, get_padding
-from harmonyspeech.modeling.models.openvoice.transforms import piecewise_rational_quadratic_transform
 from harmonyspeech.modeling.models.openvoice.attentions import Encoder
+from harmonyspeech.modeling.models.openvoice.commons import get_padding, init_weights
+from harmonyspeech.modeling.models.openvoice.transforms import piecewise_rational_quadratic_transform
 
 LRELU_SLOPE = 0.1
 
@@ -107,7 +107,7 @@ class DDSConv(nn.Module):
 
 class WN(torch.nn.Module):
     def __init__(self, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=0, p_dropout=0):
-        super(WN, self).__init__()
+        super().__init__()
         assert kernel_size % 2 == 1
         self.hidden_channels = hidden_channels
         self.kernel_size = (kernel_size,)
@@ -181,7 +181,7 @@ class WN(torch.nn.Module):
 
 class ResBlock1(torch.nn.Module):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
-        super(ResBlock1, self).__init__()
+        super().__init__()
         self.convs1 = nn.ModuleList(
             [
                 weight_norm(
@@ -257,7 +257,7 @@ class ResBlock1(torch.nn.Module):
 
 class ResBlock2(torch.nn.Module):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3)):
-        super(ResBlock2, self).__init__()
+        super().__init__()
         self.convs = nn.ModuleList(
             [
                 weight_norm(

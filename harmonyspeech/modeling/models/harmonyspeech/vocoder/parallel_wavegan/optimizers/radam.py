@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
-
 """RAdam optimizer.
 
 This code is drived from https://github.com/LiyuanLucasLiu/RAdam.
 """
 
 import math
-import torch
 
+import torch
 from torch.optim.optimizer import Optimizer
 
 
@@ -18,11 +16,11 @@ class RAdam(Optimizer):
         """Initilize RAdam optimizer."""
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         self.buffer = [[None, None, None] for ind in range(10)]
-        super(RAdam, self).__init__(params, defaults)
+        super().__init__(params, defaults)
 
     def __setstate__(self, state):
         """Set state."""
-        super(RAdam, self).__setstate__(state)
+        super().__setstate__(state)
 
     def step(self, closure=None):
         """Run one step."""

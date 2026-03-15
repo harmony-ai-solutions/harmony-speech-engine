@@ -34,7 +34,7 @@ def test_chatterbox_vc_importable():
 @pytest.mark.unit
 def test_chatterbox_multilingual_importable():
     """ChatterboxMultilingualTTS and SUPPORTED_LANGUAGES must be importable."""
-    from chatterbox import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES  # noqa: F401
+    from chatterbox import SUPPORTED_LANGUAGES, ChatterboxMultilingualTTS  # noqa: F401
 
     assert isinstance(SUPPORTED_LANGUAGES, (list, tuple, set, dict))
     assert len(SUPPORTED_LANGUAGES) > 0

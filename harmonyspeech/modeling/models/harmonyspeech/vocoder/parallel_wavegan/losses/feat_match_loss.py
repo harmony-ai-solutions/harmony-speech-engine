@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2021 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 

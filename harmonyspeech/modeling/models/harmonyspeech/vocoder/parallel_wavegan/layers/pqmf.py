@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2020 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 
@@ -8,7 +6,6 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-
 from scipy.signal.windows import kaiser
 
 
@@ -70,7 +67,7 @@ class PQMF(torch.nn.Module):
             beta (float): Beta coefficient for kaiser window.
 
         """
-        super(PQMF, self).__init__()
+        super().__init__()
 
         # build analysis & synthesis filter coefficients
         h_proto = design_prototype_filter(taps, cutoff_ratio, beta)

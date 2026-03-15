@@ -1,8 +1,8 @@
 import importlib
-from typing import Optional, Type, Dict, List
-from loguru import logger
+from typing import Dict, List, Optional, Type
 
 import torch.nn as nn
+from loguru import logger
 
 from harmonyspeech.common.utils import is_hip
 
@@ -39,7 +39,7 @@ _MODELS = {
 
 # Architecture -> type.
 # out of tree models
-_OOT_MODELS: Dict[str, Type[nn.Module]] = {}
+_OOT_MODELS: dict[str, type[nn.Module]] = {}
 
 # Models not supported by ROCm.
 _ROCM_UNSUPPORTED_MODELS = []
@@ -82,11 +82,11 @@ class ModelRegistry:
         return getattr(module, model_cls_name, None)
 
     @staticmethod
-    def get_supported_archs() -> List[str]:
+    def get_supported_archs() -> list[str]:
         return list(_MODELS.keys())
 
     @staticmethod
-    def register_model(model_arch: str, model_cls: Type[nn.Module]):
+    def register_model(model_arch: str, model_cls: type[nn.Module]):
         if model_arch in _MODELS:
             logger.warning(
                 f"Model architecture {model_arch} is already registered, and will be overwritten by the new model class {model_cls.__name__}."

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2019 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 
@@ -39,7 +37,7 @@ class SpectralConvergenceLoss(torch.nn.Module):
 
     def __init__(self):
         """Initilize spectral convergence loss module."""
-        super(SpectralConvergenceLoss, self).__init__()
+        super().__init__()
 
     def forward(self, x_mag, y_mag):
         """Calculate forward propagation.
@@ -60,7 +58,7 @@ class LogSTFTMagnitudeLoss(torch.nn.Module):
 
     def __init__(self):
         """Initilize los STFT magnitude loss module."""
-        super(LogSTFTMagnitudeLoss, self).__init__()
+        super().__init__()
 
     def forward(self, x_mag, y_mag):
         """Calculate forward propagation.
@@ -81,7 +79,7 @@ class STFTLoss(torch.nn.Module):
 
     def __init__(self, fft_size=1024, shift_size=120, win_length=600, window="hann_window"):
         """Initialize STFT loss module."""
-        super(STFTLoss, self).__init__()
+        super().__init__()
         self.fft_size = fft_size
         self.shift_size = shift_size
         self.win_length = win_length
@@ -125,7 +123,7 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
             window (str): Window function type.
 
         """
-        super(MultiResolutionSTFTLoss, self).__init__()
+        super().__init__()
         assert len(fft_sizes) == len(hop_sizes) == len(win_lengths)
         self.stft_losses = torch.nn.ModuleList()
         for fs, ss, wl in zip(fft_sizes, hop_sizes, win_lengths):

@@ -7,24 +7,23 @@ Tests are organized into three groups:
 """
 
 import base64
-import io
 from dataclasses import fields
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 # --- Data model imports (always available after Task 1) ---
 from harmonyspeech.common.inputs import TextToSpeechGenerationOptions
-from harmonyspeech.endpoints.openai.protocol import GenerationOptions, LanguageOptions
+from harmonyspeech.endpoints.openai.protocol import GenerationOptions
 from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
 
 # --- Prepare function imports (available after Plan 02) ---
 try:
     from harmonyspeech.task_handler.inputs import (
+        prepare_chatterbox_embedding_inputs,
+        prepare_chatterbox_multilingual_tts_inputs,
         prepare_chatterbox_tts_inputs,
         prepare_chatterbox_turbo_tts_inputs,
-        prepare_chatterbox_multilingual_tts_inputs,
-        prepare_chatterbox_embedding_inputs,
         prepare_chatterbox_vc_inputs,
     )
 

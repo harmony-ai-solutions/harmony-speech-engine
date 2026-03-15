@@ -1,7 +1,9 @@
 """Unit tests for harmonyspeech/modeling/loader.py — _get_model_cls."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.loader import _get_model_cls
 
@@ -25,14 +27,16 @@ def model_config_factory():
 
 def test_get_model_cls_raises_for_unsupported_type(model_config_factory):
     """Unknown model_type raises ValueError with type name in message."""
-    with patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None):
-        with patch(
+    with (
+        patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None),
+        patch(
             "harmonyspeech.modeling.models.ModelRegistry.get_supported_archs",
             return_value=["MeloTTSSynthesizer", "FasterWhisper"],
-        ):
-            cfg = model_config_factory("UnsupportedModelXYZ")
-            with pytest.raises(ValueError, match="UnsupportedModelXYZ"):
-                _get_model_cls(cfg)
+        ),
+    ):
+        cfg = model_config_factory("UnsupportedModelXYZ")
+        with pytest.raises(ValueError, match="UnsupportedModelXYZ"):
+            _get_model_cls(cfg)
 
 
 def test_get_model_cls_returns_class_from_registry(model_config_factory):
@@ -65,14 +69,16 @@ def test_get_model_cls_error_mentions_model_type(model_config_factory):
 
 def test_get_model_cls_error_includes_supported_list(model_config_factory):
     """ValueError message includes list of supported architectures."""
-    with patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None):
-        with patch(
+    with (
+        patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None),
+        patch(
             "harmonyspeech.modeling.models.ModelRegistry.get_supported_archs",
             return_value=["MeloTTSSynthesizer", "FasterWhisper", "OpenVoiceV1Synthesizer"],
-        ):
-            cfg = model_config_factory("UnknownModel")
-            with pytest.raises(ValueError) as exc_info:
-                _get_model_cls(cfg)
-            error_msg = str(exc_info.value)
-            assert "MeloTTSSynthesizer" in error_msg
-            assert "FasterWhisper" in error_msg
+        ),
+    ):
+        cfg = model_config_factory("UnknownModel")
+        with pytest.raises(ValueError) as exc_info:
+            _get_model_cls(cfg)
+        error_msg = str(exc_info.value)
+        assert "MeloTTSSynthesizer" in error_msg
+        assert "FasterWhisper" in error_msg

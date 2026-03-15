@@ -6,12 +6,13 @@ FasterWhisper → SpeechToTextResponse.
 """
 
 import asyncio
-import struct
 import base64
 import math
+import struct
+
 import pytest
 
-from harmonyspeech.endpoints.openai.protocol import SpeechTranscribeRequest, SpeechToTextResponse
+from harmonyspeech.endpoints.openai.protocol import SpeechToTextResponse, SpeechTranscribeRequest
 
 
 def _make_sine_wav_b64(frequency: int = 440, sample_rate: int = 16000, duration_secs: float = 1.0) -> str:

@@ -5,18 +5,18 @@ check_reroute_request_to_model() dispatch, and check_forward_processing()
 multi-step embed→TTS chain — all without loading any real models.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
-from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
-from harmonyspeech.common.config import ModelConfig, DeviceConfig
+import pytest
+
+from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import (
-    TextToSpeechRequestInput,
     SpeechEmbeddingRequestInput,
+    TextToSpeechRequestInput,
     VoiceConversionRequestInput,
 )
 from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput
-
+from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,22 +1,20 @@
 """HarmonySpeech E2E tests - full 3-stage toolchain and individual stage access."""
 
 import asyncio
+
 import pytest
 
 from harmonyspeech.common.inputs import SynthesisRequestInput, VocodeRequestInput
 from harmonyspeech.common.outputs import SpeechSynthesisRequestOutput, VocodeRequestOutput
 from harmonyspeech.endpoints.openai.protocol import (
-    TextToSpeechRequest,
-    TextToSpeechResponse,
     EmbedSpeakerRequest,
     EmbedSpeakerResponse,
     SynthesizeAudioRequest,
-    SynthesizeAudioResponse,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
     VocodeAudioRequest,
-    VocodeAudioResponse,
 )
 from tests.e2e.conftest import load_sample_audio_b64
-
 
 TEXT_INPUT = "Hello, world."
 REFERENCE_AUDIO = load_sample_audio_b64("wanda4")

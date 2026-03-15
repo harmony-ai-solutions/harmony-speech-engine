@@ -5,12 +5,11 @@ Utility functions adapted from VoiceFixer for Harmony Speech Engine integration.
 import math
 import warnings
 
-from torchlibrosa.stft import STFT
+import librosa
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import librosa
-from typing import Optional, Tuple
+from torchlibrosa.stft import STFT
 
 EPS = 1e-8
 
@@ -50,7 +49,7 @@ def save_wave(wav: np.ndarray, fname: str, sample_rate: int = 44100):
     sf.write(fname, wav, sample_rate)
 
 
-def read_wave(fname: str, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+def read_wave(fname: str, sample_rate: int = 44100) -> tuple[np.ndarray, int]:
     """Read waveform from file using librosa."""
     wav, sr = librosa.load(fname, sr=sample_rate)
     return wav, int(sr)
@@ -146,9 +145,9 @@ class MelScale(nn.Module):
         n_mels: int = 128,
         sample_rate: int = 16000,
         f_min: float = 0.0,
-        f_max: Optional[float] = None,
+        f_max: float | None = None,
         n_stft: int = 201,
-        norm: Optional[str] = None,
+        norm: str | None = None,
         mel_scale: str = "htk",
     ):
         super().__init__()

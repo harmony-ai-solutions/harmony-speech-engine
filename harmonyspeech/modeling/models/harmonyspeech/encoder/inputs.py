@@ -40,7 +40,7 @@ def compute_partial_slices(
     assert 0 <= overlap < 1
     assert 0 < min_pad_coverage <= 1
 
-    samples_per_frame = int((sampling_rate * mel_window_step / 1000))
+    samples_per_frame = int(sampling_rate * mel_window_step / 1000)
     n_frames = int(np.ceil((n_samples + 1) / samples_per_frame))
     frame_step = max(int(np.round(partial_utterance_n_frames * (1 - overlap))), 1)
 

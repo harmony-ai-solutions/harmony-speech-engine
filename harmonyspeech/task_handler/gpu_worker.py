@@ -1,8 +1,6 @@
 """A GPU worker class."""
 
-import gc
 import os
-from typing import Dict, List, Optional, Set, Tuple
 
 import torch
 import torch.distributed
@@ -11,7 +9,6 @@ from loguru import logger
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import in_wsl
-
 from harmonyspeech.modeling import set_random_seed
 from harmonyspeech.task_handler.gpu_model_runner import GPUModelRunner
 from harmonyspeech.task_handler.worker_base import WorkerBase
@@ -85,7 +82,7 @@ class GPUWorker(WorkerBase):
         set_random_seed(self.model_config.seed)
 
     @torch.inference_mode()
-    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         output = self.model_runner.execute_model(requests_to_batch=requests_to_batch)
         # Worker only supports single-step execution. Wrap the output in a list
         # to conform to interface.

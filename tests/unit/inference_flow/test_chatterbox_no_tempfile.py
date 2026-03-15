@@ -5,12 +5,10 @@ All audio processing uses in-memory BytesIO objects exclusively.
 """
 
 import io
-import base64
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
-
 import torch
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -40,8 +38,8 @@ def mock_chatterbox_embedding_model():
 @pytest.fixture
 def model_runner_with_tts_model(mock_chatterbox_model):
     """ModelRunnerBase instance wired with a mock ChatterboxTTS model."""
+    from harmonyspeech.common.config import DeviceConfig, ModelConfig
     from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
-    from harmonyspeech.common.config import ModelConfig, DeviceConfig
 
     device_config = MagicMock(spec=DeviceConfig)
     device_config.device = torch.device("cpu")
@@ -60,8 +58,8 @@ def model_runner_with_tts_model(mock_chatterbox_model):
 @pytest.fixture
 def model_runner_with_embedding_model(mock_chatterbox_embedding_model):
     """ModelRunnerBase instance wired with a mock ChatterboxEmbedding model."""
+    from harmonyspeech.common.config import DeviceConfig, ModelConfig
     from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
-    from harmonyspeech.common.config import ModelConfig, DeviceConfig
 
     device_config = MagicMock(spec=DeviceConfig)
     device_config.device = torch.device("cpu")

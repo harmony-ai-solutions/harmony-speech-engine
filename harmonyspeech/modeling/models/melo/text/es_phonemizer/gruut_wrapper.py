@@ -1,5 +1,4 @@
 import importlib
-from typing import List
 
 import gruut
 from gruut_ipa import IPA  # pip install gruut_ipa
@@ -114,7 +113,7 @@ class Gruut(BasePhonemizer):
         return gruut.is_language_supported(language)
 
     @staticmethod
-    def supported_languages() -> List:
+    def supported_languages() -> list:
         """Get a dictionary of supported languages.
 
         Returns:
@@ -137,8 +136,9 @@ class Gruut(BasePhonemizer):
 
 
 if __name__ == "__main__":
-    from es_to_ipa import es2ipa
     import json
+
+    from es_to_ipa import es2ipa
 
     e = Gruut(language="es-es", keep_puncs=True, keep_stress=True, use_espeak_phonemes=True)
     symbols = [
@@ -211,7 +211,7 @@ if __name__ == "__main__":
         "\u2191",
         " ",
     ]
-    with open("./text/es_phonemizer/spanish_text.txt", "r") as f:
+    with open("./text/es_phonemizer/spanish_text.txt") as f:
         lines = f.readlines()
 
     used_sym = []

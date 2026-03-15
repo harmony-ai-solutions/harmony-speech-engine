@@ -1,7 +1,5 @@
 """A CPU worker class."""
 
-from typing import Dict, List, Optional
-
 import torch
 import torch.distributed
 
@@ -52,7 +50,7 @@ class CPUWorker(WorkerBase):
         self.model_runner.load_model()
 
     @torch.inference_mode()
-    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         output = self.model_runner.execute_model(requests_to_batch=requests_to_batch)
         # CPU worker only supports single-step execution.
         return output

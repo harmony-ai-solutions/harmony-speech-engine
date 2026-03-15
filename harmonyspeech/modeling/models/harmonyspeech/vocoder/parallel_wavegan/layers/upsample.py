@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """Upsampling module.
 
 This code is modified from https://github.com/r9y9/wavenet_vocoder.
@@ -25,7 +23,7 @@ class Stretch2d(torch.nn.Module):
             mode (str): Interpolation mode.
 
         """
-        super(Stretch2d, self).__init__()
+        super().__init__()
         self.x_scale = x_scale
         self.y_scale = y_scale
         self.mode = mode
@@ -48,7 +46,7 @@ class Conv2d(torch.nn.Conv2d):
 
     def __init__(self, *args, **kwargs):
         """Initialize Conv2d module."""
-        super(Conv2d, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def reset_parameters(self):
         """Reset parameters."""
@@ -79,7 +77,7 @@ class UpsampleNetwork(torch.nn.Module):
             freq_axis_kernel_size (int): Kernel size in the direction of frequency axis.
 
         """
-        super(UpsampleNetwork, self).__init__()
+        super().__init__()
         self.use_causal_conv = use_causal_conv
         self.up_layers = torch.nn.ModuleList()
         for scale in upsample_scales:
@@ -149,7 +147,7 @@ class ConvInUpsampleNetwork(torch.nn.Module):
             use_causal_conv (bool): Whether to use causal structure.
 
         """
-        super(ConvInUpsampleNetwork, self).__init__()
+        super().__init__()
         self.aux_context_window = aux_context_window
         self.use_causal_conv = use_causal_conv and aux_context_window > 0
         # To capture wide-context information in conditional features

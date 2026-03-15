@@ -21,11 +21,11 @@ import base64
 import pytest
 
 from harmonyspeech.endpoints.openai.protocol import (
-    TextToSpeechRequest,
-    TextToSpeechResponse,
     EmbedSpeakerRequest,
     EmbedSpeakerResponse,
     ErrorResponse,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
 )
 from tests.e2e.conftest import load_sample_audio_b64
 

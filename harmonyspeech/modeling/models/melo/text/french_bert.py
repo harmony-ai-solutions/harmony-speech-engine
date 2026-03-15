@@ -1,7 +1,7 @@
 import sys
 
 import torch
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 model_id = "dbmdz/bert-base-french-europeana-cased"
 tokenizer = AutoTokenizer.from_pretrained(model_id)

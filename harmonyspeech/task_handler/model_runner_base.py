@@ -5,14 +5,12 @@ import logging
 import time
 import traceback
 from dataclasses import asdict
-from typing import List
 
 logger = logging.getLogger(__name__)
 
 import numpy as np
 import soundfile as sf
 import torch
-
 from faster_whisper import BatchedInferencePipeline
 from silero_vad import get_speech_timestamps
 
@@ -26,11 +24,11 @@ from harmonyspeech.common.outputs import (
     SpeechSynthesisRequestOutput,
     SpeechTranscriptionRequestOutput,
     TextToSpeechRequestOutput,
-    VoiceConversionRequestOutput,
     VocodeRequestOutput,
+    VoiceConversionRequestOutput,
 )
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
-from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
+from harmonyspeech.modeling.loader import get_model, get_model_config, get_model_flavour
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.inputs import prepare_inputs
 
@@ -52,7 +50,7 @@ class ModelRunnerBase:
         return get_model(self.model_config, self.device_config)
 
     @torch.inference_mode()
-    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """
         Executes a group of batched requests against the model which is loaded
         :param requests_to_batch:
