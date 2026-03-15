@@ -3,7 +3,6 @@ torch
 torchaudio
 torchlibrosa
 # General Stuff
-setuptools
 pydantic
 fastapi
 uvicorn
@@ -31,7 +30,7 @@ g2pkk
 matplotlib
 anyascii
 jamo
-webrtcvad
+webrtcvad-wheels
 pyyaml
 pydub
 mecab-python3
