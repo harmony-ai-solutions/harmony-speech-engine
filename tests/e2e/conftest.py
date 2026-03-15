@@ -3,6 +3,7 @@
 import base64
 import os
 import struct
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -476,19 +477,23 @@ def pytest_collection_modifyitems(items):
 
 
 @pytest.fixture(scope="session")
-def models_cache_dir(tmp_path_factory):
+def models_cache_dir():
     """
-    Session-scoped temp directory for model weight caching during E2E tests.
-    Models downloaded here are shared across all e2e tests in one session.
+    Session-scoped fixture that returns the HuggingFace model cache directory.
 
-    Sets HF_HOME and HUGGINGFACE_HUB_CACHE so that HuggingFace actually
-    writes model files into this controlled directory instead of the default
-    ~/.cache/huggingface, preventing uncontrolled disk growth on CI runners.
+    Uses the system default (~/.cache/huggingface) which HuggingFace already
+    respects.  In CI the workflow sets HF_HOME explicitly and caches that path
+    between runs; locally the default is used transparently.
+
+    Any pre-existing HF_HOME / HUGGINGFACE_HUB_CACHE environment variables
+    are honoured, so per-machine overrides still work.
     """
-    cache_dir = tmp_path_factory.mktemp("models_cache")
-    os.environ["HF_HOME"] = str(cache_dir)
-    os.environ["HUGGINGFACE_HUB_CACHE"] = str(cache_dir / "hub")
-    return cache_dir
+    hf_home = os.environ.get("HF_HOME", os.path.join(Path.home(), ".cache", "huggingface"))
+    hub_dir = os.path.join(hf_home, "hub")
+    os.makedirs(hub_dir, exist_ok=True)
+    # Keep HUGGINGFACE_HUB_CACHE in sync in case the caller set only HF_HOME
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hub_dir)
+    return hf_home
 
 
 @pytest.fixture(scope="module")

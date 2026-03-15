@@ -95,6 +95,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -134,6 +136,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -155,6 +158,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -194,6 +199,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -215,6 +221,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -254,6 +262,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -275,6 +284,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -314,6 +325,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -335,6 +347,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -374,6 +388,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -395,6 +410,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -434,6 +451,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -455,6 +473,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -494,6 +514,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Cache HuggingFace models
         uses: actions/cache@v4
@@ -515,6 +536,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -577,6 +600,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
@@ -639,6 +664,8 @@ jobs:
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: false
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
         uses: AdityaGarg8/remove-unwanted-software@v5
