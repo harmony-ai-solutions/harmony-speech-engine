@@ -9,9 +9,7 @@ from loguru import logger
 from harmonyspeech import HarmonySpeechEngine
 from harmonyspeech.common.config import ModelConfig, EngineConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput, RequestInput, SpeechEmbeddingRequestInput
-from harmonyspeech.common.outputs import TextToSpeechRequestOutput, RequestOutput
-from harmonyspeech.endpoints.openai.protocol import GenerationOptions, AudioOutputOptions, VoiceConversionRequest, \
-    TextToSpeechRequest
+from harmonyspeech.common.outputs import RequestOutput
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 
 ENGINE_ITERATION_TIMEOUT_S = int(os.environ.get("HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S", "120"))

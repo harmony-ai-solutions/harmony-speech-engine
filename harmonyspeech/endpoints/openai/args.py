@@ -29,16 +29,12 @@ def make_arg_parser(parser=None):
         "--api-keys",
         type=str,
         default=None,
-        help=
-        "If provided, the server will require this key to be presented in the "
-        "header.")
+        help="If provided, the server will require this key to be presented in the header.")
     parser.add_argument(
         "--admin-key",
         type=str,
         default=None,
-        help=
-        "If provided, the server will require this key to be presented in the "
-        "header for admin operations.")
+        help="If provided, the server will require this key to be presented in the header for admin operations.")
     parser.add_argument("--config-file-path",
                         type=str,
                         default=None,

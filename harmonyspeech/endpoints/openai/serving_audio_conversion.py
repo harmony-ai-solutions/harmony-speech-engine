@@ -1,11 +1,18 @@
-from typing import AsyncGenerator, AsyncIterator
+import time
+from typing import AsyncGenerator, AsyncIterator, List, Union
 
 from fastapi import Request
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import AudioConversionRequestInput
 from harmonyspeech.common.outputs import RequestOutput, AudioConversionRequestOutput
-from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.common.utils import random_uuid
+from harmonyspeech.endpoints.openai.protocol import (
+    AudioConversionRequest,
+    AudioConversionResponse,
+    ErrorResponse,
+    ModelCard,
+)
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -63,11 +70,12 @@ class OpenAIServingAudioConversion(OpenAIServing):
     async def audio_conversion_full_generator(
         self, request: AudioConversionRequest, raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
-        request_id: str) -> Union[ErrorResponse, AudioConversionResponse]:
+        request_id: str
+    ) -> Union[ErrorResponse, AudioConversionResponse]:
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput = None
+        final_res: RequestOutput | None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():
@@ -82,7 +90,7 @@ class OpenAIServingAudioConversion(OpenAIServing):
             return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, AudioConversionRequestOutput)
 
-        response = VoiceConversionResponse(
+        response = AudioConversionResponse(
             id=request_id,
             created=created_time,
             model=model_name,

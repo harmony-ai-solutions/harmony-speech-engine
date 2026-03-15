@@ -1,12 +1,19 @@
 import json
-from typing import AsyncGenerator, AsyncIterator
+import time
+from typing import AsyncGenerator, AsyncIterator, List, Union
 
 from fastapi import Request
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import SpeechTranscribeRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechTranscriptionRequestOutput
-from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.common.utils import random_uuid
+from harmonyspeech.endpoints.openai.protocol import (
+    ErrorResponse,
+    ModelCard,
+    SpeechToTextResponse,
+    SpeechTranscribeRequest,
+)
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -65,11 +72,12 @@ class OpenAIServingSpeechToText(OpenAIServing):
     async def speech_transcription_full_generator(
         self, request: SpeechTranscribeRequest, raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
-        request_id: str) -> Union[ErrorResponse, SpeechToTextResponse]:
+        request_id: str
+    ) -> Union[ErrorResponse, SpeechToTextResponse]:
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput|None = None
+        final_res: RequestOutput | None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():

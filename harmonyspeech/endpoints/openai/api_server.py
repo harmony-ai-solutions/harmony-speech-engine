@@ -3,6 +3,7 @@ import http
 import importlib
 import inspect
 import os
+from typing import Optional
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from threading import Thread
@@ -18,7 +19,22 @@ import harmonyspeech
 from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
-from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.endpoints.openai.protocol import (
+    AudioConversionRequest,
+    AudioConversionResponse,
+    DetectVoiceActivityRequest,
+    DetectVoiceActivityResponse,
+    EmbedSpeakerRequest,
+    EmbedSpeakerResponse,
+    ErrorResponse,
+    ModelList,
+    SpeechToTextResponse,
+    SpeechTranscribeRequest,
+    TextToSpeechRequest,
+    TextToSpeechResponse,
+    VoiceConversionRequest,
+    VoiceConversionResponse,
+)
 from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
 from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
@@ -27,7 +43,7 @@ from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoic
 from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
-from fastapi.responses import (HTMLResponse, JSONResponse, Response, StreamingResponse)
+from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
 
 # Harmony Auth

@@ -1,6 +1,5 @@
-import copy
 import time
-from typing import List, Union, AsyncGenerator, AsyncIterator
+from typing import AsyncGenerator, AsyncIterator, List, Union
 
 from fastapi import Request
 
@@ -8,7 +7,12 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.protocol import *
+from harmonyspeech.endpoints.openai.protocol import (
+    EmbedSpeakerRequest,
+    EmbedSpeakerResponse,
+    ErrorResponse,
+    ModelCard,
+)
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -77,11 +81,12 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
     async def voice_embedding_full_generator(
         self, request: EmbedSpeakerRequest, raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
-        request_id: str) -> Union[ErrorResponse, EmbedSpeakerResponse]:
+        request_id: str
+    ) -> Union[ErrorResponse, EmbedSpeakerResponse]:
 
         model_name = request.model
         created_time = int(time.time())
-        final_res: RequestOutput|None = None
+        final_res: RequestOutput | None = None
 
         async for res in result_generator:
             if await raw_request.is_disconnected():

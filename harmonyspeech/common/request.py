@@ -1,7 +1,6 @@
 import enum
 import time
-from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Union
 
 from harmonyspeech.common.inputs import RequestInput
 from harmonyspeech.common.metrics import RequestMetrics

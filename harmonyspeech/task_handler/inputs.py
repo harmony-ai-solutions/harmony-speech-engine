@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+from typing import List, Union
 from concurrent.futures import ThreadPoolExecutor
 from tempfile import NamedTemporaryFile
 
@@ -14,7 +15,16 @@ from pydub import AudioSegment
 from chatterbox.tts import Conditionals
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import *
+from harmonyspeech.common.inputs import (
+    AudioConversionRequestInput,
+    DetectVoiceActivityRequestInput,
+    SpeechEmbeddingRequestInput,
+    SpeechTranscribeRequestInput,
+    SynthesisRequestInput,
+    TextToSpeechRequestInput,
+    VoiceConversionRequestInput,
+    VocodeRequestInput,
+)
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.loader import get_model_flavour, get_model_config, get_model_speaker
 from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel

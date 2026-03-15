@@ -89,9 +89,9 @@ def load_sample_audio_b64(sample_name: str = "wanda4") -> str:
 
 
 # MeloTTS / OpenVoice V2 engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def melotts_en_engine(models_cache_dir):
-    """Session-scoped engine fixture for MeloTTS / OpenVoice V2 tests.
+    """Module-scoped engine fixture for MeloTTS / OpenVoice V2 tests.
     
     Loads 4 models:
     - faster-whisper (FasterWhisper) - required for VAD processing in embed stage
@@ -220,9 +220,9 @@ def melotts_en_engine(models_cache_dir):
 
 
 # OpenVoice V1 engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def openvoice_v1_en_engine(models_cache_dir):
-    """Session-scoped engine fixture for OpenVoice V1 tests.
+    """Module-scoped engine fixture for OpenVoice V1 tests.
     
     Loads 4 models:
     - faster-whisper (FasterWhisper) - required for VAD processing in embed stage
@@ -302,9 +302,9 @@ def openvoice_v1_en_engine(models_cache_dir):
 
 
 # HarmonySpeech engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def harmonyspeech_engine(models_cache_dir):
-    """Session-scoped engine fixture for HarmonySpeech tests.
+    """Module-scoped engine fixture for HarmonySpeech tests.
     
     Loads 3 models:
     - hs1-encoder (HarmonySpeechEncoder)
@@ -362,9 +362,9 @@ def harmonyspeech_engine(models_cache_dir):
 
 
 # FasterWhisper STT engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def whisper_engine(models_cache_dir):
-    """Session-scoped engine fixture for FasterWhisper STT tests (whisper-tiny variant)."""
+    """Module-scoped engine fixture for FasterWhisper STT tests (whisper-tiny variant)."""
     model_config = ModelConfig(
         name="faster-whisper",
         model="Systran/faster-whisper-tiny",
@@ -386,9 +386,9 @@ def whisper_engine(models_cache_dir):
 
 
 # SileroVAD engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def vad_engine(models_cache_dir):
-    """Session-scoped engine fixture for SileroVAD voice activity detection tests."""
+    """Module-scoped engine fixture for SileroVAD voice activity detection tests."""
     model_config = ModelConfig(
         name="silero-vad",
         model="silero-vad",
@@ -410,9 +410,9 @@ def vad_engine(models_cache_dir):
 
 
 # Whisper VAD engine fixture (uses OpenAIServingVoiceActivityDetection for VAD)
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def whisper_vad_engine(models_cache_dir):
-    """Session-scoped engine fixture for Whisper-based VAD tests."""
+    """Module-scoped engine fixture for Whisper-based VAD tests."""
     model_config = ModelConfig(
         name="faster-whisper",
         model="Systran/faster-whisper-tiny",
@@ -434,9 +434,9 @@ def whisper_vad_engine(models_cache_dir):
 
 
 # VoiceFixer audio restoration engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def voicefixer_engine(models_cache_dir):
-    """Session-scoped engine fixture for VoiceFixer audio restoration tests.
+    """Module-scoped engine fixture for VoiceFixer audio restoration tests.
 
     Loads 2 models in pipeline sequence:
     - voicefixer-restorer (VoiceFixerRestorer): audio → enhanced mel spectrogram
@@ -497,19 +497,15 @@ def models_cache_dir(tmp_path_factory):
     return tmp_path_factory.mktemp("models_cache")
 
 
-@pytest.fixture(scope="session")
-def chatterbox_turbo_engine(models_cache_dir):
-    """Session-scoped engine fixture for ChatterboxTurboTTS E2E tests.
+@pytest.fixture(scope="module")
+def chatterbox_turbo_engine(models_cache_dir, device):
+    """Module-scoped engine fixture for ChatterboxTurboTTS E2E tests.
 
     Loads 1 model:
     - chatterbox_turbo (ChatterboxTurboTTS) — faster TTS with top_k/norm_loudness support
 
-    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    Supports both CPU and CUDA based on the device fixture.
     """
-    import torch
-    if not torch.cuda.is_available():
-        pytest.skip("ChatterboxTurbo E2E requires CUDA")
-
     model_configs = [
         ModelConfig(
             name="chatterbox_turbo",
@@ -517,7 +513,7 @@ def chatterbox_turbo_engine(models_cache_dir):
             model_type="ChatterboxTurboTTS",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
         ModelConfig(
             name="chatterbox_turbo_embedding",
@@ -525,7 +521,7 @@ def chatterbox_turbo_engine(models_cache_dir):
             model_type="ChatterboxEmbedding",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
     ]
     engine_config = EngineConfig(model_configs=model_configs)
@@ -544,20 +540,16 @@ def chatterbox_turbo_engine(models_cache_dir):
     return (engine, serving_tts, serving_embed)
 
 
-@pytest.fixture(scope="session")
-def chatterbox_multilingual_engine(models_cache_dir):
-    """Session-scoped engine fixture for ChatterboxMultilingualTTS E2E tests.
+@pytest.fixture(scope="module")
+def chatterbox_multilingual_engine(models_cache_dir, device):
+    """Module-scoped engine fixture for ChatterboxMultilingualTTS E2E tests.
 
     Loads 2 models:
     - chatterbox_multilingual (ChatterboxMultilingualTTS) — multilingual TTS
     - chatterbox_multilingual_embedding (ChatterboxEmbedding) — embedding for multilingual voice cloning
 
-    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    Supports both CPU and CUDA based on the device fixture.
     """
-    import torch
-    if not torch.cuda.is_available():
-        pytest.skip("ChatterboxMultilingual E2E requires CUDA")
-
     model_configs = [
         ModelConfig(
             name="chatterbox_multilingual",
@@ -565,7 +557,7 @@ def chatterbox_multilingual_engine(models_cache_dir):
             model_type="ChatterboxMultilingualTTS",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
         ModelConfig(
             name="chatterbox_multilingual_embedding",
@@ -573,7 +565,7 @@ def chatterbox_multilingual_engine(models_cache_dir):
             model_type="ChatterboxEmbedding",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
     ]
     engine_config = EngineConfig(model_configs=model_configs)
@@ -592,20 +584,16 @@ def chatterbox_multilingual_engine(models_cache_dir):
     return (engine, serving_tts, serving_embed)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def chatterbox_engine(models_cache_dir, device):
-    """Session-scoped engine fixture for Chatterbox TTS E2E tests.
+    """Module-scoped engine fixture for Chatterbox TTS E2E tests.
 
     Loads 2 models:
     - chatterbox (ChatterboxTTS) — TTS + voice cloning
     - chatterbox-vc (ChatterboxVC) — voice conversion
 
-    Requires CUDA. Skipped automatically if CUDA is unavailable.
+    Supports both CPU and CUDA based on the device fixture.
     """
-    import torch
-    if not torch.cuda.is_available():
-        pytest.skip("Chatterbox E2E requires CUDA")
-
     from harmonyspeech.common.config import EngineConfig, ModelConfig, DeviceConfig
     from harmonyspeech.engine.args_tools import AsyncEngineArgs
     from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
@@ -620,7 +608,7 @@ def chatterbox_engine(models_cache_dir, device):
             model_type="ChatterboxTTS",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
         ModelConfig(
             name="chatterbox-vc",
@@ -628,7 +616,7 @@ def chatterbox_engine(models_cache_dir, device):
             model_type="ChatterboxVC",
             max_batch_size=1,
             dtype="float32",
-            device_config=DeviceConfig(device="cuda"),
+            device_config=DeviceConfig(device=device),
         ),
     ]
     engine_config = EngineConfig(model_configs=model_configs)

@@ -17,8 +17,20 @@ from faster_whisper import BatchedInferencePipeline
 from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import *
-from harmonyspeech.common.outputs import *
+from harmonyspeech.common.inputs import (
+    SpeechEmbeddingRequestInput,
+)
+from harmonyspeech.common.outputs import (
+    AudioConversionRequestOutput,
+    DetectVoiceActivityRequestOutput,
+    RequestOutput,
+    SpeechEmbeddingRequestOutput,
+    SpeechSynthesisRequestOutput,
+    SpeechTranscriptionRequestOutput,
+    TextToSpeechRequestOutput,
+    VoiceConversionRequestOutput,
+    VocodeRequestOutput,
+)
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch

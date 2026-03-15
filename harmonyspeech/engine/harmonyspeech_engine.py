@@ -1,15 +1,31 @@
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Optional, Type, Union, Iterable, Dict, Tuple
+from typing import List, Optional, Union, Iterable, Tuple
 
 from loguru import logger
 
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.inputs import *
+from harmonyspeech.common.inputs import (
+    AudioConversionRequestInput,
+    RequestInput,
+    SpeechEmbeddingRequestInput,
+    SpeechTranscribeRequestInput,
+    SynthesisRequestInput,
+    TextToSpeechRequestInput,
+    VoiceConversionRequestInput,
+    VocodeRequestInput,
+)
 from harmonyspeech.common.logger import setup_logger
-from harmonyspeech.common.outputs import *
+from harmonyspeech.common.outputs import (
+    AudioConversionRequestOutput,
+    RequestOutput,
+    SpeechEmbeddingRequestOutput,
+    SpeechSynthesisRequestOutput,
+    SpeechTranscriptionRequestOutput,
+    TextToSpeechRequestOutput,
+)
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import Stats, StatLogger
@@ -44,7 +60,7 @@ class HarmonySpeechEngine:
 
         """
         For each provided model config we will create a separate executor.
-        Models may allocate across multiple devices based on DeviceConfig.        
+        Models may allocate across multiple devices based on DeviceConfig.
         """
         self.model_executors = {}
         self.init_custom_executors()
@@ -610,7 +626,7 @@ class HarmonySpeechEngine:
 
         return request_outputs, forwarded_requests
 
-    def step(self) -> Tuple[List[RequestOutput], List[RequestOutput]]:
+    def step(self) -> Tuple[List[RequestOutput], List[RequestInput]]:
         """Performs one decoding iteration and returns newly generated results.
 
         .. figure:: https://i.imgur.com/sv2HssD.png

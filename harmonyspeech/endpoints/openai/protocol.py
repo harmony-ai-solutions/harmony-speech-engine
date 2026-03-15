@@ -2,10 +2,9 @@
 # Inspiration taken from PygmalionAI / Aphrodite Engine & OpenAI API definitions
 
 import time
-from typing import Dict, Literal, Optional, Union, List, Self
+from typing import Dict, Literal, Optional, List, Self
 
-from pydantic import (AliasChoices, BaseModel, Field, conint, model_validator,
-                      root_validator)
+from pydantic import (BaseModel, Field)
 
 from harmonyspeech.common.utils import random_uuid
 

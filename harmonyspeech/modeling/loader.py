@@ -17,7 +17,12 @@ from harmonyspeech.modeling.models.chatterbox.chatterbox import (
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.models import ModelRegistry
-from harmonyspeech.modeling.hf_downloader import *
+from harmonyspeech.modeling.hf_downloader import (
+    initialize_dummy_weights,
+    load_or_download_config,
+    load_or_download_file,
+    load_or_download_model,
+)
 
 
 @contextlib.contextmanager
