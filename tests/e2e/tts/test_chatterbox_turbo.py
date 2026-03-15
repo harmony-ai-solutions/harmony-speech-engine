@@ -14,6 +14,7 @@ Test audio samples (tests/test-data/samples/):
   jerry_seinfeld_prompt.wav — long voice prompt (~32 seconds); used where >= 5 seconds is required
                               (ChatterboxTurbo embedding, voice cloning reference)
 """
+
 import asyncio
 import base64
 
@@ -28,11 +29,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 )
 from tests.e2e.conftest import load_sample_audio_b64
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.slow,
-    pytest.mark.cuda,
-]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.cuda]
 
 TEXT_INPUT = "Hello, world. This is a test of the Chatterbox voice cloning system."
 
@@ -48,14 +45,11 @@ LONG_REFERENCE_AUDIO = load_sample_audio_b64("jerry_seinfeld_prompt")
 # ChatterboxTurboTTS
 # ---------------------------------------------------------------------------
 
+
 def test_chatterbox_turbo_tts_no_cloning(chatterbox_turbo_engine, mock_raw_request):
     """TTS direct: text → base64 WAV; non-empty output."""
     engine, serving_tts, _ = chatterbox_turbo_engine
-    request = TextToSpeechRequest(
-        model="chatterbox_turbo",
-        input=TEXT_INPUT,
-        mode="single_speaker_tts",
-    )
+    request = TextToSpeechRequest(model="chatterbox_turbo", input=TEXT_INPUT, mode="single_speaker_tts")
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Got: {response}"
     assert response.data
@@ -68,10 +62,7 @@ def test_chatterbox_turbo_embedding(chatterbox_turbo_engine, mock_raw_request):
     Uses jerry_seinfeld_prompt.wav (~32s) because upstream enforces a minimum 5-second audio prompt.
     """
     engine, _, serving_embed = chatterbox_turbo_engine
-    request = EmbedSpeakerRequest(
-        model="chatterbox_turbo_embedding",
-        input_audio=LONG_REFERENCE_AUDIO,
-    )
+    request = EmbedSpeakerRequest(model="chatterbox_turbo_embedding", input_audio=LONG_REFERENCE_AUDIO)
     response = asyncio.run(serving_embed.create_voice_embedding(request, mock_raw_request))
     assert isinstance(response, EmbedSpeakerResponse), f"Got: {response}"
     assert response.data
@@ -82,18 +73,12 @@ def test_chatterbox_turbo_tts_with_precomputed_embedding(chatterbox_turbo_engine
     """Turbo TTS + precomputed embedding: embed (long audio) → TTS; non-empty WAV."""
     engine, serving_tts, serving_embed = chatterbox_turbo_engine
 
-    embed_request = EmbedSpeakerRequest(
-        model="chatterbox_turbo_embedding",
-        input_audio=LONG_REFERENCE_AUDIO,
-    )
+    embed_request = EmbedSpeakerRequest(model="chatterbox_turbo_embedding", input_audio=LONG_REFERENCE_AUDIO)
     embed_response = asyncio.run(serving_embed.create_voice_embedding(embed_request, mock_raw_request))
     assert isinstance(embed_response, EmbedSpeakerResponse), f"Embed step got: {embed_response}"
 
     tts_request = TextToSpeechRequest(
-        model="chatterbox_turbo",
-        input=TEXT_INPUT,
-        input_embedding=embed_response.data,
-        mode="voice_cloning",
+        model="chatterbox_turbo", input=TEXT_INPUT, input_embedding=embed_response.data, mode="voice_cloning"
     )
     tts_response = asyncio.run(serving_tts.create_text_to_speech(tts_request, mock_raw_request))
     assert isinstance(tts_response, TextToSpeechResponse), f"TTS step got: {tts_response}"
@@ -124,11 +109,7 @@ def test_chatterbox_turbo_embedding_short_audio_returns_error(chatterbox_turbo_e
     )
 
     # Engine must still be alive — send a valid TTS request and confirm it succeeds
-    recovery_request = TextToSpeechRequest(
-        model="chatterbox_turbo",
-        input=TEXT_INPUT,
-        mode="single_speaker_tts",
-    )
+    recovery_request = TextToSpeechRequest(model="chatterbox_turbo", input=TEXT_INPUT, mode="single_speaker_tts")
     recovery_response = asyncio.run(serving_tts.create_text_to_speech(recovery_request, mock_raw_request))
     assert isinstance(recovery_response, TextToSpeechResponse), (
         f"Engine did not recover after bad request: {recovery_response}"

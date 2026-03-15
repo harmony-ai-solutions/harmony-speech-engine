@@ -211,43 +211,36 @@ if __name__ == "__main__":
         "\u2191",
         " ",
     ]
-    with open('./text/es_phonemizer/spanish_text.txt', 'r') as f:
+    with open("./text/es_phonemizer/spanish_text.txt", "r") as f:
         lines = f.readlines()
-    
 
     used_sym = []
     not_existed_sym = []
     phonemes = []
 
     for line in lines[:400]:
-        text = line.split('|')[-1].strip()
+        text = line.split("|")[-1].strip()
         ipa = es2ipa(text)
-        phonemes.append(ipa + '\n')
+        phonemes.append(ipa + "\n")
         for s in ipa:
             if s not in symbols:
                 if s not in not_existed_sym:
-                    print(f'not_existed char: {s}')
+                    print(f"not_existed char: {s}")
                     not_existed_sym.append(s)
             else:
                 if s not in used_sym:
                     # print(f'used char: {s}')
                     used_sym.append(s)
-    
+
     print(used_sym)
     print(not_existed_sym)
 
-
-    with open('./text/es_phonemizer/es_symbols.txt', 'w') as g:
+    with open("./text/es_phonemizer/es_symbols.txt", "w") as g:
         g.writelines(symbols + not_existed_sym)
-        
-    with open('./text/es_phonemizer/example_ipa.txt', 'w') as g:
+
+    with open("./text/es_phonemizer/example_ipa.txt", "w") as g:
         g.writelines(phonemes)
-        
-    data = {'symbols': symbols + not_existed_sym}
-    with open('./text/es_phonemizer/es_symbols_v2.json', 'w') as f:
+
+    data = {"symbols": symbols + not_existed_sym}
+    with open("./text/es_phonemizer/es_symbols_v2.json", "w") as f:
         json.dump(data, f, indent=4)
-
-
-
-
-

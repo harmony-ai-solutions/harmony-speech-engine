@@ -12,42 +12,20 @@ class TADELayer(torch.nn.Module):
     """TADE Layer module."""
 
     def __init__(
-        self,
-        in_channels=64,
-        aux_channels=80,
-        kernel_size=9,
-        bias=True,
-        upsample_factor=2,
-        upsample_mode="nearest",
+        self, in_channels=64, aux_channels=80, kernel_size=9, bias=True, upsample_factor=2, upsample_mode="nearest"
     ):
         """Initilize TADE layer."""
         super().__init__()
         self.norm = torch.nn.InstanceNorm1d(in_channels)
         self.aux_conv = torch.nn.Sequential(
-            torch.nn.Conv1d(
-                aux_channels,
-                in_channels,
-                kernel_size,
-                1,
-                bias=bias,
-                padding=(kernel_size - 1) // 2,
-            ),
+            torch.nn.Conv1d(aux_channels, in_channels, kernel_size, 1, bias=bias, padding=(kernel_size - 1) // 2)
             # NOTE(kan-bayashi): Use non-linear activation?
         )
         self.gated_conv = torch.nn.Sequential(
-            torch.nn.Conv1d(
-                in_channels,
-                in_channels * 2,
-                kernel_size,
-                1,
-                bias=bias,
-                padding=(kernel_size - 1) // 2,
-            ),
+            torch.nn.Conv1d(in_channels, in_channels * 2, kernel_size, 1, bias=bias, padding=(kernel_size - 1) // 2)
             # NOTE(kan-bayashi): Use non-linear activation?
         )
-        self.upsample = torch.nn.Upsample(
-            scale_factor=upsample_factor, mode=upsample_mode
-        )
+        self.upsample = torch.nn.Upsample(scale_factor=upsample_factor, mode=upsample_mode)
 
     def forward(self, x, c):
         """Calculate forward propagation.
@@ -98,12 +76,7 @@ class TADEResBlock(torch.nn.Module):
             upsample_mode=upsample_mode,
         )
         self.gated_conv1 = torch.nn.Conv1d(
-            in_channels,
-            in_channels * 2,
-            kernel_size,
-            1,
-            bias=bias,
-            padding=(kernel_size - 1) // 2,
+            in_channels, in_channels * 2, kernel_size, 1, bias=bias, padding=(kernel_size - 1) // 2
         )
         self.tade2 = TADELayer(
             in_channels=in_channels,
@@ -122,9 +95,7 @@ class TADEResBlock(torch.nn.Module):
             dilation=dilation,
             padding=(kernel_size - 1) // 2 * dilation,
         )
-        self.upsample = torch.nn.Upsample(
-            scale_factor=upsample_factor, mode=upsample_mode
-        )
+        self.upsample = torch.nn.Upsample(scale_factor=upsample_factor, mode=upsample_mode)
         if gated_function == "softmax":
             self.gated_function = partial(torch.softmax, dim=1)
         elif gated_function == "sigmoid":

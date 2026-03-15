@@ -2,15 +2,13 @@
 VoiceFixer models adapted for Harmony Speech Engine.
 Based on the original VoiceFixer implementation by Haohe Liu.
 """
+
 import numpy as np
 import torch
 import torch.nn as nn
 from typing import Optional, Dict, Any
 
-from .utils import (
-    from_log, to_log, FDomainHelper, MelScale,
-    tr_normalize, tr_amp_to_db, tr_pre, get_mel_weight_torch
-)
+from .utils import from_log, to_log, FDomainHelper, MelScale, tr_normalize, tr_amp_to_db, tr_pre, get_mel_weight_torch
 from .modules import UNetResComplex_100Mb, BN_GRU, UpsampleNet, ResStack, PQMF
 
 
@@ -29,20 +27,8 @@ class VoiceFixerGenerator(nn.Module):
             nn.Linear(n_mel * 2, n_mel * 4),
             nn.Dropout(0.5),
             nn.ReLU(inplace=True),
-            BN_GRU(
-                input_dim=n_mel * 4,
-                hidden_dim=n_mel * 2,
-                bidirectional=True,
-                layer=2,
-                batchnorm=True,
-            ),
-            BN_GRU(
-                input_dim=n_mel * 4,
-                hidden_dim=n_mel * 2,
-                bidirectional=True,
-                layer=2,
-                batchnorm=True,
-            ),
+            BN_GRU(input_dim=n_mel * 4, hidden_dim=n_mel * 2, bidirectional=True, layer=2, batchnorm=True),
+            BN_GRU(input_dim=n_mel * 4, hidden_dim=n_mel * 2, bidirectional=True, layer=2, batchnorm=True),
             nn.BatchNorm2d(1),
             nn.ReLU(inplace=True),
             nn.Linear(n_mel * 4, n_mel * 4),
@@ -69,13 +55,7 @@ class VoiceFixerGenerator(nn.Module):
         # Final mel spectrogram
         mel = unet_out + x
 
-        return {
-            "mel": mel,
-            "lstm_out": unet_out,
-            "unet_out": unet_out,
-            "noisy": noisy,
-            "clean": clean,
-        }
+        return {"mel": mel, "lstm_out": unet_out, "unet_out": unet_out, "noisy": noisy, "clean": clean}
 
 
 class VoiceFixerRestorer(nn.Module):
@@ -100,18 +80,10 @@ class VoiceFixerRestorer(nn.Module):
             freeze_parameters=True,
         )
 
-        self.mel = MelScale(
-            n_mels=self.n_mel,
-            sample_rate=self.sample_rate,
-            n_stft=self.window_size // 2 + 1
-        )
+        self.mel = MelScale(n_mels=self.n_mel, sample_rate=self.sample_rate, n_stft=self.window_size // 2 + 1)
 
         # Main generator model
-        self.generator = VoiceFixerGenerator(
-            n_mel=self.n_mel,
-            hidden=self.window_size // 2 + 1,
-            channels=self.channels
-        )
+        self.generator = VoiceFixerGenerator(n_mel=self.n_mel, hidden=self.window_size // 2 + 1, channels=self.channels)
 
         # Mel weight for 44kHz 128-bin setup
         self.mel_weight_44k_128 = (
@@ -249,7 +221,7 @@ class VoiceFixerRestorer(nn.Module):
             )
             / 19.40951426
         )
-        self.register_buffer('mel_weight_tensor', self.mel_weight_44k_128[None, None, None, ...])
+        self.register_buffer("mel_weight_tensor", self.mel_weight_44k_128[None, None, None, ...])
 
     def _pre(self, input_wav: torch.Tensor) -> tuple:
         """
@@ -269,19 +241,19 @@ class VoiceFixerRestorer(nn.Module):
             return est, ref
         elif est.shape[-1] > ref.shape[-1]:
             min_len = min(est.shape[-1], ref.shape[-1])
-            est = est[..., int(diff // 2): -int(diff // 2)] if diff > 0 else est
+            est = est[..., int(diff // 2) : -int(diff // 2)] if diff > 0 else est
             est, ref = est[..., :min_len], ref[..., :min_len]
             return est, ref
         else:
             min_len = min(est.shape[-1], ref.shape[-1])
-            ref = ref[..., int(diff // 2): -int(diff // 2)] if diff > 0 else ref
+            ref = ref[..., int(diff // 2) : -int(diff // 2)] if diff > 0 else ref
             est, ref = est[..., :min_len], ref[..., :min_len]
             return est, ref
 
     def forward(self, audio_tensor: torch.Tensor) -> torch.Tensor:
         """
         Restore audio quality by removing noise and artifacts.
-        
+
         Args:
             audio_tensor: Input audio tensor [batch, channels, samples]
         Returns:
@@ -292,7 +264,7 @@ class VoiceFixerRestorer(nn.Module):
         results = []
 
         for i in range(0, audio_tensor.shape[-1], seg_length):
-            segment = audio_tensor[..., i:i + seg_length]
+            segment = audio_tensor[..., i : i + seg_length]
 
             # Preprocessing - both sp and mel_noisy are [batch, channels, freq, time]
             sp, mel_noisy = self._pre(segment)
@@ -379,9 +351,7 @@ class VoiceFixerVocoderGenerator(nn.Module):
         if self.use_condnet:
             cond_channels = 512  # From original config
             self.condnet = nn.Sequential(
-                nn.utils.parametrizations.weight_norm(
-                    nn.Conv1d(in_channels, cond_channels, kernel_size=3, padding=1)
-                ),
+                nn.utils.parametrizations.weight_norm(nn.Conv1d(in_channels, cond_channels, kernel_size=3, padding=1)),
                 nn.ELU(),
                 nn.utils.parametrizations.weight_norm(
                     nn.Conv1d(cond_channels, cond_channels, kernel_size=3, padding=1)
@@ -420,25 +390,17 @@ class VoiceFixerVocoderGenerator(nn.Module):
                 UpsampleNet(self.channels, self.channels // 2, self.upsample_scales[0], hp, 0),
                 ResStack(self.channels // 2, kernel_size[0], self.resstack_depth[0], hp),
                 act,
-                UpsampleNet(
-                    self.channels // 2, self.channels // 4, self.upsample_scales[1], hp, 1
-                ),
+                UpsampleNet(self.channels // 2, self.channels // 4, self.upsample_scales[1], hp, 1),
                 ResStack(self.channels // 4, kernel_size[1], self.resstack_depth[1], hp),
                 act,
-                UpsampleNet(
-                    self.channels // 4, self.channels // 8, self.upsample_scales[2], hp, 2
-                ),
+                UpsampleNet(self.channels // 4, self.channels // 8, self.upsample_scales[2], hp, 2),
                 ResStack(self.channels // 8, kernel_size[2], self.resstack_depth[2], hp),
                 act,
-                UpsampleNet(
-                    self.channels // 8, self.channels // 16, self.upsample_scales[3], hp, 3
-                ),
+                UpsampleNet(self.channels // 8, self.channels // 16, self.upsample_scales[3], hp, 3),
                 ResStack(self.channels // 16, kernel_size[3], self.resstack_depth[3], hp),
                 act,
                 nn.ReflectionPad1d(3),
-                nn.utils.parametrizations.weight_norm(
-                    nn.Conv1d(self.channels // 16, self.out_channels, kernel_size=7)
-                ),
+                nn.utils.parametrizations.weight_norm(nn.Conv1d(self.channels // 16, self.out_channels, kernel_size=7)),
                 nn.Tanh(),
             )
         else:
@@ -458,9 +420,7 @@ class VoiceFixerVocoderGenerator(nn.Module):
                 ResStack(m_channels // 8, kernel_size[2], self.resstack_depth[2], hp),
                 act,
                 nn.ReflectionPad1d(3),
-                nn.utils.parametrizations.weight_norm(
-                    nn.Conv1d(m_channels // 8, self.out_channels, kernel_size=7)
-                ),
+                nn.utils.parametrizations.weight_norm(nn.Conv1d(m_channels // 8, self.out_channels, kernel_size=7)),
                 nn.Tanh(),
             )
 
@@ -485,12 +445,7 @@ class VoiceFixerVocoderGenerator(nn.Module):
         # Multi-channel processing with PQMF
         if self.out_channels > 1:
             B = wav.size(0)
-            f_wav = (
-                self.pqmf.synthesis(wav)
-                .transpose(1, 2)
-                .reshape(B, 1, -1)
-                .clamp(-0.99, 0.99)
-            )
+            f_wav = self.pqmf.synthesis(wav).transpose(1, 2).reshape(B, 1, -1).clamp(-0.99, 0.99)
             return f_wav, wav
 
         return wav
@@ -520,12 +475,12 @@ class VoiceFixerVocoder(nn.Module):
         self.model = VoiceFixerVocoderGenerator(in_channels=self.mel_bins)
 
         # Mel weight for normalization
-        self.register_buffer('weight_torch', get_mel_weight_torch(percent=1.0)[None, None, None, ...])
+        self.register_buffer("weight_torch", get_mel_weight_torch(percent=1.0)[None, None, None, ...])
 
     def forward(self, mel_spectrogram: torch.Tensor) -> torch.Tensor:
         """
         Convert mel-spectrogram to audio waveform using original VoiceFixer logic.
-        
+
         Args:
             mel_spectrogram: Mel-spectrogram tensor [batchsize, 1, t-steps, n_mel]
         Returns:

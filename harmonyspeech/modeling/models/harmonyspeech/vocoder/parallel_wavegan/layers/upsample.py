@@ -40,9 +40,7 @@ class Stretch2d(torch.nn.Module):
             Tensor: Interpolated tensor (B, C, F * y_scale, T * x_scale),
 
         """
-        return F.interpolate(
-            x, scale_factor=(self.y_scale, self.x_scale), mode=self.mode
-        )
+        return F.interpolate(x, scale_factor=(self.y_scale, self.x_scale), mode=self.mode)
 
 
 class Conv2d(torch.nn.Conv2d):
@@ -90,9 +88,7 @@ class UpsampleNetwork(torch.nn.Module):
             self.up_layers += [stretch]
 
             # conv layer
-            assert (
-                freq_axis_kernel_size - 1
-            ) % 2 == 0, "Not support even number freq axis kernel size."
+            assert (freq_axis_kernel_size - 1) % 2 == 0, "Not support even number freq axis kernel size."
             freq_axis_padding = (freq_axis_kernel_size - 1) // 2
             kernel_size = (freq_axis_kernel_size, scale * 2 + 1)
             if use_causal_conv:
@@ -104,9 +100,7 @@ class UpsampleNetwork(torch.nn.Module):
 
             # nonlinear
             if nonlinear_activation is not None:
-                nonlinear = getattr(torch.nn, nonlinear_activation)(
-                    **nonlinear_activation_params
-                )
+                nonlinear = getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params)
                 self.up_layers += [nonlinear]
 
     def forward(self, c):
@@ -159,13 +153,9 @@ class ConvInUpsampleNetwork(torch.nn.Module):
         self.aux_context_window = aux_context_window
         self.use_causal_conv = use_causal_conv and aux_context_window > 0
         # To capture wide-context information in conditional features
-        kernel_size = (
-            aux_context_window + 1 if use_causal_conv else 2 * aux_context_window + 1
-        )
+        kernel_size = aux_context_window + 1 if use_causal_conv else 2 * aux_context_window + 1
         # NOTE(kan-bayashi): Here do not use padding because the input is already padded
-        self.conv_in = Conv1d(
-            aux_channels, aux_channels, kernel_size=kernel_size, bias=False
-        )
+        self.conv_in = Conv1d(aux_channels, aux_channels, kernel_size=kernel_size, bias=False)
         self.upsample = UpsampleNetwork(
             upsample_scales=upsample_scales,
             nonlinear_activation=nonlinear_activation,

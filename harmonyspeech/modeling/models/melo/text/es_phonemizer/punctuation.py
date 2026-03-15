@@ -112,7 +112,7 @@ class Punctuation:
             if idx == len(puncs) - 1 and len(suffix) > 0:
                 splitted_text.append(suffix)
             text = suffix
-        while splitted_text[0] == '':
+        while splitted_text[0] == "":
             splitted_text = splitted_text[1:]
         return splitted_text, puncs
 

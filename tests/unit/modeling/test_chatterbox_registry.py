@@ -1,4 +1,5 @@
 """Unit tests for Chatterbox model registry integration."""
+
 import pytest
 
 from harmonyspeech.modeling.models import ModelRegistry

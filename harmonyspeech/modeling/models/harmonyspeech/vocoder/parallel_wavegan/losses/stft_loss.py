@@ -24,9 +24,7 @@ def stft(x, fft_size, hop_size, win_length, window):
 
     """
     # if is_pytorch_17plus:
-    x_stft = torch.stft(
-        x, fft_size, hop_size, win_length, window, return_complex=False
-    )
+    x_stft = torch.stft(x, fft_size, hop_size, win_length, window, return_complex=False)
     # else:
     #     x_stft = torch.stft(x, fft_size, hop_size, win_length, window)
     real = x_stft[..., 0]
@@ -81,9 +79,7 @@ class LogSTFTMagnitudeLoss(torch.nn.Module):
 class STFTLoss(torch.nn.Module):
     """STFT loss module."""
 
-    def __init__(
-        self, fft_size=1024, shift_size=120, win_length=600, window="hann_window"
-    ):
+    def __init__(self, fft_size=1024, shift_size=120, win_length=600, window="hann_window"):
         """Initialize STFT loss module."""
         super(STFTLoss, self).__init__()
         self.fft_size = fft_size
@@ -118,11 +114,7 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
     """Multi resolution STFT loss module."""
 
     def __init__(
-        self,
-        fft_sizes=[1024, 2048, 512],
-        hop_sizes=[120, 240, 50],
-        win_lengths=[600, 1200, 240],
-        window="hann_window",
+        self, fft_sizes=[1024, 2048, 512], hop_sizes=[120, 240, 50], win_lengths=[600, 1200, 240], window="hann_window"
     ):
         """Initialize Multi resolution STFT loss module.
 

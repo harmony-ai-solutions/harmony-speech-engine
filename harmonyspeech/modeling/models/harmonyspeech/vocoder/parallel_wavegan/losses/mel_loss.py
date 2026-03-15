@@ -2,6 +2,7 @@
 #  MIT License (https://opensource.org/licenses/MIT)
 
 """Mel-spectrogram loss modules."""
+
 import librosa
 import torch
 import torch.nn.functional as F
@@ -44,13 +45,7 @@ class MelSpectrogram(torch.nn.Module):
 
         fmin = 0 if fmin is None else fmin
         fmax = fs / 2 if fmax is None else fmax
-        melmat = librosa.filters.mel(
-            sr=fs,
-            n_fft=fft_size,
-            n_mels=num_mels,
-            fmin=fmin,
-            fmax=fmax,
-        )
+        melmat = librosa.filters.mel(sr=fs, n_fft=fft_size, n_mels=num_mels, fmin=fmin, fmax=fmax)
         self.register_buffer("melmat", torch.from_numpy(melmat.T).float())
         self.stft_params = {
             "n_fft": self.fft_size,

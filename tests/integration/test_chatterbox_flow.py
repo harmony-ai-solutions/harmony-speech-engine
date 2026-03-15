@@ -3,6 +3,7 @@
 These tests verify the serving layer correctly routes Chatterbox requests
 by mocking the engine and testing the serving method signatures and responses.
 """
+
 import base64
 import pytest
 from unittest.mock import MagicMock, AsyncMock
@@ -25,6 +26,7 @@ mock_raw_request.is_disconnected = AsyncMock(return_value=False)
 # ---------------------------------------------------------------------------
 # Fixtures - Mock serving handlers with Chatterbox behavior
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_chatterbox_serving():
@@ -63,16 +65,13 @@ def mock_chatterbox_serving():
 # Integration test cases
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_chatterbox_tts_direct(mock_chatterbox_serving):
     """TTS without audio/embedding routes to ChatterboxTTS and returns audio."""
     serving_tts, _, _ = mock_chatterbox_serving
-    request = TextToSpeechRequest(
-        model="chatterbox",
-        input="Hello world",
-        mode="single_speaker_tts",
-    )
+    request = TextToSpeechRequest(model="chatterbox", input="Hello world", mode="single_speaker_tts")
     response = await serving_tts.create_text_to_speech(request, mock_raw_request)
     assert response is not None
     assert hasattr(response, "data")
@@ -116,10 +115,7 @@ async def test_chatterbox_tts_voice_cloning_multistep(mock_chatterbox_serving):
 async def test_chatterbox_embed_standalone(mock_chatterbox_serving):
     """Standalone embedding request routes to ChatterboxEmbedding executor."""
     _, serving_embed, _ = mock_chatterbox_serving
-    request = EmbedSpeakerRequest(
-        model="chatterbox",
-        input_audio=base64.b64encode(b"fake_audio_wav").decode(),
-    )
+    request = EmbedSpeakerRequest(model="chatterbox", input_audio=base64.b64encode(b"fake_audio_wav").decode())
     response = await serving_embed.create_voice_embedding(request, mock_raw_request)
     assert response is not None
     assert hasattr(response, "data")
@@ -132,10 +128,7 @@ async def test_chatterbox_embed_fallback(mock_chatterbox_serving):
     # This test verifies the embed endpoint can handle requests
     # The fallback behavior is tested at the unit level
     _, serving_embed, _ = mock_chatterbox_serving
-    request = EmbedSpeakerRequest(
-        model="chatterbox",
-        input_audio=base64.b64encode(b"fake_audio_wav").decode(),
-    )
+    request = EmbedSpeakerRequest(model="chatterbox", input_audio=base64.b64encode(b"fake_audio_wav").decode())
     response = await serving_embed.create_voice_embedding(request, mock_raw_request)
     assert response is not None
 

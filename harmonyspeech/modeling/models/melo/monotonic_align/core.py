@@ -16,12 +16,7 @@ def maximum_path(neg_cent, mask):
 
 
 @numba.jit(
-    numba.void(
-        numba.int32[:, :, ::1],
-        numba.float32[:, :, ::1],
-        numba.int32[::1],
-        numba.int32[::1],
-    ),
+    numba.void(numba.int32[:, :, ::1], numba.float32[:, :, ::1], numba.int32[::1], numba.int32[::1]),
     nopython=True,
     nogil=True,
 )
@@ -54,7 +49,5 @@ def maximum_path_jit(paths, values, t_ys, t_xs):
 
         for y in range(t_y - 1, -1, -1):
             path[y, index] = 1
-            if index != 0 and (
-                index == y or value[y - 1, index] < value[y - 1, index - 1]
-            ):
+            if index != 0 and (index == y or value[y - 1, index] < value[y - 1, index - 1]):
                 index = index - 1

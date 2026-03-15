@@ -185,8 +185,11 @@ def text_normalize(text):
     text = expand_abbreviations(text)
     return text
 
-model_id = 'bert-base-uncased'
+
+model_id = "bert-base-uncased"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+
 def g2p_old(text):
     tokenized = tokenizer.tokenize(text)
     # import pdb; pdb.set_trace()
@@ -214,6 +217,7 @@ def g2p_old(text):
     phones = [post_replace_ph(i) for i in phones]
     return phones, tones, word2ph
 
+
 def g2p(text, pad_start_end=True, tokenized=None):
     if tokenized is None:
         tokenized = tokenizer.tokenize(text)
@@ -225,7 +229,7 @@ def g2p(text, pad_start_end=True, tokenized=None):
             ph_groups.append([t])
         else:
             ph_groups[-1].append(t.replace("#", ""))
-    
+
     phones = []
     tones = []
     word2ph = []
@@ -259,8 +263,10 @@ def g2p(text, pad_start_end=True, tokenized=None):
         word2ph = [1] + word2ph + [1]
     return phones, tones, word2ph
 
+
 def get_bert_feature(text, word2ph, device=None):
     return english_bert.get_bert_feature(text, word2ph, device=device)
+
 
 # if __name__ == "__main__":
 #     # print(get_dict())
@@ -273,9 +279,9 @@ def get_bert_feature(text, word2ph, device=None):
 #
 #     print(phones, tones, word2ph, bert.shape)
 
-    # all_phones = set()
-    # for k, syllables in eng_dict.items():
-    #     for group in syllables:
-    #         for ph in group:
-    #             all_phones.add(ph)
-    # print(all_phones)
+# all_phones = set()
+# for k, syllables in eng_dict.items():
+#     for group in syllables:
+#         for ph in group:
+#             all_phones.add(ph)
+# print(all_phones)

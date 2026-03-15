@@ -6,6 +6,7 @@ to the engine and back, covering:
 - Voice cloning (full 3-stage toolchain: embed -> synthesize -> tone transfer)
 - Individual stage access: synthesize-only, tone-transfer-only, embed-only
 """
+
 import asyncio
 
 import pytest
@@ -32,11 +33,7 @@ def test_openvoice_v1_en_single_speaker(openvoice_v1_en_engine, mock_raw_request
     """OpenVoice V1 EN: single-speaker TTS through full engine stack."""
     engine, serving_tts, serving_embed, serving_vc = openvoice_v1_en_engine
     request = TextToSpeechRequest(
-        model="ov1-synthesizer-en",
-        input=TEXT_INPUT,
-        mode="single_speaker_tts",
-        language="EN",
-        voice="default",
+        model="ov1-synthesizer-en", input=TEXT_INPUT, mode="single_speaker_tts", language="EN", voice="default"
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Got: {response}"
@@ -69,11 +66,7 @@ def test_openvoice_v1_synthesize_stage(openvoice_v1_en_engine, mock_raw_request)
     """OpenVoice V1 synthesize stage only: text -> audio via direct synthesizer model."""
     engine, serving_tts, serving_embed, serving_vc = openvoice_v1_en_engine
     request = TextToSpeechRequest(
-        model="ov1-synthesizer-en",
-        input=TEXT_INPUT,
-        mode="single_speaker_tts",
-        language="EN",
-        voice="default",
+        model="ov1-synthesizer-en", input=TEXT_INPUT, mode="single_speaker_tts", language="EN", voice="default"
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Got: {response}"
@@ -85,35 +78,29 @@ def test_openvoice_v1_synthesize_stage(openvoice_v1_en_engine, mock_raw_request)
 @pytest.mark.slow
 def test_openvoice_v1_tone_transfer_stage(openvoice_v1_en_engine, mock_raw_request):
     """OpenVoice V1 tone transfer stage: source_audio + target_embedding -> converted audio.
-    
+
     Uses the openvoice_v1 toolchain name with the voice conversion endpoint.
     """
     engine, serving_tts, serving_embed, serving_vc = openvoice_v1_en_engine
-    
+
     # Step 1: get embedding using toolchain name with embed endpoint
     embed_request = EmbedSpeakerRequest(model="openvoice_v1", input_audio=REFERENCE_AUDIO)
     embed_response = asyncio.run(serving_embed.create_voice_embedding(embed_request, mock_raw_request))
     assert isinstance(embed_response, EmbedSpeakerResponse), f"Embed failed: {embed_response}"
     assert embed_response.data is not None
     assert len(embed_response.data) > 0
-    
+
     # Step 2: synthesize some audio to use as source
     tts_request = TextToSpeechRequest(
-        model="ov1-synthesizer-en",
-        input=TEXT_INPUT,
-        mode="single_speaker_tts",
-        language="EN",
-        voice="default"
+        model="ov1-synthesizer-en", input=TEXT_INPUT, mode="single_speaker_tts", language="EN", voice="default"
     )
     tts_response = asyncio.run(serving_tts.create_text_to_speech(tts_request, mock_raw_request))
     assert isinstance(tts_response, TextToSpeechResponse), f"TTS failed: {tts_response}"
     assert tts_response.data is not None
-    
+
     # Step 3: tone transfer using toolchain name with VC endpoint
     vc_request = VoiceConversionRequest(
-        model="openvoice_v1",
-        source_audio=tts_response.data,
-        target_embedding=embed_response.data,
+        model="openvoice_v1", source_audio=tts_response.data, target_embedding=embed_response.data
     )
     vc_response = asyncio.run(serving_vc.convert_voice(vc_request, mock_raw_request))
     assert isinstance(vc_response, VoiceConversionResponse), f"Got: {vc_response}"
@@ -125,7 +112,7 @@ def test_openvoice_v1_tone_transfer_stage(openvoice_v1_en_engine, mock_raw_reque
 @pytest.mark.slow
 def test_openvoice_v1_embed_stage(openvoice_v1_en_engine, mock_raw_request):
     """OpenVoice V1 speaker embedding stage: audio -> speaker embedding.
-    
+
     Uses the openvoice_v1 toolchain name with the embedding endpoint.
     """
     engine, serving_tts, serving_embed, serving_vc = openvoice_v1_en_engine

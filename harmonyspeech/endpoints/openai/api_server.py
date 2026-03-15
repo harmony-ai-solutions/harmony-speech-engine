@@ -79,6 +79,7 @@ async def lifespan(app: fastapi.FastAPI):
 
     yield
 
+
 # Add prometheus asgi middleware to route /metrics requests
 metrics_app = make_asgi_app()
 router.mount("/metrics", metrics_app)
@@ -91,7 +92,7 @@ async def health() -> JSONResponse:
         "text_to_speech": "unknown",
         "speech_to_text": "unknown",
         "voice_conversion": "unknown",
-        "voice_embedding": "unknown"
+        "voice_embedding": "unknown",
     }
 
     status_code = http.HTTPStatus.OK
@@ -122,7 +123,7 @@ async def health() -> JSONResponse:
     except Exception as e:
         health_status["voice_embedding"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
-        
+
     try:
         await openai_serving_vad.engine.check_health()
         health_status["voice_activity_detection"] = "healthy"
@@ -142,11 +143,7 @@ async def show_version(x_api_key: Optional[str] = Header(None)):
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createSpeech
 @router.post("/v1/audio/speech", response_model=TextToSpeechResponse)
-async def create_speech(
-    request: TextToSpeechRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
-):
+async def create_speech(request: TextToSpeechRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
     """Generate speech Audio from text."""
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -158,20 +155,14 @@ async def create_speech(
 
 
 @router.get("/v1/audio/speech/models", response_model=ModelList)
-async def show_available_speech_models(
-    x_api_key: Optional[str] = Header(None)
-):
+async def show_available_speech_models(x_api_key: Optional[str] = Header(None)):
     """Show available speech models."""
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
 
 
 @router.post("/v1/embed/speaker", response_model=EmbedSpeakerResponse)
-async def create_embedding(
-    request: EmbedSpeakerRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
-):
+async def create_embedding(request: EmbedSpeakerRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
     """Create a speaker embedding."""
     generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -192,9 +183,7 @@ async def show_available_embedding_models(x_api_key: Optional[str] = Header(None
 # Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
 @router.post("/v1/audio/transcriptions", response_model=SpeechToTextResponse)
 async def create_transcription(
-    request: SpeechTranscribeRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
+    request: SpeechTranscribeRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)
 ):
     """Create a transcription from audio."""
     generator = await openai_serving_stt.create_transcription(request, raw_request)
@@ -214,11 +203,7 @@ async def show_available_transcription_models(x_api_key: Optional[str] = Header(
 
 
 @router.post("/v1/voice/convert", response_model=VoiceConversionResponse)
-async def convert_voice(
-    request: VoiceConversionRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
-):
+async def convert_voice(request: VoiceConversionRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
     """Convert the voice in an audio file or stream to a desired target voice."""
     generator = await openai_serving_vc.convert_voice(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -238,9 +223,7 @@ async def show_available_voice_conversion_models(x_api_key: Optional[str] = Head
 
 @router.post("/v1/audio/vad", response_model=DetectVoiceActivityResponse)
 async def create_vad(
-    request: DetectVoiceActivityRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
+    request: DetectVoiceActivityRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)
 ):
     """Create a vad from audio."""
     generator = await openai_serving_vad.check_voice_activity(request, raw_request)
@@ -260,11 +243,7 @@ async def show_available_vad_models(x_api_key: Optional[str] = Header(None)):
 
 
 @router.post("/v1/audio/convert", response_model=AudioConversionResponse)
-async def convert_audio(
-    request: AudioConversionRequest,
-    raw_request: Request,
-    x_api_key: Optional[str] = Header(None)
-):
+async def convert_audio(request: AudioConversionRequest, raw_request: Request, x_api_key: Optional[str] = Header(None)):
     """Create a vad from audio."""
     generator = await openai_serving_ac.convert_audio(request, raw_request)
     if isinstance(generator, ErrorResponse):
@@ -286,16 +265,14 @@ async def show_available_audio_conversion_models(x_api_key: Optional[str] = Head
 # Use separate thread to not interfere with request processing
 def register_event(api_key, event_name, client_ip):
     register_thread = Thread(
-        target=ApiKeyCacheManager.register_rate_limiting_event,
-        args=(api_key, SERVICE_NAME, event_name, client_ip))
+        target=ApiKeyCacheManager.register_rate_limiting_event, args=(api_key, SERVICE_NAME, event_name, client_ip)
+    )
     register_thread.start()
 
 
 def build_app(args):
     app = fastapi.FastAPI(
-        title="Harmony Speech Engine API",
-        description="API for the Harmony Speech Engine.",
-        lifespan=lifespan
+        title="Harmony Speech Engine API", description="API for the Harmony Speech Engine.", lifespan=lifespan
     )
     app.include_router(router)
     app.root_path = args.root_path
@@ -325,22 +302,18 @@ def build_app(args):
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_, exc):
         err = openai_serving_tts.create_error_response(message=str(exc))
-        return JSONResponse(err.model_dump(),
-                            status_code=HTTPStatus.BAD_REQUEST)
+        return JSONResponse(err.model_dump(), status_code=HTTPStatus.BAD_REQUEST)
 
     if token := os.environ.get("HARMONYSPEECH_API_KEY") or args.api_keys:
         admin_key = os.environ.get("HARMONYSPEECH_ADMIN_KEY") or args.admin_key
 
         if admin_key is None:
-            logger.warning("Admin key not provided. Admin operations will "
-                           "be disabled.")
+            logger.warning("Admin key not provided. Admin operations will be disabled.")
 
         @app.middleware("http")
         async def authentication(request: Request, call_next):
             excluded_paths = ["/api"]
-            if any(
-                    request.url.path.startswith(path)
-                    for path in excluded_paths):
+            if any(request.url.path.startswith(path) for path in excluded_paths):
                 return await call_next(request)
             if not request.url.path.startswith("/v1"):
                 return await call_next(request)
@@ -353,11 +326,13 @@ def build_app(args):
                 return await call_next(request)
 
             auth_header = request.headers.get("Authorization")
-            api_key_header = request.headers.get('Api-Key')
+            api_key_header = request.headers.get("Api-Key")
 
             # If Harmony Auth Key is set, this takes precedence
             if api_key_header and api_key_header != token:
-                harmony_auth_valid, error = ApiKeyCacheManager.check_request_allowed_by_rate_limit(api_key=api_key_header, service=SERVICE_NAME)
+                harmony_auth_valid, error = ApiKeyCacheManager.check_request_allowed_by_rate_limit(
+                    api_key=api_key_header, service=SERVICE_NAME
+                )
                 if not harmony_auth_valid:
                     return JSONResponse(content={"error": error}, status_code=401)
 
@@ -383,8 +358,7 @@ def build_app(args):
         elif inspect.iscoroutinefunction(imported):
             app.middleware("http")(imported)
         else:
-            raise ValueError(f"Invalid middleware {middleware}. "
-                             f"Must be a function or a class.")
+            raise ValueError(f"Invalid middleware {middleware}. Must be a function or a class.")
 
     return app
 
@@ -414,40 +388,36 @@ def run_server(args):
     engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config)
 
     openai_serving_tts = OpenAIServingTextToSpeech(
-        engine,
-        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
     )
     openai_serving_embedding = OpenAIServingVoiceEmbedding(
-        engine,
-        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
     )
     openai_serving_stt = OpenAIServingSpeechToText(
-        engine,
-        OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
     )
     openai_serving_vc = OpenAIServingVoiceConversion(
-        engine,
-        OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
     )
     openai_serving_vad = OpenAIServingVoiceActivityDetection(
-        engine,
-        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
     )
     openai_serving_ac = OpenAIServingAudioConversion(
-        engine,
-        OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
 
     try:
-        uvicorn.run(app,
-                    host=args.host,
-                    port=args.port,
-                    log_level="info",
-                    timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
-                    ssl_keyfile=args.ssl_keyfile,
-                    ssl_certfile=args.ssl_certfile,
-                    log_config=UVICORN_LOG_CONFIG)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+            ssl_keyfile=args.ssl_keyfile,
+            ssl_certfile=args.ssl_certfile,
+            log_config=UVICORN_LOG_CONFIG,
+        )
     except KeyboardInterrupt:
         logger.info("API server stopped by user. Exiting.")
     except asyncio.exceptions.CancelledError:

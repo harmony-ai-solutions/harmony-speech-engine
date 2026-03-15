@@ -379,9 +379,11 @@ def text2kata(text: str) -> str:
         word, yomi = parts[0], parts[1]
         if yomi:
             try:
-                res.append(yomi.split(',')[6])
+                res.append(yomi.split(",")[6])
             except:
-                import pdb; pdb.set_trace()
+                import pdb
+
+                pdb.set_trace()
         else:
             if word in _SYMBOL_TOKENS:
                 res.append(word)
@@ -508,18 +510,7 @@ def is_japanese_character(char):
     return False
 
 
-rep_map = {
-    "：": ",",
-    "；": ",",
-    "，": ",",
-    "。": ".",
-    "！": "!",
-    "？": "?",
-    "\n": ".",
-    "·": ",",
-    "、": ",",
-    "...": "…",
-}
+rep_map = {"：": ",", "；": ",", "，": ",", "。": ".", "！": "!", "？": "?", "\n": ".", "·": ",", "、": ",", "...": "…"}
 
 
 def replace_punctuation(text):
@@ -528,11 +519,7 @@ def replace_punctuation(text):
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
 
     replaced_text = re.sub(
-        r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF"
-        + "".join(punctuation)
-        + r"]+",
-        "",
-        replaced_text,
+        r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF" + "".join(punctuation) + r"]+", "", replaced_text
     )
 
     return replaced_text
@@ -542,6 +529,7 @@ def replace_punctuation(text):
 # https://youtrack.jetbrains.com/issue/PY-65289/Pytestddtrace-crashes-with-python-3.12-and-2023.3
 
 from pykakasi import kakasi
+
 # Initialize kakasi object
 kakasi = kakasi()
 # Set options for converting Chinese characters to Katakana
@@ -550,12 +538,13 @@ kakasi.setMode("H", "K")  # Hiragana to Katakana
 # Convert Chinese characters to Katakana
 conv = kakasi.getConverter()
 
+
 def text_normalize(text):
     res = unicodedata.normalize("NFKC", text)
     res = japanese_convert_numbers_to_words(res)
     res = "".join([i for i in res if is_japanese_character(i)])
     res = replace_punctuation(res)
-    res = conv.do(res) # <------------------------------------------------------ THIS AS WELL (PY-65289)
+    res = conv.do(res)  # <------------------------------------------------------ THIS AS WELL (PY-65289)
     return res
 
 
@@ -568,11 +557,12 @@ def distribute_phone(n_phone, n_word):
     return phones_per_word
 
 
-
 # tokenizer = AutoTokenizer.from_pretrained('cl-tohoku/bert-base-japanese-v3')
 
-model_id = 'tohoku-nlp/bert-base-japanese-v3'
+model_id = "tohoku-nlp/bert-base-japanese-v3"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+
 def g2p(norm_text):
 
     tokenized = tokenizer.tokenize(norm_text)
@@ -588,8 +578,8 @@ def g2p(norm_text):
         text = ""
         for ch in group:
             text += ch
-        if text == '[UNK]':
-            phs += ['_']
+        if text == "[UNK]":
+            phs += ["_"]
             word2ph += [1]
             continue
         elif text in punctuation:
@@ -615,6 +605,7 @@ def g2p(norm_text):
     word2ph = [1] + word2ph + [1]
     assert len(word2ph) == len(tokenized) + 2
     return phones, tones, word2ph
+
 
 def get_bert_feature(text, word2ph, device):
     from harmonyspeech.modeling.models.melo.text import japanese_bert

@@ -31,7 +31,6 @@ class RAdam(Optimizer):
             loss = closure()
 
         for group in self.param_groups:
-
             for p in group["params"]:
                 if p.grad is None:
                     continue
@@ -78,9 +77,7 @@ class RAdam(Optimizer):
                             / N_sma
                             * N_sma_max
                             / (N_sma_max - 2)
-                        ) / (
-                            1 - beta1 ** state["step"]
-                        )  # NOQA
+                        ) / (1 - beta1 ** state["step"])  # NOQA
                     else:
                         step_size = 1.0 / (1 - beta1 ** state["step"])
                     buffered[2] = step_size

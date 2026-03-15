@@ -6,12 +6,11 @@ from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
-from harmonyspeech.common.utils import (get_distributed_init_method, get_ip, get_open_port, make_async)
+from harmonyspeech.common.utils import get_distributed_init_method, get_ip, get_open_port, make_async
 from harmonyspeech.executor.executor_base import ExecutorBase
 
 
 class CPUExecutor(ExecutorBase):
-
     def _init_executor(self) -> None:
         assert self.device_config.device_type == "cpu"
         self.model_config = _verify_and_get_model_config(self.model_config)
@@ -34,22 +33,12 @@ class CPUExecutor(ExecutorBase):
         self.driver_worker.init_device()
         self.driver_worker.load_model()
 
-    def execute_model(
-        self,
-        requests_to_batch: List[EngineRequest]
-    ) -> List[ExecutorResult]:
-        output = self.driver_worker.execute_model(
-            requests_to_batch=requests_to_batch
-        )
+    def execute_model(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+        output = self.driver_worker.execute_model(requests_to_batch=requests_to_batch)
         return output
 
-    async def execute_model_async(
-        self,
-        requests_to_batch: List[EngineRequest],
-    ) -> List[ExecutorResult]:
-        output = await make_async(self.driver_worker.execute_model)(
-            requests_to_batch=requests_to_batch,
-        )
+    async def execute_model_async(self, requests_to_batch: List[EngineRequest]) -> List[ExecutorResult]:
+        output = await make_async(self.driver_worker.execute_model)(requests_to_batch=requests_to_batch)
         return output
 
     def check_health(self) -> None:
@@ -63,8 +52,6 @@ def _verify_and_get_model_config(config: ModelConfig) -> ModelConfig:
         logger.warning("float16 is not supported on CPU, casting to bfloat16.")
         config.dtype = torch.bfloat16
     if not config.enforce_eager:
-        logger.warning(
-            "CUDA graph is not supported on CPU, fallback to the eager "
-            "mode.")
+        logger.warning("CUDA graph is not supported on CPU, fallback to the eager mode.")
         config.enforce_eager = True
     return config

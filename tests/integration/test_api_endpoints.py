@@ -1,4 +1,5 @@
 """Integration tests for OpenAI-compatible API endpoints."""
+
 import pytest
 
 
@@ -38,7 +39,7 @@ def test_tts_models_list(client):
 
 def test_tts_invalid_request(client):
     """Test POST /v1/audio/speech with invalid body (missing required field) returns 422.
-    
+
     Note: With mocked serving layer, validation may be bypassed. This test verifies
     the endpoint responds - actual validation would return 422 in production.
     """
@@ -50,10 +51,7 @@ def test_tts_invalid_request(client):
 
 def test_tts_request_cycle(client):
     """Test POST /v1/audio/speech with valid body returns 200 with base64 audio."""
-    response = client.post(
-        "/v1/audio/speech",
-        json={"model": "test-tts-model", "input": "Hello world"}
-    )
+    response = client.post("/v1/audio/speech", json={"model": "test-tts-model", "input": "Hello world"})
     assert response.status_code == 200
     data = response.json()
     assert "audio" in data or "data" in data

@@ -12,11 +12,7 @@ import torch.nn.functional as F
 class GeneratorAdversarialLoss(torch.nn.Module):
     """Generator adversarial loss module."""
 
-    def __init__(
-        self,
-        average_by_discriminators=True,
-        loss_type="mse",
-    ):
+    def __init__(self, average_by_discriminators=True, loss_type="mse"):
         """Initialize GeneratorAversarialLoss module."""
         super().__init__()
         self.average_by_discriminators = average_by_discriminators
@@ -61,11 +57,7 @@ class GeneratorAdversarialLoss(torch.nn.Module):
 class DiscriminatorAdversarialLoss(torch.nn.Module):
     """Discriminator adversarial loss module."""
 
-    def __init__(
-        self,
-        average_by_discriminators=True,
-        loss_type="mse",
-    ):
+    def __init__(self, average_by_discriminators=True, loss_type="mse"):
         """Initialize DiscriminatorAversarialLoss module."""
         super().__init__()
         self.average_by_discriminators = average_by_discriminators

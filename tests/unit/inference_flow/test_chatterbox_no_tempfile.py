@@ -3,6 +3,7 @@
 REQ-PERF-01: No filesystem I/O (tempfiles, open()) during Chatterbox inference.
 All audio processing uses in-memory BytesIO objects exclusively.
 """
+
 import io
 import base64
 from unittest.mock import patch, MagicMock
@@ -14,6 +15,7 @@ import torch
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_chatterbox_model():
@@ -78,6 +80,7 @@ def model_runner_with_embedding_model(mock_chatterbox_embedding_model):
 def _make_tts_request(text="Hello world"):
     """Create a minimal fake TTS batch entry."""
     from harmonyspeech.common.inputs import TextToSpeechRequestInput
+
     req = MagicMock()
     req.request_data = MagicMock(spec=TextToSpeechRequestInput)
     req.request_id = "test-tts-001"
@@ -87,6 +90,7 @@ def _make_tts_request(text="Hello world"):
 def _make_embed_request():
     """Create a minimal fake embedding batch entry."""
     from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
+
     req = MagicMock()
     req.request_data = MagicMock(spec=SpeechEmbeddingRequestInput)
     req.request_id = "test-emb-001"
@@ -97,17 +101,19 @@ def _make_embed_request():
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestChatterboxNoTempfile:
 
+class TestChatterboxNoTempfile:
     def test_execute_chatterbox_tts_no_open_call(self, model_runner_with_tts_model):
         """_execute_chatterbox_tts() must not call builtins.open() for file I/O."""
         runner = model_runner_with_tts_model
         inputs = [("Hello world", None, 0.5, 0.5, 0.8, 1.0, 0)]
         requests = [_make_tts_request()]
 
-        with patch("builtins.open") as mock_open, \
-             patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-             patch("tempfile.mkstemp") as mock_mkstemp:
+        with (
+            patch("builtins.open") as mock_open,
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkstemp") as mock_mkstemp,
+        ):
             try:
                 runner._execute_chatterbox_tts(inputs, requests)
             except Exception:
@@ -123,9 +129,11 @@ class TestChatterboxNoTempfile:
         inputs = [fake_audio]
         requests = [_make_embed_request()]
 
-        with patch("builtins.open") as mock_open, \
-             patch("tempfile.NamedTemporaryFile") as mock_tmp, \
-             patch("tempfile.mkstemp") as mock_mkstemp:
+        with (
+            patch("builtins.open") as mock_open,
+            patch("tempfile.NamedTemporaryFile") as mock_tmp,
+            patch("tempfile.mkstemp") as mock_mkstemp,
+        ):
             try:
                 runner._execute_chatterbox_embedding(inputs, requests)
             except Exception:

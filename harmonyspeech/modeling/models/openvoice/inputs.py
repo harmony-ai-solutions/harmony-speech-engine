@@ -6,7 +6,7 @@ from harmonyspeech.modeling.models.openvoice.text import text_to_sequence
 from harmonyspeech.modeling.models.openvoice.utils import split_sentence
 
 
-_supported_languages = ['EN', 'ZH']
+_supported_languages = ["EN", "ZH"]
 
 
 def split_sentences_into_pieces(text, language_str):
@@ -22,7 +22,7 @@ def get_text(text, hf_config, is_symbol):
     return text_norm
 
 
-def normalize_text_inputs(text, hf_config, language='EN'):
+def normalize_text_inputs(text, hf_config, language="EN"):
     global _supported_languages
     assert language in _supported_languages, f"language {language} is not supported"
 
@@ -30,8 +30,8 @@ def normalize_text_inputs(text, hf_config, language='EN'):
     inputs_list = []
 
     for t in texts:
-        t = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)
-        t = f'[{language}]{t}[{language}]'
+        t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)
+        t = f"[{language}]{t}[{language}]"
         text_normalized = get_text(t, hf_config, False)
         inputs_list.append(text_normalized)
 

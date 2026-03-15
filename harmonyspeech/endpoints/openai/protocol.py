@@ -4,7 +4,7 @@
 import time
 from typing import Dict, Literal, Optional, List, Self
 
-from pydantic import (BaseModel, Field)
+from pydantic import BaseModel, Field
 
 from harmonyspeech.common.utils import random_uuid
 
@@ -57,43 +57,35 @@ class GenerationOptions(BaseModel):
     # Chatterbox-specific fields
     exaggeration: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Multilingual) Emotion exaggeration factor. "
-                    "Higher values amplify emotional expressiveness. Default: 0.5"
+        description="(Chatterbox TTS/Multilingual) Emotion exaggeration factor. Higher values amplify emotional expressiveness. Default: 0.5",
     )
     cfg_weight: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Multilingual) Classifier-free guidance weight. "
-                    "Controls how closely the model follows the voice prompt. Default: 0.5"
+        description="(Chatterbox TTS/Multilingual) Classifier-free guidance weight. Controls how closely the model follows the voice prompt. Default: 0.5",
     )
     temperature: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Turbo/Multilingual) Sampling temperature. "
-                    "Higher values increase randomness. Default: 0.8"
+        description="(Chatterbox TTS/Turbo/Multilingual) Sampling temperature. Higher values increase randomness. Default: 0.8",
     )
     repetition_penalty: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Turbo/Multilingual) Repetition penalty applied during sampling. "
-                    "Values > 1.0 reduce repetition. Default: 1.2"
+        description="(Chatterbox TTS/Turbo/Multilingual) Repetition penalty applied during sampling. Values > 1.0 reduce repetition. Default: 1.2",
     )
     top_p: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Turbo/Multilingual) Top-p (nucleus) sampling probability. "
-                    "Default TTS: 1.0, Turbo: 0.95"
+        description="(Chatterbox TTS/Turbo/Multilingual) Top-p (nucleus) sampling probability. Default TTS: 1.0, Turbo: 0.95",
     )
     min_p: Optional[float] = Field(
         None,
-        description="(Chatterbox TTS/Multilingual only) Minimum probability threshold for sampling. "
-                    "Default: 0.05. Not supported by Turbo variant."
+        description="(Chatterbox TTS/Multilingual only) Minimum probability threshold for sampling. Default: 0.05. Not supported by Turbo variant.",
     )
     top_k: Optional[int] = Field(
         None,
-        description="(Chatterbox Turbo only) Top-k sampling - number of candidates kept. "
-                    "Default: 1000. Not supported by standard TTS or Multilingual variants."
+        description="(Chatterbox Turbo only) Top-k sampling - number of candidates kept. Default: 1000. Not supported by standard TTS or Multilingual variants.",
     )
     norm_loudness: Optional[bool] = Field(
         None,
-        description="(Chatterbox Turbo only) Apply pyloudnorm loudness normalization to output. "
-                    "Default: True. Not supported by standard TTS or Multilingual variants."
+        description="(Chatterbox Turbo only) Apply pyloudnorm loudness normalization to output. Default: True. Not supported by standard TTS or Multilingual variants.",
     )
 
 
@@ -113,14 +105,13 @@ class AudioConversionRequest(BaseRequest):
     Used to convert the style or content of an audio in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
+
     source_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
     output_options: Optional[AudioOutputOptions] = Field(
-        default=None,
-        description="Options for returning the generated audio, see documentation for possible values"
+        default=None, description="Options for returning the generated audio, see documentation for possible values"
     )
     pre_processing_filters: Optional[List[Self]] = Field(
-        default_factory=list,
-        description="List of Preprocessing filters to apply to the generated audio."
+        default_factory=list, description="List of Preprocessing filters to apply to the generated audio."
     )
 
 
@@ -130,18 +121,17 @@ class VoiceConversionRequest(AudioConversionRequest):
     Used to convert the tone or nature of a voice in a specific way.
     Depending on model selection, the caller may need to provide additional params.
     """
+
     target_audio: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for converting the source, encoded in base64"
+        description="Binary audio data of the reference speaker for converting the source, encoded in base64",
     )
     target_embedding: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for converting the source, encoded in base64. "
-                    "Faster than providing a target audio file"
+        description="Binary embedding of the reference speaker for converting the source, encoded in base64. Faster than providing a target audio file",
     )
     generation_options: Optional[GenerationOptions] = Field(
-        default=None,
-        description="Options for generating a speech request, see documentation for possible values"
+        default=None, description="Options for generating a speech request, see documentation for possible values"
     )
 
 
@@ -152,49 +142,43 @@ class TextToSpeechRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI TTS API; extended for Harmony Speech Engine features.
     """
+
     input: str = Field(default="", description="the text to synthesize")
     mode: str = Field(default="", description="the operation mode for the model to process the request")
     language: Optional[str] = Field(
         default=None,
-        description="language to synthesize. Only if the model supports language IDs. "
-                    "Please refer to the model's documentation for which values are availiable.")
+        description="language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable.",
+    )
     voice: Optional[str] = Field(
         default=None,
-        description="ID of the voice to synthesize. Only if the model supports voice IDs. "
-                    "Please refer to the model's documentation for which values are availiable."
+        description="ID of the voice to synthesize. Only if the model supports voice IDs. Please refer to the model's documentation for which values are availiable.",
     )
     input_audio: Optional[str] = Field(
         default=None,
-        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
     input_vad_mode: Optional[str] = Field(
         default=None,
-        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing"
+        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing",
     )
     input_vad_data: Optional[str] = Field(
-        default=None,
-        description="result data from VAD step to be processed in follow-up TTS or VC steps"
+        default=None, description="result data from VAD step to be processed in follow-up TTS or VC steps"
     )
     input_embedding: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
-                    "Faster than providing a target audio file"
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. Faster than providing a target audio file",
     )
     generation_options: Optional[GenerationOptions] = Field(
-        default=None,
-        description="Options for generating a speech request, see documentation for possible values"
+        default=None, description="Options for generating a speech request, see documentation for possible values"
     )
     output_options: Optional[AudioOutputOptions] = Field(
-        default=None,
-        description="Options for returning the generated audio, see documentation for possible values"
+        default=None, description="Options for returning the generated audio, see documentation for possible values"
     )
     pre_processing_filters: Optional[List[AudioConversionRequest]] = Field(
-        default_factory=list,
-        description="List of Preprocessing filters to apply to the generated audio."
+        default_factory=list, description="List of Preprocessing filters to apply to the generated audio."
     )
     post_generation_filters: Optional[List[AudioConversionRequest]] = Field(
-        default_factory=list,
-        description="List of Post-Generation filters to apply to the generated audio."
+        default_factory=list, description="List of Post-Generation filters to apply to the generated audio."
     )
 
 
@@ -209,6 +193,7 @@ class AudioDataResponse(BaseResponse):
     AudioDataResponse
     Result Audio Data
     """
+
     data: str = Field(default="", description="Audio Bytes in requested format of the initial request")
 
 
@@ -217,6 +202,7 @@ class TextToSpeechResponse(AudioDataResponse):
     TextToSpeechResponse
     Extends AudioDataResponse with a request specific ID
     """
+
     id: str = Field(default_factory=lambda: f"tts-{random_uuid()}")
 
 
@@ -225,6 +211,7 @@ class VoiceConversionResponse(AudioDataResponse):
     VoiceConversionResponse
     Extends AudioDataResponse with a request specific ID
     """
+
     id: str = Field(default_factory=lambda: f"vc-{random_uuid()}")
 
 
@@ -233,6 +220,7 @@ class AudioConversionResponse(AudioDataResponse):
     AudioConversionResponse
     Extends AudioDataResponse with a request specific ID
     """
+
     id: str = Field(default_factory=lambda: f"ac-{random_uuid()}")
 
 
@@ -243,17 +231,16 @@ class SpeechTranscribeRequest(BaseRequest):
     Depending on model selection, the caller may need to provide additional params.
     Based on OpenAI STT API; extended for Harmony Speech Engine features.
     """
+
     input_audio: str = Field(
         default="",
-        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
     get_language: Optional[bool] = Field(
-        default=False,
-        description="whether to return the source language tag. Check model description if supported."
+        default=False, description="whether to return the source language tag. Check model description if supported."
     )
     get_timestamps: Optional[bool] = Field(
-        default=False,
-        description="whether to return the word timestamps. Check model description if supported."
+        default=False, description="whether to return the word timestamps. Check model description if supported."
     )
 
 
@@ -262,6 +249,7 @@ class SpeechToTextResponse(BaseResponse):
     SpeechToTextResponse
     Result text determined from audio and optional language tag
     """
+
     id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
     text: str = Field(default="", description="text retrieved from the input audio")
     language: Optional[str] = Field(default=None, description="tag of the detected language")
@@ -274,34 +262,29 @@ class DetectVoiceActivityRequest(BaseRequest):
     Used to check for human speech in a provided audio file
     Depending on model selection, the caller may need to provide additional params.
     """
+
     input_audio: str = Field(
         default="",
-        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64"
+        description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
     get_timestamps: Optional[bool] = Field(
-        default=False,
-        description="whether to return the word timestamps. Check model description if supported."
+        default=False, description="whether to return the word timestamps. Check model description if supported."
     )
     # Dynamic Silero VAD parameters
     threshold: Optional[float] = Field(
-        default=0.5,
-        description="Speech threshold. Probabilities above this value are considered as speech."
+        default=0.5, description="Speech threshold. Probabilities above this value are considered as speech."
     )
     min_speech_duration_ms: Optional[int] = Field(
-        default=250,
-        description="Final speech chunks shorter than this duration (in ms) are discarded."
+        default=250, description="Final speech chunks shorter than this duration (in ms) are discarded."
     )
     min_silence_duration_ms: Optional[int] = Field(
-        default=100,
-        description="Minimum silence duration (in ms) before separating speech chunks."
+        default=100, description="Minimum silence duration (in ms) before separating speech chunks."
     )
     speech_pad_ms: Optional[int] = Field(
-        default=30,
-        description="Speech chunks are padded by this duration (in ms) on each side."
+        default=30, description="Speech chunks are padded by this duration (in ms) on each side."
     )
     return_seconds: Optional[bool] = Field(
-        default=False,
-        description="Whether to return timestamps in seconds (default: samples)."
+        default=False, description="Whether to return timestamps in seconds (default: samples)."
     )
 
 
@@ -310,6 +293,7 @@ class DetectVoiceActivityResponse(BaseResponse):
     DetectVoiceActivityResponse
     Result text determined from audio and optional language tag
     """
+
     id: str = Field(default_factory=lambda: f"stt-{random_uuid()}")
     speech_activity: bool = Field(default=False, description="whether speech activity was detected")
     timestamps: Optional[List[Dict]] = Field(default_factory=list, description="list of the detected timestamps")
@@ -322,6 +306,7 @@ class EmbedSpeakerRequest(BaseRequest):
     Voice Conversion functionality.
     Please refer to the documentation whether an embedding is compatible between different models.
     """
+
     input_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
 
 
@@ -330,10 +315,11 @@ class EmbedSpeakerResponse(BaseResponse):
     EmbedSpeakerResponse
     Result Speaker Embedding
     """
+
     id: str = Field(default_factory=lambda: f"embed-{random_uuid()}")
     data: str = Field(
         default="",
-        description="Speaker embedding data for the audio provided in the initial request, encoded in base64"
+        description="Speaker embedding data for the audio provided in the initial request, encoded in base64",
     )
 
 
@@ -342,24 +328,22 @@ class SynthesizeAudioRequest(BaseRequest):
     SynthesizeAudioRequest
     Used to run a synthesizer model for a provided input audio
     """
+
     input: str = Field(default="", description="the text to synthesize")
     language: str = Field(
         default="",
-        description="language to synthesize. Only if the model supports language IDs. "
-                    "Please refer to the model's documentation for which values are availiable.")
+        description="language to synthesize. Only if the model supports language IDs. Please refer to the model's documentation for which values are availiable.",
+    )
     voice: Optional[str] = Field(
         default=None,
-        description="ID of the voice to synthesize. Only if the model supports voice IDs. "
-                    "Please refer to the model's documentation for which values are availiable."
+        description="ID of the voice to synthesize. Only if the model supports voice IDs. Please refer to the model's documentation for which values are availiable.",
     )
     input_embedding: Optional[str] = Field(
         default=None,
-        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. "
-                    "Faster than providing a target audio file"
+        description="Binary embedding of the reference speaker for synthesizing the text, encoded in base64. Faster than providing a target audio file",
     )
     generation_options: Optional[GenerationOptions] = Field(
-        default=None,
-        description="Options for generating a speech request, see documentation for possible values"
+        default=None, description="Options for generating a speech request, see documentation for possible values"
     )
 
 
@@ -368,6 +352,7 @@ class SynthesizeAudioResponse(AudioDataResponse):
     SynthesizeAudioResponse
     Result Audio file after synthesis step
     """
+
     id: str = Field(default_factory=lambda: f"synthesis-{random_uuid()}")
 
 
@@ -376,6 +361,7 @@ class VocodeAudioRequest(BaseRequest):
     VocodeAudioRequest
     Used to run a vocoder model over a provided input audio
     """
+
     input_audio: str = Field(default="", description="Binary audio data to be processed, encoded in base64")
 
 
@@ -384,4 +370,5 @@ class VocodeAudioResponse(AudioDataResponse):
     VocodeAudioResponse
     Result Audio file after vocoding step
     """
+
     id: str = Field(default_factory=lambda: f"vocode-{random_uuid()}")

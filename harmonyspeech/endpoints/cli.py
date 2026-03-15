@@ -9,9 +9,8 @@ def main():
     subparsers = parser.add_subparsers()
 
     serve_parser = subparsers.add_parser(
-        "run",
-        help="Start the Harmony Speech Engine OpenAI Compatible API server",
-        usage="harmonyspeech run [options]")
+        "run", help="Start the Harmony Speech Engine OpenAI Compatible API server", usage="harmonyspeech run [options]"
+    )
     make_arg_parser(serve_parser)
     serve_parser.set_defaults(func=run_server)
 

@@ -15,6 +15,7 @@ Test audio samples (tests/test-data/samples/):
   jerry_seinfeld_prompt.wav — long voice prompt (~32 seconds); used where >= 5 seconds is required
                               (ChatterboxTurbo embedding, voice cloning reference)
 """
+
 import asyncio
 import base64
 
@@ -28,11 +29,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 )
 from tests.e2e.conftest import load_sample_audio_b64
 
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.slow,
-    pytest.mark.cuda,
-]
+pytestmark = [pytest.mark.e2e, pytest.mark.slow, pytest.mark.cuda]
 
 TEXT_INPUT = "Hello, world. This is a test of the Chatterbox voice cloning system."
 
@@ -45,6 +42,7 @@ SHORT_REFERENCE_AUDIO = load_sample_audio_b64("wanda4")
 # ChatterboxMultilingualTTS
 # ---------------------------------------------------------------------------
 
+
 def test_chatterbox_multilingual_tts_no_cloning_english(chatterbox_multilingual_engine, mock_raw_request):
     """Multilingual TTS in English without voice cloning: non-empty WAV.
 
@@ -54,10 +52,7 @@ def test_chatterbox_multilingual_tts_no_cloning_english(chatterbox_multilingual_
     """
     engine, serving_tts, _ = chatterbox_multilingual_engine
     request = TextToSpeechRequest(
-        model="chatterbox_multilingual",
-        input=TEXT_INPUT,
-        language="en",
-        mode="single_speaker_tts",
+        model="chatterbox_multilingual", input=TEXT_INPUT, language="en", mode="single_speaker_tts"
     )
     response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
     assert isinstance(response, TextToSpeechResponse), f"Got: {response}"
@@ -77,10 +72,7 @@ def test_chatterbox_multilingual_embedding_no_language_check(chatterbox_multilin
     so the short wanda4.wav sample is sufficient here.
     """
     engine, _, serving_embed = chatterbox_multilingual_engine
-    request = EmbedSpeakerRequest(
-        model="chatterbox_multilingual_embedding",
-        input_audio=SHORT_REFERENCE_AUDIO,
-    )
+    request = EmbedSpeakerRequest(model="chatterbox_multilingual_embedding", input_audio=SHORT_REFERENCE_AUDIO)
     response = asyncio.run(serving_embed.create_voice_embedding(request, mock_raw_request))
     assert isinstance(response, EmbedSpeakerResponse), f"Got: {response}"
     assert response.data
@@ -94,10 +86,7 @@ def test_chatterbox_multilingual_tts_with_precomputed_embedding(chatterbox_multi
     """
     engine, serving_tts, serving_embed = chatterbox_multilingual_engine
 
-    embed_request = EmbedSpeakerRequest(
-        model="chatterbox_multilingual_embedding",
-        input_audio=SHORT_REFERENCE_AUDIO,
-    )
+    embed_request = EmbedSpeakerRequest(model="chatterbox_multilingual_embedding", input_audio=SHORT_REFERENCE_AUDIO)
     embed_response = asyncio.run(serving_embed.create_voice_embedding(embed_request, mock_raw_request))
     assert isinstance(embed_response, EmbedSpeakerResponse), f"Embed step got: {embed_response}"
 

@@ -7,7 +7,7 @@ from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
 from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.request import (RequestStatus, RequestMetrics, EngineRequest)
+from harmonyspeech.common.request import RequestStatus, RequestMetrics, EngineRequest
 
 
 @dataclass
@@ -15,6 +15,7 @@ class SchedulingBudget:
     """The available slots for scheduling.
     Slots are being defined
     """
+
     request_per_model_budget: Dict[str, int]
     _num_per_model_requests: Dict[str, int]
 
@@ -48,6 +49,7 @@ class SchedulingBudget:
 @dataclass
 class SchedulerOutputs:
     """The scheduling decision made from a scheduler."""
+
     # Scheduled requests per model.
     scheduled_requests_per_model: Dict[str, List[EngineRequest]]
     # Sequence groups that are going to be ignored.
@@ -60,8 +62,8 @@ class SchedulerOutputs:
 
 @dataclass
 class SchedulerWaitingOutputs:
-    """The requests that are scheduled from a waiting queue.
-    """
+    """The requests that are scheduled from a waiting queue."""
+
     # Selected requests for processing
     requests: List[EngineRequest]
     # Ignored Requests
@@ -69,18 +71,11 @@ class SchedulerWaitingOutputs:
 
     @classmethod
     def create_empty(cls) -> "SchedulerWaitingOutputs":
-        return SchedulerWaitingOutputs(
-            requests=[],
-            ignored_requests=[],
-        )
+        return SchedulerWaitingOutputs(requests=[], ignored_requests=[])
 
 
 class Scheduler:
-
-    def __init__(
-        self,
-        model_configs: Optional[List[ModelConfig]]
-    ) -> None:
+    def __init__(self, model_configs: Optional[List[ModelConfig]]) -> None:
         self.model_configs = model_configs
 
         # Requests in the WAITING state.
@@ -140,9 +135,7 @@ class Scheduler:
         return len(self.waiting) + len(self.running)
 
     def _schedule_waiting_requests(
-        self,
-        waiting_queue: deque,
-        budget: SchedulingBudget,
+        self, waiting_queue: deque, budget: SchedulingBudget
     ) -> Tuple[deque, SchedulerWaitingOutputs]:
         """Schedule sequence groups that are in prefill stage.
 
@@ -196,22 +189,17 @@ class Scheduler:
             if model_name not in new_scheduled_for_models:
                 new_scheduled_for_models.append(model_name)
 
-        return waiting_queue, SchedulerWaitingOutputs(
-            requests=requests,
-            ignored_requests=ignored_requests)
+        return waiting_queue, SchedulerWaitingOutputs(requests=requests, ignored_requests=ignored_requests)
 
     def get_scheduling_budget(self) -> SchedulingBudget:
-        """ Calculate the overall scheduling Budget for requests per Model """
+        """Calculate the overall scheduling Budget for requests per Model"""
         budget_count = {}
         per_model_requests = {}
         for model_cfg in self.model_configs:
             budget_count[model_cfg.name] = model_cfg.max_batch_size
             per_model_requests[model_cfg.name] = 0
 
-        return SchedulingBudget(
-            request_per_model_budget=budget_count,
-            _num_per_model_requests=per_model_requests
-        )
+        return SchedulingBudget(request_per_model_budget=budget_count, _num_per_model_requests=per_model_requests)
 
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests."""
@@ -242,10 +230,7 @@ class Scheduler:
         # Update running requests.
         self.running.extend(ready.requests)
 
-        return SchedulerOutputs(
-            scheduled_requests_per_model=per_model_scheduled,
-            ignored_requests=[]
-        )
+        return SchedulerOutputs(scheduled_requests_per_model=per_model_scheduled, ignored_requests=[])
 
     def _schedule(self) -> SchedulerOutputs:
         """Schedule queued requests."""

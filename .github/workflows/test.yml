@@ -55,7 +55,7 @@ jobs:
           retention-days: 7
 
   lint:
-    name: Lint (black + flake8)
+    name: Lint (ruff)
     runs-on: ubuntu-latest
 
     steps:
@@ -75,18 +75,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-lint-pip-
 
-      - name: Install linting tools
+      - name: Install ruff
         run: |
           python -m pip install --upgrade pip
-          pip install black>=24.0.0 flake8>=7.0.0
+          pip install ruff>=0.8.0
 
-      - name: Check formatting with black
+      - name: Check formatting with ruff
         run: |
-          black --check --diff harmonyspeech/ tests/
+          ruff format --check --diff harmonyspeech/ tests/
 
-      - name: Check style with flake8
+      - name: Check linting with ruff
         run: |
-          flake8 --max-line-length=200 --extend-ignore=E203,W503 harmonyspeech/ tests/
+          ruff check harmonyspeech/ tests/
 
   e2e-kittentts:
     name: E2E KittenTTS (CPU)

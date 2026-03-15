@@ -4,6 +4,7 @@ Tests reroute_request_chatterbox(), reroute_request_chatterbox_vc(),
 check_reroute_request_to_model() dispatch, and check_forward_processing()
 multi-step embed→TTS chain — all without loading any real models.
 """
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,7 @@ from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_model_config(name: str, model_type: str) -> ModelConfig:
     """Minimal ModelConfig for routing tests."""
@@ -38,9 +40,7 @@ def _make_engine(*model_configs) -> HarmonySpeechEngine:
 
 
 def _make_tts_request(
-    requested_model: str = "chatterbox",
-    input_audio=None,
-    input_embedding=None,
+    requested_model: str = "chatterbox", input_audio=None, input_embedding=None
 ) -> TextToSpeechRequestInput:
     req = MagicMock(spec=TextToSpeechRequestInput)
     req.requested_model = requested_model
@@ -68,6 +68,7 @@ def _make_vc_request() -> VoiceConversionRequestInput:
 # Unit tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_reroute_tts_no_cloning():
     """TTS without audio/embedding routes directly to ChatterboxTTS executor."""
@@ -86,11 +87,7 @@ def test_reroute_tts_with_precomputed_embedding():
     tts_cfg = _make_model_config("cb-tts", "ChatterboxTTS")
     embed_cfg = _make_model_config("cb-embed", "ChatterboxEmbedding")
     engine = _make_engine(tts_cfg, embed_cfg)
-    req = _make_tts_request(
-        requested_model="chatterbox",
-        input_audio=None,
-        input_embedding="base64encodedembedding==",
-    )
+    req = _make_tts_request(requested_model="chatterbox", input_audio=None, input_embedding="base64encodedembedding==")
 
     engine.reroute_request_chatterbox(req)
 
@@ -104,11 +101,7 @@ def test_reroute_tts_with_input_audio_to_embed_step():
     tts_cfg = _make_model_config("cb-tts", "ChatterboxTTS")
     embed_cfg = _make_model_config("cb-embed", "ChatterboxEmbedding")
     engine = _make_engine(tts_cfg, embed_cfg)
-    req = _make_tts_request(
-        requested_model="chatterbox",
-        input_audio="base64audio==",
-        input_embedding=None,
-    )
+    req = _make_tts_request(requested_model="chatterbox", input_audio="base64audio==", input_embedding=None)
 
     engine.reroute_request_chatterbox(req)
 
@@ -120,11 +113,7 @@ def test_reroute_tts_embedding_fallback_to_tts():
     """TTS with input_audio but no ChatterboxEmbedding in config falls back to ChatterboxTTS."""
     tts_cfg = _make_model_config("cb-tts", "ChatterboxTTS")
     engine = _make_engine(tts_cfg)  # No embed config
-    req = _make_tts_request(
-        requested_model="chatterbox",
-        input_audio="base64audio==",
-        input_embedding=None,
-    )
+    req = _make_tts_request(requested_model="chatterbox", input_audio="base64audio==", input_embedding=None)
     # model stays at sentinel when no embed config found; reroute then checks TTS path
     # Set model to initial state (not yet routed)
     req.model = "chatterbox"
@@ -202,35 +191,24 @@ def test_reroute_multilingual_tts():
 
 
 @pytest.mark.unit
-@patch.object(HarmonySpeechEngine, 'add_request')
+@patch.object(HarmonySpeechEngine, "add_request")
 def test_forward_processing_transfers_embedding(mock_add_request):
     """check_forward_processing() sets input_embedding and clears input_audio after embed step."""
     from harmonyspeech.common.request import ExecutorResult
-    
+
     tts_cfg = _make_model_config("cb-tts", "ChatterboxTTS")
     embed_cfg = _make_model_config("cb-embed", "ChatterboxEmbedding")
     engine = _make_engine(tts_cfg, embed_cfg)
 
     # Build a fake completed embed result
     fake_embedding_output = "base64serializedconditionals=="
-    embed_output = SpeechEmbeddingRequestOutput(
-        request_id="test-req-001",
-        output=fake_embedding_output
-    )
+    embed_output = SpeechEmbeddingRequestOutput(request_id="test-req-001", output=fake_embedding_output)
 
     # Original TTS request (was routed to embed step first)
-    original_req = _make_tts_request(
-        requested_model="chatterbox",
-        input_audio="base64audio==",
-        input_embedding=None,
-    )
+    original_req = _make_tts_request(requested_model="chatterbox", input_audio="base64audio==", input_embedding=None)
 
     # Create ExecutorResult with embed output and original request as input
-    result = ExecutorResult(
-        request_id="test-req-001",
-        input_data=original_req,
-        result_data=embed_output,
-    )
+    result = ExecutorResult(request_id="test-req-001", input_data=original_req, result_data=embed_output)
 
     # Call check_forward_processing - it returns (new_status, forwarding_request)
     new_status, forwarding_req = engine.check_forward_processing(result)

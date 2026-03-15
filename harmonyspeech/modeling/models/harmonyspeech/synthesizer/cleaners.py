@@ -21,86 +21,92 @@ from harmonyspeech.modeling.models.harmonyspeech.synthesizer.numbers import norm
 _whitespace_re = re.compile(r"\s+")
 
 # List of (regular expression, replacement) pairs for abbreviations:
-_abbreviations = [(re.compile("\\b%s\\." % x[0], re.IGNORECASE), x[1]) for x in [
-  ("mrs", "misess"),
-  ("mr", "mister"),
-  ("dr", "doctor"),
-  ("st", "saint"),
-  ("co", "company"),
-  ("jr", "junior"),
-  ("maj", "major"),
-  ("gen", "general"),
-  ("drs", "doctors"),
-  ("rev", "reverend"),
-  ("lt", "lieutenant"),
-  ("hon", "honorable"),
-  ("sgt", "sergeant"),
-  ("capt", "captain"),
-  ("esq", "esquire"),
-  ("ltd", "limited"),
-  ("col", "colonel"),
-  ("ft", "fort"),
-  ("mk", "mark"),
-  ("jan", "january"),
-  ("feb", "february"),
-  ("mar", "march"),
-  ("apr", "april"),
-  ("aug", "august"),
-  ("sept", "september"),
-  ("oct", "october"),
-  ("nov", "november"),
-  ("dec", "december")
-]]
+_abbreviations = [
+    (re.compile("\\b%s\\." % x[0], re.IGNORECASE), x[1])
+    for x in [
+        ("mrs", "misess"),
+        ("mr", "mister"),
+        ("dr", "doctor"),
+        ("st", "saint"),
+        ("co", "company"),
+        ("jr", "junior"),
+        ("maj", "major"),
+        ("gen", "general"),
+        ("drs", "doctors"),
+        ("rev", "reverend"),
+        ("lt", "lieutenant"),
+        ("hon", "honorable"),
+        ("sgt", "sergeant"),
+        ("capt", "captain"),
+        ("esq", "esquire"),
+        ("ltd", "limited"),
+        ("col", "colonel"),
+        ("ft", "fort"),
+        ("mk", "mark"),
+        ("jan", "january"),
+        ("feb", "february"),
+        ("mar", "march"),
+        ("apr", "april"),
+        ("aug", "august"),
+        ("sept", "september"),
+        ("oct", "october"),
+        ("nov", "november"),
+        ("dec", "december"),
+    ]
+]
 
 
 def expand_abbreviations(text):
-  for regex, replacement in _abbreviations:
-    text = re.sub(regex, replacement, text)
-  return text
+    for regex, replacement in _abbreviations:
+        text = re.sub(regex, replacement, text)
+    return text
 
 
 def expand_numbers(text):
-  return normalize_numbers(text)
+    return normalize_numbers(text)
 
 
 def lowercase(text):
-  """lowercase input tokens."""
-  return text.lower()
+    """lowercase input tokens."""
+    return text.lower()
 
 
 def collapse_whitespace(text):
-  return re.sub(_whitespace_re, " ", text)
+    return re.sub(_whitespace_re, " ", text)
+
 
 def no_cleaners(text):
-  return text
+    return text
+
 
 def convert_to_ascii(text):
-  return unidecode(text)
+    return unidecode(text)
 
 
 def basic_cleaners(text):
-  """Basic pipeline that lowercases and collapses whitespace without transliteration."""
-  text = lowercase(text)
-  text = collapse_whitespace(text)
-  return text
+    """Basic pipeline that lowercases and collapses whitespace without transliteration."""
+    text = lowercase(text)
+    text = collapse_whitespace(text)
+    return text
 
 
 def transliteration_cleaners(text):
-  """Pipeline for non-English text that transliterates to ASCII."""
-  text = convert_to_ascii(text)
-  text = lowercase(text)
-  text = collapse_whitespace(text)
-  return text
+    """Pipeline for non-English text that transliterates to ASCII."""
+    text = convert_to_ascii(text)
+    text = lowercase(text)
+    text = collapse_whitespace(text)
+    return text
 
 
 def english_cleaners(text):
-  """Pipeline for English text, including number and abbreviation expansion."""
-  text = convert_to_ascii(text)
-  text = lowercase(text)
-  text = expand_numbers(text)
-  text = expand_abbreviations(text)
-  text = collapse_whitespace(text)
-  return text
+    """Pipeline for English text, including number and abbreviation expansion."""
+    text = convert_to_ascii(text)
+    text = lowercase(text)
+    text = expand_numbers(text)
+    text = expand_abbreviations(text)
+    text = collapse_whitespace(text)
+    return text
+
 
 # def to_phonemes(text: str, lang: str) -> str:
 #   phonemes = phonemize(text,
@@ -115,34 +121,32 @@ def english_cleaners(text):
 #   phonemes = ''.join([p for p in phonemes if p in phonemes_set])
 #   return phonemes
 
+
 class Cleaner:
+    def __init__(self, cleaner_name: str, use_phonemes: bool, lang: str) -> None:
+        if cleaner_name == "english_cleaners":
+            self.clean_func = english_cleaners
+        elif cleaner_name == "no_cleaners":
+            self.clean_func = no_cleaners
+        else:
+            raise ValueError(
+                f"Cleaner not supported: {cleaner_name}! Currently supported: ['english_cleaners', 'no_cleaners']"
+            )
+        self.use_phonemes = use_phonemes
+        self.lang = lang
 
-  def __init__(self,
-               cleaner_name: str,
-               use_phonemes: bool,
-               lang: str) -> None:
-    if cleaner_name == 'english_cleaners':
-      self.clean_func = english_cleaners
-    elif cleaner_name == 'no_cleaners':
-      self.clean_func = no_cleaners
-    else:
-      raise ValueError(f'Cleaner not supported: {cleaner_name}! '
-                       f'Currently supported: [\'english_cleaners\', \'no_cleaners\']')
-    self.use_phonemes = use_phonemes
-    self.lang = lang
+    def __call__(self, text: str) -> str:
+        text = self.clean_func(text)
+        # if self.use_phonemes:
+        #   text = to_phonemes(text, self.lang)
+        text = collapse_whitespace(text)
+        text = text.strip()
+        return text
 
-  def __call__(self, text: str) -> str:
-    text = self.clean_func(text)
-    # if self.use_phonemes:
-    #   text = to_phonemes(text, self.lang)
-    text = collapse_whitespace(text)
-    text = text.strip()
-    return text
-
-  @classmethod
-  def from_config(cls, config: Dict[str, Any]) -> 'Cleaner':
-    return Cleaner(
-      cleaner_name=config['preprocessing']['cleaner_name'],
-      use_phonemes=config['preprocessing']['use_phonemes'],
-      lang=config['preprocessing']['language']
-    )
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> "Cleaner":
+        return Cleaner(
+            cleaner_name=config["preprocessing"]["cleaner_name"],
+            use_phonemes=config["preprocessing"]["use_phonemes"],
+            lang=config["preprocessing"]["language"],
+        )

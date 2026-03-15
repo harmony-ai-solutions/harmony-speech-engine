@@ -13,7 +13,7 @@ import torch
 from harmonyspeech.modeling.hf_downloader import load_or_download_config, load_or_download_model
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import (
     CausalConv1d,
-    CausalConvTranspose1d
+    CausalConvTranspose1d,
 )
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.pqmf import PQMF
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.residual_stack import ResidualStack
@@ -21,42 +21,36 @@ from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.utils.
 
 
 class LengthRegulator(nn.Module):
-
     def __init__(self):
         super().__init__()
 
     def forward(self, x: torch.Tensor, dur: torch.Tensor) -> torch.Tensor:
-        dur[dur < 0] = 0.
+        dur[dur < 0] = 0.0
         x_expanded = []
         for i in range(x.size(0)):
             x_exp = torch.repeat_interleave(x[i], (dur[i] + 0.5).long(), dim=0)
             x_expanded.append(x_exp)
-        x_expanded = pad_sequence(x_expanded, padding_value=0., batch_first=True)
+        x_expanded = pad_sequence(x_expanded, padding_value=0.0, batch_first=True)
         return x_expanded
 
 
 class HighwayNetwork(nn.Module):
-
     def __init__(self, size: int) -> None:
         super().__init__()
         self.W1 = nn.Linear(size, size)
         self.W2 = nn.Linear(size, size)
-        self.W1.bias.data.fill_(0.)
+        self.W1.bias.data.fill_(0.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x1 = self.W1(x)
         x2 = self.W2(x)
         g = torch.sigmoid(x2)
-        y = g * F.relu(x1) + (1. - g) * x
+        y = g * F.relu(x1) + (1.0 - g) * x
         return y
 
 
 class BatchNormConv(nn.Module):
-
-    def __init__(self,
-                 in_channels: int,
-                 out_channels: int,
-                 kernel: int, relu=True) -> None:
+    def __init__(self, in_channels: int, out_channels: int, kernel: int, relu=True) -> None:
         super().__init__()
         self.conv = nn.Conv1d(in_channels, out_channels, kernel, stride=1, padding=kernel // 2, bias=False)
         self.bnorm = nn.BatchNorm1d(out_channels)
@@ -69,14 +63,9 @@ class BatchNormConv(nn.Module):
 
 
 class CBHG(nn.Module):
-
-    def __init__(self,
-                 K: int,
-                 in_channels: int,
-                 channels: int,
-                 proj_channels: list,
-                 num_highways: int,
-                 dropout: float = 0.5) -> None:
+    def __init__(
+        self, K: int, in_channels: int, channels: int, proj_channels: list, num_highways: int, dropout: float = 0.5
+    ) -> None:
         super().__init__()
 
         self.dropout = dropout
@@ -106,7 +95,7 @@ class CBHG(nn.Module):
 
         # Convolution Bank
         for conv in self.conv1d_bank:
-            c = conv(x) # Convolution
+            c = conv(x)  # Convolution
             conv_bank.append(c[:, :, :seq_len])
 
         # Stack along the channel axis
@@ -136,27 +125,19 @@ class CBHG(nn.Module):
 
 
 class SpeakerEncoder(nn.Module):
-    def __init__(
-        self,
-        mel_n_channels: int,
-        model_hidden_size: int,
-        model_num_layers: int,
-        model_embedding_size: int
-    ):
+    def __init__(self, mel_n_channels: int, model_hidden_size: int, model_num_layers: int, model_embedding_size: int):
         super().__init__()
 
         # Network defition
-        self.lstm = nn.LSTM(input_size=mel_n_channels,
-                            hidden_size=model_hidden_size,
-                            num_layers=model_num_layers,
-                            batch_first=True)
-        self.linear = nn.Linear(in_features=model_hidden_size,
-                                out_features=model_embedding_size)
+        self.lstm = nn.LSTM(
+            input_size=mel_n_channels, hidden_size=model_hidden_size, num_layers=model_num_layers, batch_first=True
+        )
+        self.linear = nn.Linear(in_features=model_hidden_size, out_features=model_embedding_size)
         self.relu = torch.nn.ReLU()
 
         # Cosine similarity scaling (with fixed initial parameter values)
-        self.similarity_weight = nn.Parameter(torch.tensor([10.]))
-        self.similarity_bias = nn.Parameter(torch.tensor([-5.]))
+        self.similarity_weight = nn.Parameter(torch.tensor([10.0]))
+        self.similarity_bias = nn.Parameter(torch.tensor([-5.0]))
 
         # Loss
         self.loss_fn = nn.CrossEntropyLoss()
@@ -196,23 +177,21 @@ class SpeakerEncoder(nn.Module):
 
 
 class SeriesPredictor(nn.Module):
-
     def __init__(self, num_chars, emb_dim=64, spk_emb_dims=768, conv_dims=256, rnn_dims=64, dropout=0.5):
         super().__init__()
         self.embedding = Embedding(num_chars, emb_dim)
-        self.convs = torch.nn.ModuleList([
-            BatchNormConv(emb_dim+spk_emb_dims, conv_dims, 5, relu=True),
-            BatchNormConv(conv_dims, conv_dims, 5, relu=True),
-            BatchNormConv(conv_dims, conv_dims, 5, relu=True),
-        ])
+        self.convs = torch.nn.ModuleList(
+            [
+                BatchNormConv(emb_dim + spk_emb_dims, conv_dims, 5, relu=True),
+                BatchNormConv(conv_dims, conv_dims, 5, relu=True),
+                BatchNormConv(conv_dims, conv_dims, 5, relu=True),
+            ]
+        )
         self.rnn = nn.GRU(conv_dims, rnn_dims, batch_first=True, bidirectional=True)
         self.lin = nn.Linear(2 * rnn_dims, 1)
         self.dropout = dropout
 
-    def forward(self,
-                x: torch.Tensor,
-                spk_emb: torch.Tensor,
-                alpha: float = 1.0) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, spk_emb: torch.Tensor, alpha: float = 1.0) -> torch.Tensor:
         x = self.embedding(x)
         speaker_embedding = spk_emb[:, None, :]
         speaker_embedding = speaker_embedding.repeat(1, x.shape[1], 1)
@@ -228,75 +207,83 @@ class SeriesPredictor(nn.Module):
 
 
 class ForwardTacotron(nn.Module):
-
-    def __init__(self,
-                 embed_dims: int,
-                 series_embed_dims: int,
-                 num_chars: int,
-                 durpred_conv_dims: int,
-                 durpred_rnn_dims: int,
-                 durpred_dropout: float,
-                 pitch_conv_dims: int,
-                 pitch_rnn_dims: int,
-                 pitch_dropout: float,
-                 pitch_strength: float,
-                 energy_conv_dims: int,
-                 energy_rnn_dims: int,
-                 energy_dropout: float,
-                 energy_strength: float,
-                 rnn_dims: int,
-                 prenet_dims: int,
-                 prenet_k: int,
-                 postnet_num_highways: int,
-                 prenet_dropout: float,
-                 postnet_dims: int,
-                 postnet_k: int,
-                 prenet_num_highways: int,
-                 postnet_dropout: float,
-                 n_mels: int,
-                 speaker_embed_dims: int,
-                 padding_value: float):
+    def __init__(
+        self,
+        embed_dims: int,
+        series_embed_dims: int,
+        num_chars: int,
+        durpred_conv_dims: int,
+        durpred_rnn_dims: int,
+        durpred_dropout: float,
+        pitch_conv_dims: int,
+        pitch_rnn_dims: int,
+        pitch_dropout: float,
+        pitch_strength: float,
+        energy_conv_dims: int,
+        energy_rnn_dims: int,
+        energy_dropout: float,
+        energy_strength: float,
+        rnn_dims: int,
+        prenet_dims: int,
+        prenet_k: int,
+        postnet_num_highways: int,
+        prenet_dropout: float,
+        postnet_dims: int,
+        postnet_k: int,
+        prenet_num_highways: int,
+        postnet_dropout: float,
+        n_mels: int,
+        speaker_embed_dims: int,
+        padding_value: float,
+    ):
         super().__init__()
         self.rnn_dims = rnn_dims
         self.padding_value = padding_value
         self.embedding = nn.Embedding(num_chars, embed_dims)
         self.lr = LengthRegulator()
-        self.dur_pred = SeriesPredictor(num_chars=num_chars,
-                                        emb_dim=series_embed_dims,
-                                        spk_emb_dims=speaker_embed_dims,
-                                        conv_dims=durpred_conv_dims,
-                                        rnn_dims=durpred_rnn_dims,
-                                        dropout=durpred_dropout)
-        self.pitch_pred = SeriesPredictor(num_chars=num_chars,
-                                          emb_dim=series_embed_dims,
-                                          spk_emb_dims=speaker_embed_dims,
-                                          conv_dims=pitch_conv_dims,
-                                          rnn_dims=pitch_rnn_dims,
-                                          dropout=pitch_dropout)
-        self.energy_pred = SeriesPredictor(num_chars=num_chars,
-                                           emb_dim=series_embed_dims,
-                                           spk_emb_dims=speaker_embed_dims,
-                                           conv_dims=energy_conv_dims,
-                                           rnn_dims=energy_rnn_dims,
-                                           dropout=energy_dropout)
-        self.prenet = CBHG(K=prenet_k,
-                           in_channels=embed_dims,
-                           channels=prenet_dims,
-                           proj_channels=[prenet_dims, embed_dims],
-                           num_highways=prenet_num_highways,
-                           dropout=prenet_dropout)
-        self.lstm = nn.LSTM(2 * prenet_dims + speaker_embed_dims,
-                            rnn_dims,
-                            batch_first=True,
-                            bidirectional=True)
+        self.dur_pred = SeriesPredictor(
+            num_chars=num_chars,
+            emb_dim=series_embed_dims,
+            spk_emb_dims=speaker_embed_dims,
+            conv_dims=durpred_conv_dims,
+            rnn_dims=durpred_rnn_dims,
+            dropout=durpred_dropout,
+        )
+        self.pitch_pred = SeriesPredictor(
+            num_chars=num_chars,
+            emb_dim=series_embed_dims,
+            spk_emb_dims=speaker_embed_dims,
+            conv_dims=pitch_conv_dims,
+            rnn_dims=pitch_rnn_dims,
+            dropout=pitch_dropout,
+        )
+        self.energy_pred = SeriesPredictor(
+            num_chars=num_chars,
+            emb_dim=series_embed_dims,
+            spk_emb_dims=speaker_embed_dims,
+            conv_dims=energy_conv_dims,
+            rnn_dims=energy_rnn_dims,
+            dropout=energy_dropout,
+        )
+        self.prenet = CBHG(
+            K=prenet_k,
+            in_channels=embed_dims,
+            channels=prenet_dims,
+            proj_channels=[prenet_dims, embed_dims],
+            num_highways=prenet_num_highways,
+            dropout=prenet_dropout,
+        )
+        self.lstm = nn.LSTM(2 * prenet_dims + speaker_embed_dims, rnn_dims, batch_first=True, bidirectional=True)
         self.lin = torch.nn.Linear(2 * rnn_dims, n_mels)
-        self.register_buffer('step', torch.zeros(1, dtype=torch.long))
-        self.postnet = CBHG(K=postnet_k,
-                            in_channels=n_mels,
-                            channels=postnet_dims,
-                            proj_channels=[postnet_dims, n_mels],
-                            num_highways=postnet_num_highways,
-                            dropout=postnet_dropout)
+        self.register_buffer("step", torch.zeros(1, dtype=torch.long))
+        self.postnet = CBHG(
+            K=postnet_k,
+            in_channels=n_mels,
+            channels=postnet_dims,
+            proj_channels=[postnet_dims, n_mels],
+            num_highways=postnet_num_highways,
+            dropout=postnet_dropout,
+        )
         self.post_proj = nn.Linear(2 * postnet_dims, n_mels, bias=False)
         self.pitch_strength = pitch_strength
         self.energy_strength = energy_strength
@@ -310,7 +297,7 @@ class ForwardTacotron(nn.Module):
 
     def __repr__(self):
         num_params = sum([np.prod(p.size()) for p in self.parameters()])
-        return f'ForwardTacotron, num params: {num_params}'
+        return f"ForwardTacotron, num params: {num_params}"
 
     def forward(self, x, mel, dur, spk_emb, mel_lens, pitch, energy):
         pitch = pitch.unsqueeze(1)
@@ -344,8 +331,7 @@ class ForwardTacotron(nn.Module):
         speaker_embedding = speaker_embedding.repeat(1, x.shape[1], 1)
         x = torch.cat([x, speaker_embedding], dim=2)
 
-        x = pack_padded_sequence(x, lengths=mel_lens.cpu(), enforce_sorted=False,
-                                 batch_first=True)
+        x = pack_padded_sequence(x, lengths=mel_lens.cpu(), enforce_sorted=False, batch_first=True)
 
         x, _ = self.lstm(x)
 
@@ -362,55 +348,51 @@ class ForwardTacotron(nn.Module):
         x = self._pad(x, mel.size(2))
 
         return x, x_post, dur_hat, pitch_hat, energy_hat
-        #return {'mel': x, 'mel_post': x_post,
+        # return {'mel': x, 'mel_post': x_post,
         #        'dur': dur_hat, 'pitch': pitch_hat, 'energy': energy_hat}
 
-    def generate(self,
-                 x: torch.Tensor,
-                 spk_emb: torch.Tensor,
-                 alpha=1.0,
-                 pitch_function: Callable[[torch.Tensor], torch.Tensor] = lambda x: x,
-                 energy_function: Callable[[torch.Tensor], torch.Tensor] = lambda x: x):
+    def generate(
+        self,
+        x: torch.Tensor,
+        spk_emb: torch.Tensor,
+        alpha=1.0,
+        pitch_function: Callable[[torch.Tensor], torch.Tensor] = lambda x: x,
+        energy_function: Callable[[torch.Tensor], torch.Tensor] = lambda x: x,
+    ):
         self.eval()
         with torch.no_grad():
             dur_hat = self.dur_pred(x, spk_emb, alpha=alpha)
             dur_hat = dur_hat.squeeze(2)
             if torch.sum(dur_hat.long()) <= 0:
-                torch.fill_(dur_hat, value=2.)
+                torch.fill_(dur_hat, value=2.0)
             pitch_hat = self.pitch_pred(x, spk_emb).transpose(1, 2)
             pitch_hat = pitch_function(pitch_hat)
             energy_hat = self.energy_pred(x, spk_emb).transpose(1, 2)
             energy_hat = energy_function(energy_hat)
-            return self._generate_mel(x=x, spk_emb=spk_emb,
-                                      dur_hat=dur_hat,
-                                      pitch_hat=pitch_hat,
-                                      energy_hat=energy_hat)
+            return self._generate_mel(x=x, spk_emb=spk_emb, dur_hat=dur_hat, pitch_hat=pitch_hat, energy_hat=energy_hat)
 
     @torch.jit.export
-    def generate_jit(self,
-                     x: torch.Tensor,
-                     alpha: float = 1.0,
-                     beta: float = 1.0):
+    def generate_jit(self, x: torch.Tensor, alpha: float = 1.0, beta: float = 1.0):
         with torch.no_grad():
             dur_hat = self.dur_pred(x, alpha=alpha)
             dur_hat = dur_hat.squeeze(2)
             if torch.sum(dur_hat.long()) <= 0:
-                torch.fill_(dur_hat, value=2.)
+                torch.fill_(dur_hat, value=2.0)
             pitch_hat = self.pitch_pred(x).transpose(1, 2) * beta
             energy_hat = self.energy_pred(x).transpose(1, 2)
-            return self._generate_mel(x=x, dur_hat=dur_hat,
-                                      pitch_hat=pitch_hat,
-                                      energy_hat=energy_hat)
+            return self._generate_mel(x=x, dur_hat=dur_hat, pitch_hat=pitch_hat, energy_hat=energy_hat)
 
     def get_step(self) -> int:
         return self.step.data.item()
 
-    def _generate_mel(self,
-                      x: torch.Tensor,
-                      spk_emb: torch.Tensor,
-                      dur_hat: torch.Tensor,
-                      pitch_hat: torch.Tensor,
-                      energy_hat: torch.Tensor):
+    def _generate_mel(
+        self,
+        x: torch.Tensor,
+        spk_emb: torch.Tensor,
+        dur_hat: torch.Tensor,
+        pitch_hat: torch.Tensor,
+        energy_hat: torch.Tensor,
+    ):
         x = self.embedding(x)
         x = x.transpose(1, 2)
         x = self.prenet(x)
@@ -439,24 +421,19 @@ class ForwardTacotron(nn.Module):
         x_post = x_post.transpose(1, 2)
 
         return x, x_post, dur_hat, pitch_hat, energy_hat
-        #return {'mel': x, 'mel_post': x_post, 'dur': dur_hat,
+        # return {'mel': x, 'mel_post': x_post, 'dur': dur_hat,
         #        'pitch': pitch_hat, 'energy': energy_hat}
 
     def _pad(self, x: torch.Tensor, max_len: int) -> torch.Tensor:
         x = x[:, :, :max_len]
-        x = F.pad(x, [0, max_len - x.size(2), 0, 0], 'constant', self.padding_value)
+        x = F.pad(x, [0, max_len - x.size(2), 0, 0], "constant", self.padding_value)
         return x
 
     def save(self, path, optimizer=None):
         if optimizer is not None:
-            torch.save({
-                "model_state": self.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-            }, str(path))
+            torch.save({"model_state": self.state_dict(), "optimizer_state": optimizer.state_dict()}, str(path))
         else:
-            torch.save({
-                "model_state": self.state_dict(),
-            }, str(path))
+            torch.save({"model_state": self.state_dict()}, str(path))
 
     def init_model(self):
         for p in self.parameters():
@@ -546,22 +523,11 @@ class MelGANGenerator(torch.nn.Module):
                 torch.nn.Conv1d(in_channels, channels, kernel_size, bias=bias),
             ]
         else:
-            layers += [
-                CausalConv1d(
-                    in_channels,
-                    channels,
-                    kernel_size,
-                    bias=bias,
-                    pad=pad,
-                    pad_params=pad_params,
-                ),
-            ]
+            layers += [CausalConv1d(in_channels, channels, kernel_size, bias=bias, pad=pad, pad_params=pad_params)]
 
         for i, upsample_scale in enumerate(upsample_scales):
             # add upsampling layer
-            layers += [
-                getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params)
-            ]
+            layers += [getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params)]
             if not use_causal_conv:
                 layers += [
                     torch.nn.ConvTranspose1d(
@@ -602,26 +568,17 @@ class MelGANGenerator(torch.nn.Module):
                 ]
 
         # add final layer
-        layers += [
-            getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params)
-        ]
+        layers += [getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params)]
         if not use_causal_conv:
             layers += [
                 getattr(torch.nn, pad)((kernel_size - 1) // 2, **pad_params),
-                torch.nn.Conv1d(
-                    channels // (2 ** (i + 1)), out_channels, kernel_size, bias=bias
-                ),
+                torch.nn.Conv1d(channels // (2 ** (i + 1)), out_channels, kernel_size, bias=bias),
             ]
         else:
             layers += [
                 CausalConv1d(
-                    channels // (2 ** (i + 1)),
-                    out_channels,
-                    kernel_size,
-                    bias=bias,
-                    pad=pad,
-                    pad_params=pad_params,
-                ),
+                    channels // (2 ** (i + 1)), out_channels, kernel_size, bias=bias, pad=pad, pad_params=pad_params
+                )
             ]
         if use_final_nonlinear_activation:
             layers += [torch.nn.Tanh()]
@@ -667,9 +624,7 @@ class MelGANGenerator(torch.nn.Module):
         """Apply weight normalization module from all of the layers."""
 
         def _apply_weight_norm(m):
-            if isinstance(m, torch.nn.Conv1d) or isinstance(
-                m, torch.nn.ConvTranspose1d
-            ):
+            if isinstance(m, torch.nn.Conv1d) or isinstance(m, torch.nn.ConvTranspose1d):
                 torch.nn.utils.parametrizations.weight_norm(m)
                 # logging.debug(f"Weight norm is applied to {m}.")
 
@@ -684,9 +639,7 @@ class MelGANGenerator(torch.nn.Module):
         """
 
         def _reset_parameters(m):
-            if isinstance(m, torch.nn.Conv1d) or isinstance(
-                m, torch.nn.ConvTranspose1d
-            ):
+            if isinstance(m, torch.nn.Conv1d) or isinstance(m, torch.nn.ConvTranspose1d):
                 m.weight.data.normal_(0.0, 0.02)
                 # logging.debug(f"Reset parameters in {m}.")
 
@@ -742,6 +695,4 @@ class MelGANGenerator(torch.nn.Module):
 
         # Initialize PQMF AFTER loading state dict to avoid crash
         if hf_config and "out_channels" in hf_config["model"] and hf_config["model"]["out_channels"] > 1:
-            self.pqmf = PQMF(
-                subbands=hf_config["model"]["out_channels"],
-            ).to(next(self.parameters()).device)
+            self.pqmf = PQMF(subbands=hf_config["model"]["out_channels"]).to(next(self.parameters()).device)

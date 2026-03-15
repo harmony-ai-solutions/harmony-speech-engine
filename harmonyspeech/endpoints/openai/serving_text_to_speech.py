@@ -6,18 +6,9 @@ from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
-from harmonyspeech.common.outputs import (
-    RequestOutput,
-    SpeechSynthesisRequestOutput,
-    TextToSpeechRequestOutput,
-)
+from harmonyspeech.common.outputs import RequestOutput, SpeechSynthesisRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.protocol import (
-    ErrorResponse,
-    ModelCard,
-    TextToSpeechRequest,
-    TextToSpeechResponse,
-)
+from harmonyspeech.endpoints.openai.protocol import ErrorResponse, ModelCard, TextToSpeechRequest, TextToSpeechResponse
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -42,21 +33,12 @@ _TTS_MODEL_GROUPS = {
 
 
 class OpenAIServingTextToSpeech(OpenAIServing):
-
-    def __init__(
-        self,
-        engine: AsyncHarmonySpeech,
-        available_models: List[ModelCard],
-    ):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
     def models_from_config(configured_models: List[ModelConfig]):
-        return OpenAIServing.model_cards_from_config_groups(
-            configured_models,
-            _TTS_MODEL_TYPES,
-            _TTS_MODEL_GROUPS
-        )
+        return OpenAIServing.model_cards_from_config_groups(configured_models, _TTS_MODEL_TYPES, _TTS_MODEL_GROUPS)
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request
@@ -72,10 +54,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=TextToSpeechRequestInput.from_openai(
-                request_id=request_id,
-                request=request
-            ),
+            request_data=TextToSpeechRequestInput.from_openai(request_id=request_id, request=request),
         )
 
         if request.output_options and request.output_options.stream:
@@ -85,16 +64,17 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             return self.create_error_response(error)
         else:
             try:
-                return await self.text_to_speech_full_generator(
-                    request, raw_request, result_generator, request_id)
+                return await self.text_to_speech_full_generator(request, raw_request, result_generator, request_id)
             except ValueError as e:
                 # TODO: Use an aphrodite-specific Validation Error
                 return self.create_error_response(str(e))
 
     async def text_to_speech_full_generator(
-        self, request: TextToSpeechRequest, raw_request: Request,
+        self,
+        request: TextToSpeechRequest,
+        raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
-        request_id: str
+        request_id: str,
     ) -> Union[ErrorResponse, TextToSpeechResponse]:
 
         model_name = request.model
@@ -112,20 +92,15 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         assert final_res is not None
         if final_res.finish_reason == "error":
             return self.create_error_response(final_res.error or "Internal inference error")
-        
+
         # Handle both TextToSpeechRequestOutput (KittenTTS) and SpeechSynthesisRequestOutput (MeloTTS)
         if isinstance(final_res, TextToSpeechRequestOutput) or isinstance(final_res, SpeechSynthesisRequestOutput):
             audio_data = final_res.output
         else:
-            raise ValueError(f"Expected TextToSpeechRequestOutput or SpeechSynthesisRequestOutput, got {type(final_res).__name__}")
+            raise ValueError(
+                f"Expected TextToSpeechRequestOutput or SpeechSynthesisRequestOutput, got {type(final_res).__name__}"
+            )
 
-        response = TextToSpeechResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            data=audio_data
-        )
+        response = TextToSpeechResponse(id=request_id, created=created_time, model=model_name, data=audio_data)
 
         return response
-
-

@@ -8,14 +8,7 @@ import os
 from loguru import logger
 from rich.console import Console
 from rich.markup import escape
-from rich.progress import (
-    Progress,
-    TextColumn,
-    BarColumn,
-    TimeRemainingColumn,
-    TaskProgressColumn,
-    MofNCompleteColumn,
-)
+from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, TaskProgressColumn, MofNCompleteColumn
 
 RICH_CONSOLE = Console()
 LOG_LEVEL = os.getenv("HARMONYSPEECH_LOG_LEVEL", "INFO").upper()
@@ -70,8 +63,7 @@ def _log_formatter(record: dict):
 
     fmt = ""
     if len(lines) > 1:
-        fmt = "\n".join(
-            [f"{colored_level}{separator}{line}" for line in lines])
+        fmt = "\n".join([f"{colored_level}{separator}{line}" for line in lines])
     else:
         fmt = f"{colored_level}{separator}{message}"
 
@@ -90,10 +82,8 @@ def log_once(level, message, *args, **kwargs):
 # Uvicorn log handler
 # Uvicorn log portions inspired from https://github.com/encode/uvicorn/discussions/2027#discussioncomment-6432362
 class UvicornLoggingHandler(logging.Handler):
-
     def emit(self, record: logging.LogRecord) -> None:
-        logger.opt(exception=record.exc_info).log(record.levelname,
-                                                  self.format(record).rstrip())
+        logger.opt(exception=record.exc_info).log(record.levelname, self.format(record).rstrip())
 
 
 # Uvicorn config for logging. Passed into run when creating all loggers in
@@ -103,15 +93,10 @@ UVICORN_LOG_CONFIG = {
     "disable_existing_loggers": False,
     "handlers": {
         "uvicorn": {
-            "class":
-            f"{UvicornLoggingHandler.__module__}.{UvicornLoggingHandler.__qualname__}",  # noqa
-        },
+            "class": f"{UvicornLoggingHandler.__module__}.{UvicornLoggingHandler.__qualname__}"  # noqa
+        }
     },
-    "root": {
-        "handlers": ["uvicorn"],
-        "propagate": False,
-        "level": LOG_LEVEL
-    },
+    "root": {"handlers": ["uvicorn"], "propagate": False, "level": LOG_LEVEL},
 }
 
 
@@ -120,12 +105,7 @@ def setup_logger():
 
     logger.remove()
 
-    logger.add(
-        RICH_CONSOLE.print,
-        level=LOG_LEVEL,
-        format=_log_formatter,
-        colorize=True,
-    )
+    logger.add(RICH_CONSOLE.print, level=LOG_LEVEL, format=_log_formatter, colorize=True)
 
     logger.log_once = log_once
 

@@ -9,7 +9,7 @@ def compute_partial_slices(
     mel_window_step=10,
     partial_utterance_n_frames=160,
     min_pad_coverage=0.75,
-    overlap=0.5
+    overlap=0.5,
 ):
     """
     Computes where to split an utterance waveform and its corresponding mel spectrogram to obtain

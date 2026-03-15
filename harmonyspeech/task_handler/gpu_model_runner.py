@@ -8,15 +8,10 @@ import torch
 import torch.nn as nn
 from loguru import logger
 
-from harmonyspeech.common.config import (
-    DeviceConfig,
-    ModelConfig,
-)
+from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.logger import get_loading_progress_bar
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
-from harmonyspeech.common.utils import (
-    CudaMemoryProfiler,
-)
+from harmonyspeech.common.utils import CudaMemoryProfiler
 from harmonyspeech.modeling.loader import get_model
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
@@ -25,9 +20,7 @@ LORA_WARMUP_RANK = 8
 _BATCH_SIZE_ALIGNMENT = 8
 # Capture graphs for token size 1, 2, 4, 8, 16, 24, 32, 40, ..., 256.
 # NOTE: _get_graph_batch_size needs to be updated if this list is changed.
-_BATCH_SIZES_TO_CAPTURE = [1, 2, 4] + [
-    _BATCH_SIZE_ALIGNMENT * i for i in range(1, 33)
-]
+_BATCH_SIZES_TO_CAPTURE = [1, 2, 4] + [_BATCH_SIZE_ALIGNMENT * i for i in range(1, 33)]
 
 
 # How batches are constructed.
@@ -41,14 +34,8 @@ class BatchType(IntEnum):
 
 
 class GPUModelRunner(ModelRunnerBase):
-
     def __init__(
-        self,
-        model_config: ModelConfig,
-        device_config: DeviceConfig,
-        is_driver_worker: bool = False,
-        *args,
-        **kwargs,
+        self, model_config: ModelConfig, device_config: DeviceConfig, is_driver_worker: bool = False, *args, **kwargs
     ):
         super().__init__(model_config, device_config, is_driver_worker, *args, **kwargs)
 
@@ -58,9 +45,8 @@ class GPUModelRunner(ModelRunnerBase):
 
         self.model_memory_usage = m.consumed_memory
         logger.info(
-            "Model weights loaded. Memory usage: "
-            f"{self.model_memory_usage / float(2 ** 30):.2f} GiB = "
-            f"{self.model_memory_usage / float(2 ** 30):.2f} GiB")
+            f"Model weights loaded. Memory usage: {self.model_memory_usage / float(2**30):.2f} GiB = {self.model_memory_usage / float(2**30):.2f} GiB"
+        )
 
     # @torch.inference_mode()
     # def profile_run(self) -> None:
@@ -355,8 +341,8 @@ def _get_graph_batch_size(batch_size: int) -> int:
     elif batch_size <= 4:
         return 4
     else:
-        return ((batch_size + _BATCH_SIZE_ALIGNMENT - 1) //
-                _BATCH_SIZE_ALIGNMENT * _BATCH_SIZE_ALIGNMENT)
+        return (batch_size + _BATCH_SIZE_ALIGNMENT - 1) // _BATCH_SIZE_ALIGNMENT * _BATCH_SIZE_ALIGNMENT
+
 
 # def _prepare_fake_inputs(
 #         seq_len: int, vision_language_config: Optional[VisionLanguageConfig]):

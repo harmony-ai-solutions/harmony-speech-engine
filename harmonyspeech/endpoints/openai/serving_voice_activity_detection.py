@@ -23,30 +23,17 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling VAD Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
-_VAD_MODEL_TYPES = [
-    "FasterWhisper",
-    "SileroVAD"
-]
-_VAD_MODEL_GROUPS = {
-}
+_VAD_MODEL_TYPES = ["FasterWhisper", "SileroVAD"]
+_VAD_MODEL_GROUPS = {}
 
 
 class OpenAIServingVoiceActivityDetection(OpenAIServing):
-
-    def __init__(
-        self,
-        engine: AsyncHarmonySpeech,
-        available_models: List[ModelCard],
-    ):
+    def __init__(self, engine: AsyncHarmonySpeech, available_models: List[ModelCard]):
         super().__init__(engine=engine, available_models=available_models)
 
     @staticmethod
     def models_from_config(configured_models: List[ModelConfig]) -> List[ModelCard]:
-        return OpenAIServing.model_cards_from_config_groups(
-            configured_models,
-            _VAD_MODEL_TYPES,
-            _VAD_MODEL_GROUPS
-        )
+        return OpenAIServing.model_cards_from_config_groups(configured_models, _VAD_MODEL_TYPES, _VAD_MODEL_GROUPS)
 
     async def check_voice_activity(
         self, request: DetectVoiceActivityRequest, raw_request: Request
@@ -61,23 +48,21 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
 
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=DetectVoiceActivityRequestInput.from_openai(
-                request_id=request_id,
-                request=request
-            ),
+            request_data=DetectVoiceActivityRequestInput.from_openai(request_id=request_id, request=request),
         )
 
         try:
-            return await self.voice_activity_check_full_generator(
-                request, raw_request, result_generator, request_id)
+            return await self.voice_activity_check_full_generator(request, raw_request, result_generator, request_id)
         except ValueError as e:
             # TODO: Use an aphrodite-specific Validation Error
             return self.create_error_response(str(e))
 
     async def voice_activity_check_full_generator(
-        self, request: DetectVoiceActivityRequest, raw_request: Request,
+        self,
+        request: DetectVoiceActivityRequest,
+        raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
-        request_id: str
+        request_id: str,
     ) -> Union[ErrorResponse, DetectVoiceActivityResponse]:
 
         model_name = request.model
@@ -96,7 +81,9 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
         assert final_res is not None
         if final_res.finish_reason == "error":
             return self.create_error_response(final_res.error or "Internal inference error")
-        assert isinstance(final_res, DetectVoiceActivityRequestOutput) or isinstance(final_res, SpeechTranscriptionRequestOutput)
+        assert isinstance(final_res, DetectVoiceActivityRequestOutput) or isinstance(
+            final_res, SpeechTranscriptionRequestOutput
+        )
 
         # load result data and determine what will be returned
         result_data = json.loads(final_res.output)

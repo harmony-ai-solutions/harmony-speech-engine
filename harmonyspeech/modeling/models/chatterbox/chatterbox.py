@@ -3,6 +3,7 @@
 This module provides wrapper classes for the Chatterbox TTS and VC models,
 exposing a consistent interface for model loading and inference.
 """
+
 import os
 import types
 from typing import Optional, Union
@@ -22,22 +23,18 @@ _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
 
 class ChatterboxTTSModel:
     """Wrapper for ChatterboxTTS model.
-    
+
     ChatterboxTTS provides text-to-speech synthesis with voice cloning support.
     """
 
     @classmethod
-    def from_pretrained(
-        cls,
-        device: Optional[Union[str, torch.device]] = None,
-        **kwargs
-    ) -> "ChatterboxTTS":
+    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "ChatterboxTTS":
         """Load ChatterboxTTS model from pretrained weights.
-        
+
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
             **kwargs: Additional arguments passed to ChatterboxTTS.from_pretrained.
-            
+
         Returns:
             ChatterboxTTS model instance.
         """
@@ -45,24 +42,20 @@ class ChatterboxTTSModel:
             device = "cpu"
         elif isinstance(device, torch.device):
             device = str(device)
-            
+
         return ChatterboxTTS.from_pretrained(device=device, **kwargs)
 
 
 class ChatterboxTurboTTSModel:
     """Wrapper for ChatterboxTurboTTS model.
-    
+
     ChatterboxTurboTTS is a separate, faster TTS model from chatterbox.tts_turbo.
     It supports top_k and norm_loudness parameters and does NOT support
     exaggeration, cfg_weight, or min_p.
     """
 
     @classmethod
-    def from_pretrained(
-        cls,
-        device: Optional[Union[str, torch.device]] = None,
-        **kwargs
-    ) -> "_ChatterboxTurboTTS":
+    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
 
         Workaround: The upstream `_ChatterboxTurboTTS.from_pretrained()` contains a bug
@@ -123,9 +116,7 @@ class ChatterboxTurboTTSModel:
                 audio = audio.float()
             return _orig_log_mel(self_tok, audio, padding)
 
-        model.s3gen.tokenizer.log_mel_spectrogram = types.MethodType(
-            _log_mel_float32, model.s3gen.tokenizer
-        )
+        model.s3gen.tokenizer.log_mel_spectrogram = types.MethodType(_log_mel_float32, model.s3gen.tokenizer)
 
         # --- Patch 2: voice_encoder.forward (mels input to LSTM) ---
         _orig_ve_forward = model.ve.forward
@@ -142,26 +133,24 @@ class ChatterboxTurboTTSModel:
 
 class ChatterboxMultilingualTTSModel:
     """Wrapper for ChatterboxMultilingualTTS model.
-    
+
     ChatterboxMultilingualTTS provides TTS synthesis supporting multiple languages.
     """
-    
+
     # 23 supported language codes mirroring upstream chatterbox library.
     # Used by serving_engine for LanguageOptions registration and API validation.
     SUPPORTED_LANGUAGES: dict = _CHATTERBOX_SUPPORTED_LANGUAGES.copy()
 
     @classmethod
     def from_pretrained(
-        cls,
-        device: Optional[Union[str, torch.device]] = None,
-        **kwargs
+        cls, device: Optional[Union[str, torch.device]] = None, **kwargs
     ) -> "ChatterboxMultilingualTTS":
         """Load ChatterboxMultilingualTTS model from pretrained weights.
-        
+
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
             **kwargs: Additional arguments passed to ChatterboxMultilingualTTS.from_pretrained.
-            
+
         Returns:
             ChatterboxMultilingualTTS model instance.
         """
@@ -179,7 +168,7 @@ class ChatterboxMultilingualTTSModel:
         #   "The `output_attentions` attribute is not supported when using the `attn_implementation` set to sdpa"
         # Fix: force _attn_implementation back to "eager" on the T3's LlamaModel config directly
         # so that the AlignmentStreamAnalyzer can enable output_attentions without crashing.
-        if hasattr(model, 't3') and hasattr(model.t3, 'tfmr') and hasattr(model.t3.tfmr, 'config'):
+        if hasattr(model, "t3") and hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
             model.t3.tfmr.config._attn_implementation = "eager"
 
         return model
@@ -187,23 +176,19 @@ class ChatterboxMultilingualTTSModel:
 
 class ChatterboxVCModel:
     """Wrapper for ChatterboxVC (Voice Conversion) model.
-    
+
     ChatterboxVC provides voice conversion functionality to transform
     speech from one voice to another while preserving content.
     """
 
     @classmethod
-    def from_pretrained(
-        cls,
-        device: Optional[Union[str, torch.device]] = None,
-        **kwargs
-    ) -> "ChatterboxVC":
+    def from_pretrained(cls, device: Optional[Union[str, torch.device]] = None, **kwargs) -> "ChatterboxVC":
         """Load ChatterboxVC model from pretrained weights.
-        
+
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
             **kwargs: Additional arguments passed to ChatterboxVC.from_pretrained.
-            
+
         Returns:
             ChatterboxVC model instance.
         """
@@ -211,13 +196,8 @@ class ChatterboxVCModel:
             device = "cpu"
         elif isinstance(device, torch.device):
             device = str(device)
-            
+
         return ChatterboxVC.from_pretrained(device=device, **kwargs)
 
 
-__all__ = [
-    "ChatterboxTTSModel",
-    "ChatterboxTurboTTSModel",
-    "ChatterboxMultilingualTTSModel",
-    "ChatterboxVCModel",
-]
+__all__ = ["ChatterboxTTSModel", "ChatterboxTurboTTSModel", "ChatterboxMultilingualTTSModel", "ChatterboxVCModel"]

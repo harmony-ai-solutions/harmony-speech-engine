@@ -57,7 +57,6 @@ _ROCM_PARTIALLY_SUPPORTED_MODELS = {
 
 
 class ModelRegistry:
-
     @staticmethod
     def load_model_cls(model_arch: str):
         if model_arch in _OOT_MODELS:
@@ -66,13 +65,12 @@ class ModelRegistry:
             return None
         if is_hip():
             if model_arch in _ROCM_UNSUPPORTED_MODELS:
-                raise ValueError(
-                    f"Model architecture {model_arch} is not supported by "
-                    "ROCm for now.")
+                raise ValueError(f"Model architecture {model_arch} is not supported by ROCm for now.")
             if model_arch in _ROCM_PARTIALLY_SUPPORTED_MODELS:
                 logger.warning(
-                    f"Model architecture {model_arch} is partially supported "
-                    "by ROCm: " + _ROCM_PARTIALLY_SUPPORTED_MODELS[model_arch])
+                    f"Model architecture {model_arch} is partially supported by ROCm: "
+                    + _ROCM_PARTIALLY_SUPPORTED_MODELS[model_arch]
+                )
 
         module_name, model_cls_name = _MODELS[model_arch]
 
@@ -80,8 +78,7 @@ class ModelRegistry:
         if model_cls_name == "native":
             return "native"
 
-        module = importlib.import_module(
-            f"harmonyspeech.modeling.models.{module_name}")
+        module = importlib.import_module(f"harmonyspeech.modeling.models.{module_name}")
         return getattr(module, model_cls_name, None)
 
     @staticmethod
@@ -92,13 +89,10 @@ class ModelRegistry:
     def register_model(model_arch: str, model_cls: Type[nn.Module]):
         if model_arch in _MODELS:
             logger.warning(
-                f"Model architecture {model_arch} is already registered, "
-                "and will be overwritten by the new model "
-                f"class {model_cls.__name__}.")
+                f"Model architecture {model_arch} is already registered, and will be overwritten by the new model class {model_cls.__name__}."
+            )
         global _OOT_MODELS
         _OOT_MODELS[model_arch] = model_cls
 
 
-__all__ = [
-    "ModelRegistry",
-]
+__all__ = ["ModelRegistry"]

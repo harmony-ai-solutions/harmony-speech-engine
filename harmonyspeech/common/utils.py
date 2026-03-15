@@ -16,12 +16,7 @@ import torch
 
 T = TypeVar("T")
 
-STR_DTYPE_TO_TORCH_DTYPE = {
-    "half": torch.half,
-    "bfloat16": torch.bfloat16,
-    "float": torch.float,
-    "fp8": torch.uint8,
-}
+STR_DTYPE_TO_TORCH_DTYPE = {"half": torch.half, "bfloat16": torch.bfloat16, "float": torch.float, "fp8": torch.uint8}
 
 
 class Device(enum.Enum):
@@ -30,7 +25,6 @@ class Device(enum.Enum):
 
 
 class Counter:
-
     def __init__(self, start: int = 0) -> None:
         self.counter = start
 
@@ -44,7 +38,6 @@ class Counter:
 
 
 class LRUCache(Generic[T]):
-
     def __init__(self, capacity: int):
         self.cache = OrderedDict[Hashable, T]()
         self.capacity = capacity
@@ -67,9 +60,7 @@ class LRUCache(Generic[T]):
     def touch(self, key: Hashable) -> None:
         self.cache.move_to_end(key)
 
-    def get(self,
-            key: Hashable,
-            default_value: Optional[T] = None) -> Optional[T]:
+    def get(self, key: Hashable, default_value: Optional[T] = None) -> Optional[T]:
         if key in self.cache:
             value = self.cache[key]
             self.cache.move_to_end(key)
@@ -115,6 +106,7 @@ def is_hip() -> bool:
 @lru_cache(maxsize=None)
 def is_cpu() -> bool:
     from importlib.metadata import PackageNotFoundError, version
+
     try:
         return "cpu" in version("aphrodite-engine")
     except PackageNotFoundError:
@@ -190,7 +182,7 @@ def set_cuda_visible_devices(device_ids: List[int]) -> None:
 
 def chunk_list(lst, chunk_size):
     """Yield successive chunk_size chunks from lst."""
-    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+    return [lst[i : i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
 def cdiv(a: int, b: int) -> int:
@@ -200,19 +192,15 @@ def cdiv(a: int, b: int) -> int:
 
 @lru_cache(maxsize=None)
 def get_nvcc_cuda_version() -> Optional[Version]:
-    cuda_home = os.environ.get('CUDA_HOME')
+    cuda_home = os.environ.get("CUDA_HOME")
     if not cuda_home:
-        cuda_home = '/usr/local/cuda'
-        if os.path.isfile(cuda_home + '/bin/nvcc'):
-            logger.info(
-                f'CUDA_HOME is not found in the environment. Using {cuda_home} '
-                'as CUDA_HOME.')
+        cuda_home = "/usr/local/cuda"
+        if os.path.isfile(cuda_home + "/bin/nvcc"):
+            logger.info(f"CUDA_HOME is not found in the environment. Using {cuda_home} as CUDA_HOME.")
         else:
-            logger.warning(
-                f'Not found nvcc in {cuda_home}. Skip cuda version check!')
+            logger.warning(f"Not found nvcc in {cuda_home}. Skip cuda version check!")
             return None
-    nvcc_output = subprocess.check_output([cuda_home + "/bin/nvcc", "-V"],
-                                          universal_newlines=True)
+    nvcc_output = subprocess.check_output([cuda_home + "/bin/nvcc", "-V"], universal_newlines=True)
     output = nvcc_output.split()
     release_idx = output.index("release") + 1
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
@@ -220,7 +208,6 @@ def get_nvcc_cuda_version() -> Optional[Version]:
 
 
 class CudaMemoryProfiler:
-
     def __init__(self, device=None):
         self.device = device
 

@@ -211,48 +211,45 @@ if __name__ == "__main__":
         "\u2191",
         " ",
         "ɣ",
-        "ɡ", 
-        "r", 
-        "ɲ", 
-        "ʝ", 
+        "ɡ",
+        "r",
+        "ɲ",
+        "ʝ",
         "ʎ",
-        "ː"
+        "ː",
     ]
-    with open('/home/xumin/workspace/VITS-Training-Multiling/230715_fr/metadata.txt', 'r') as f:
+    with open("/home/xumin/workspace/VITS-Training-Multiling/230715_fr/metadata.txt", "r") as f:
         lines = f.readlines()
-    
 
     used_sym = []
     not_existed_sym = []
     phonemes = []
 
     for line in lines:
-        text = line.split('|')[-1].strip()
+        text = line.split("|")[-1].strip()
         text = french_cleaners(text)
-        ipa =  e.phonemize(text, separator="")
+        ipa = e.phonemize(text, separator="")
         phonemes.append(ipa)
         for s in ipa:
             if s not in symbols:
                 if s not in not_existed_sym:
-                    print(f'not_existed char: {s}')
+                    print(f"not_existed char: {s}")
                     not_existed_sym.append(s)
             else:
                 if s not in used_sym:
                     # print(f'used char: {s}')
                     used_sym.append(s)
-    
+
     print(used_sym)
     print(not_existed_sym)
 
-
-    with open('./text/fr_phonemizer/french_symbols.txt', 'w') as g:
+    with open("./text/fr_phonemizer/french_symbols.txt", "w") as g:
         g.writelines(symbols + not_existed_sym)
-        
-    with open('./text/fr_phonemizer/example_ipa.txt', 'w') as g:
+
+    with open("./text/fr_phonemizer/example_ipa.txt", "w") as g:
         g.writelines(phonemes)
 
-    data = {'symbols': symbols + not_existed_sym}
+    data = {"symbols": symbols + not_existed_sym}
 
-    with open('./text/fr_phonemizer/fr_symbols.json', 'w') as f:
+    with open("./text/fr_phonemizer/fr_symbols.json", "w") as f:
         json.dump(data, f, indent=4)
-

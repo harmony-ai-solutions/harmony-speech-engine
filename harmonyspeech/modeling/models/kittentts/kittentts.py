@@ -4,6 +4,7 @@ KittenTTS is an ultra-lightweight ONNX-based TTS model by KittenML.
 Models are downloaded from HuggingFace Hub and run via ONNX Runtime.
 Sample rate: 24000 Hz, English only.
 """
+
 import json
 from typing import Optional
 
@@ -59,39 +60,24 @@ class KittenTTSSynthesizer:
     def _load_model(self, repo_id: str, cache_dir: Optional[str]) -> KittenTTS_1_Onnx:
         """Download and initialize KittenTTS_1_Onnx from HuggingFace."""
         # Download config
-        config_path = hf_hub_download(
-            repo_id=repo_id,
-            filename="config.json",
-            cache_dir=cache_dir
-        )
-        with open(config_path, 'r') as f:
+        config_path = hf_hub_download(repo_id=repo_id, filename="config.json", cache_dir=cache_dir)
+        with open(config_path, "r") as f:
             config = json.load(f)
 
         if config.get("type") not in ["ONNX1", "ONNX2"]:
-            raise ValueError(
-                f"Unsupported KittenTTS model type '{config.get('type')}'. "
-                f"Expected 'ONNX1' or 'ONNX2'."
-            )
+            raise ValueError(f"Unsupported KittenTTS model type '{config.get('type')}'. Expected 'ONNX1' or 'ONNX2'.")
 
         # Download model ONNX file
-        model_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=config["model_file"],
-            cache_dir=cache_dir
-        )
+        model_path = hf_hub_download(repo_id=repo_id, filename=config["model_file"], cache_dir=cache_dir)
 
         # Download voices NPZ file
-        voices_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=config["voices"],
-            cache_dir=cache_dir
-        )
+        voices_path = hf_hub_download(repo_id=repo_id, filename=config["voices"], cache_dir=cache_dir)
 
         return KittenTTS_1_Onnx(
             model_path=model_path,
             voices_path=voices_path,
             speed_priors=config.get("speed_priors", {}),
-            voice_aliases=config.get("voice_aliases", {})
+            voice_aliases=config.get("voice_aliases", {}),
         )
 
     def generate(self, text: str, voice: str = "Jasper", speed: float = 1.0, clean_text: bool = True) -> np.ndarray:

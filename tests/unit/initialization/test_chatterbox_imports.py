@@ -3,6 +3,7 @@
 These tests ensure all required Chatterbox dependencies are installed
 and their primary public API is accessible.
 """
+
 import pytest
 
 
@@ -34,6 +35,7 @@ def test_chatterbox_vc_importable():
 def test_chatterbox_multilingual_importable():
     """ChatterboxMultilingualTTS and SUPPORTED_LANGUAGES must be importable."""
     from chatterbox import ChatterboxMultilingualTTS, SUPPORTED_LANGUAGES  # noqa: F401
+
     assert isinstance(SUPPORTED_LANGUAGES, (list, tuple, set, dict))
     assert len(SUPPORTED_LANGUAGES) > 0
 
@@ -48,4 +50,5 @@ def test_chatterbox_turbo_importable():
 def test_chatterbox_supported_languages_count():
     """Multilingual model must advertise at least 23 supported languages."""
     from chatterbox import SUPPORTED_LANGUAGES
+
     assert len(SUPPORTED_LANGUAGES) >= 23

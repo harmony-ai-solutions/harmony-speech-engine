@@ -1,4 +1,5 @@
 """Integration test conftest.py — app and async client fixtures."""
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -20,7 +21,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 def test_app():
     """
     Provides a FastAPI TestClient for integration tests.
-    
+
     Note: Full app startup (model loading) is NOT performed here —
     integration tests in Phase 3 will configure this fixture with
     mock models. This fixture is a placeholder that will be expanded.
@@ -28,6 +29,7 @@ def test_app():
     # Import deferred to avoid triggering model loading at collection time
     from fastapi.testclient import TestClient
     from harmonyspeech.endpoints.openai.api_server import app
+
     with TestClient(app, raise_server_exceptions=True) as client:
         yield client
 
@@ -36,7 +38,7 @@ def test_app():
 def mock_engine_app():
     """
     Provides a FastAPI TestClient with all serving module globals mocked.
-    
+
     This fixture patches all 7 serving module globals in harmonyspeech.endpoints.openai.api_server:
     - openai_serving_tts
     - openai_serving_stt
@@ -45,7 +47,7 @@ def mock_engine_app():
     - openai_serving_vad
     - openai_serving_ac
     - engine
-    
+
     Each serving mock has async generate/detect/embed methods returning appropriate response fixtures.
     The engine mock has check_health that returns None (healthy).
     """
@@ -125,11 +127,11 @@ def mock_engine_app():
     # Import and create the TestClient using build_app
     from harmonyspeech.endpoints.openai.api_server import build_app
     from harmonyspeech.endpoints.openai.args import make_arg_parser
-    
+
     # Create a proper args object using the arg parser
     parser = make_arg_parser()
     args = parser.parse_args([])
-    
+
     app = build_app(args)
     with TestClient(app, raise_server_exceptions=True) as client:
         yield client

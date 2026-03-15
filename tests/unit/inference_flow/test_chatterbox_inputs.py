@@ -1,10 +1,11 @@
 """Unit tests for Chatterbox input preparation functions.
 
 Tests are organized into three groups:
-1. Data model extension tests (should PASS after Plan 01)  
+1. Data model extension tests (should PASS after Plan 01)
 2. Prepare function behavior tests (will FAIL until Plan 02 implements them - RED state)
 3. Language registration tests (should PASS after Plan 01 for SUPPORTED_LANGUAGES)
 """
+
 import base64
 import io
 from dataclasses import fields
@@ -26,6 +27,7 @@ try:
         prepare_chatterbox_embedding_inputs,
         prepare_chatterbox_vc_inputs,
     )
+
     PREPARE_FUNCTIONS_AVAILABLE = True
 except ImportError:
     PREPARE_FUNCTIONS_AVAILABLE = False
@@ -35,8 +37,14 @@ except ImportError:
 # ============================================================
 
 CHATTERBOX_FIELD_NAMES = [
-    "exaggeration", "cfg_weight", "temperature",
-    "repetition_penalty", "top_p", "min_p", "top_k", "norm_loudness"
+    "exaggeration",
+    "cfg_weight",
+    "temperature",
+    "repetition_penalty",
+    "top_p",
+    "min_p",
+    "top_k",
+    "norm_loudness",
 ]
 
 
@@ -49,9 +57,7 @@ def test_generation_options_fields():
 
 def test_generation_options_chatterbox_fields_default_none():
     """All 8 Chatterbox fields on TextToSpeechGenerationOptions must default to None."""
-    opts = TextToSpeechGenerationOptions(
-        seed=None, style=None, speed=None, pitch=None, energy=None
-    )
+    opts = TextToSpeechGenerationOptions(seed=None, style=None, speed=None, pitch=None, energy=None)
     for name in CHATTERBOX_FIELD_NAMES:
         assert getattr(opts, name) is None, f"Field {name} should default to None"
 
@@ -89,12 +95,9 @@ def test_supported_languages_is_dict_of_codes():
 # Helpers for prepare function tests
 # ============================================================
 
+
 def _make_tts_request(
-    input_text="Hello world",
-    input_embedding=None,
-    input_audio=None,
-    language_id=None,
-    generation_options=None,
+    input_text="Hello world", input_embedding=None, input_audio=None, language_id=None, generation_options=None
 ):
     """Create a minimal mock TextToSpeechRequestInput."""
     req = MagicMock()
@@ -106,11 +109,7 @@ def _make_tts_request(
     return req
 
 
-def _make_vc_request(
-    source_audio=None,
-    target_audio=None,
-    target_embedding=None,
-):
+def _make_vc_request(source_audio=None, target_audio=None, target_embedding=None):
     """Create a minimal mock VoiceConversionRequestInput."""
     req = MagicMock()
     req.source_audio = base64.b64encode(b"fake_audio_data").decode() if source_audio is None else source_audio
@@ -129,6 +128,7 @@ def _make_embedding_request(input_audio=None):
 # ============================================================
 # Group 3: TTS prepare function tests (REQ-INPUT-02, REQ-INPUT-05)
 # ============================================================
+
 
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_prepare_chatterbox_tts_inputs_basic():
@@ -170,8 +170,7 @@ def test_tts_rejects_norm_loudness():
 def test_tts_conflict_both_audio_and_embedding():
     """ChatterboxTTS must raise ValueError when both input_audio and input_embedding provided."""
     req = _make_tts_request(
-        input_audio=base64.b64encode(b"audio").decode(),
-        input_embedding=base64.b64encode(b"embedding").decode(),
+        input_audio=base64.b64encode(b"audio").decode(), input_embedding=base64.b64encode(b"embedding").decode()
     )
     with pytest.raises(ValueError):
         prepare_chatterbox_tts_inputs([req])
@@ -257,6 +256,7 @@ def test_multilingual_rejects_top_k():
 # Group 4: Embedding prepare function tests (REQ-INPUT-03)
 # ============================================================
 
+
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_embedding_inputs_returns_bytes():
     """prepare_chatterbox_embedding_inputs returns raw audio bytes (base64-decoded)."""
@@ -272,12 +272,12 @@ def test_embedding_inputs_returns_bytes():
 # Group 5: VC prepare function tests (REQ-INPUT-04)
 # ============================================================
 
+
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_vc_conflict_both():
     """prepare_chatterbox_vc_inputs raises ValueError when both target_audio and target_embedding provided."""
     req = _make_vc_request(
-        target_audio=base64.b64encode(b"audio").decode(),
-        target_embedding=base64.b64encode(b"embedding").decode(),
+        target_audio=base64.b64encode(b"audio").decode(), target_embedding=base64.b64encode(b"embedding").decode()
     )
     with pytest.raises(ValueError, match="not both"):
         prepare_chatterbox_vc_inputs([req])

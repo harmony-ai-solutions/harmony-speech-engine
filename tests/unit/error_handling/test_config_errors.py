@@ -1,10 +1,12 @@
 """Unit tests for config error paths and _get_and_verify_dtype edge cases."""
+
 import pytest
 import torch
 from harmonyspeech.common.config import _get_and_verify_dtype, EngineConfig
 
 
 # ── _get_and_verify_dtype ─────────────────────────────────────────────────────
+
 
 def test_dtype_auto_resolves_to_float16():
     """'auto' should resolve to float16 because config_dtype is float32."""
@@ -59,6 +61,7 @@ def test_dtype_none_raises():
 
 
 # ── EngineConfig file-loading errors ─────────────────────────────────────────
+
 
 def test_engine_config_missing_yaml_raises():
     """Loading a non-existent file raises FileNotFoundError."""

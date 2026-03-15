@@ -1,4 +1,5 @@
 """Unit tests for HarmonySpeechEngine initialization logic."""
+
 import pytest
 from unittest.mock import MagicMock, patch
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
@@ -51,10 +52,7 @@ def test_engine_creates_one_executor_per_model(mock_cpu_exec, mock_scheduler, cp
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=False)
 
     assert len(engine.model_executors) == 1
     assert "tts-cpu" in engine.model_executors
@@ -69,10 +67,7 @@ def test_engine_creates_executors_for_multiple_models(
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config, second_cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config, second_cpu_model_config], log_stats=False)
 
     assert len(engine.model_executors) == 2
     assert "tts-cpu" in engine.model_executors
@@ -87,10 +82,7 @@ def test_engine_uses_cpu_executor_for_cpu_device(mock_cpu_exec, mock_scheduler, 
     mock_cpu_exec.return_value = mock_instance
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=False)
 
     mock_cpu_exec.assert_called_once_with(model_config=cpu_model_config)
     assert engine.model_executors["tts-cpu"] is mock_instance
@@ -104,10 +96,7 @@ def test_engine_uses_gpu_executor_for_gpu_device(mock_gpu_exec, mock_scheduler, 
     mock_gpu_exec.return_value = mock_instance
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[gpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[gpu_model_config], log_stats=False)
 
     mock_gpu_exec.assert_called_once_with(model_config=gpu_model_config)
     assert engine.model_executors["tts-gpu"] is mock_instance
@@ -120,10 +109,7 @@ def test_engine_no_stat_logger_when_log_stats_false(mock_cpu_exec, mock_schedule
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=False)
 
     assert not hasattr(engine, "stat_logger")
 
@@ -135,10 +121,7 @@ def test_engine_creates_stat_logger_when_log_stats_true(mock_cpu_exec, mock_sche
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=True,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=True)
 
     assert hasattr(engine, "stat_logger")
 
@@ -150,10 +133,7 @@ def test_engine_stores_model_configs(mock_cpu_exec, mock_scheduler, cpu_model_co
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=False)
 
     assert engine.model_configs == [cpu_model_config]
 
@@ -165,10 +145,7 @@ def test_engine_executor_keyed_by_model_name(mock_cpu_exec, mock_scheduler, cpu_
     mock_cpu_exec.return_value = MagicMock()
     mock_scheduler.return_value = MagicMock()
 
-    engine = HarmonySpeechEngine(
-        model_configs=[cpu_model_config],
-        log_stats=False,
-    )
+    engine = HarmonySpeechEngine(model_configs=[cpu_model_config], log_stats=False)
 
     # Verify the key is the model name from ModelConfig
     assert "tts-cpu" in engine.model_executors

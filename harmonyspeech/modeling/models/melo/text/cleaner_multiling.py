@@ -40,10 +40,12 @@ rep_map = {
     "」": "'",
 }
 
+
 def replace_punctuation(text):
     pattern = re.compile("|".join(re.escape(p) for p in rep_map.keys()))
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
     return replaced_text
+
 
 def lowercase(text):
     return text.lower()
@@ -52,8 +54,10 @@ def lowercase(text):
 def collapse_whitespace(text):
     return re.sub(_whitespace_re, " ", text).strip()
 
+
 def remove_punctuation_at_begin(text):
-    return re.sub(r'^[,.!?]+', '', text)
+    return re.sub(r"^[,.!?]+", "", text)
+
 
 def remove_aux_symbols(text):
     text = re.sub(r"[\<\>\(\)\[\]\"\«\»\']+", "", text)
@@ -90,12 +94,13 @@ def replace_symbols(text, lang="en"):
     elif lang == "ca":
         text = text.replace("&", " i ")
         text = text.replace("'", "")
-    elif lang== "es":
-        text=text.replace("&","y")
+    elif lang == "es":
+        text = text.replace("&", "y")
         text = text.replace("'", "")
     return text
 
-def unicleaners(text, cased=False, lang='en'):
+
+def unicleaners(text, cased=False, lang="en"):
     """Basic pipeline for Portuguese text. There is no need to expand abbreviation and
     numbers, phonemizer already does that"""
     if not cased:
@@ -105,6 +110,5 @@ def unicleaners(text, cased=False, lang='en'):
     text = remove_aux_symbols(text)
     text = remove_punctuation_at_begin(text)
     text = collapse_whitespace(text)
-    text = re.sub(r'([^\.,!\?\-…])$', r'\1.', text)
+    text = re.sub(r"([^\.,!\?\-…])$", r"\1.", text)
     return text
-

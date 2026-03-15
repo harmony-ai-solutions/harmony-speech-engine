@@ -9,7 +9,6 @@ from harmonyspeech.common.utils import is_cpu, is_hip
 
 
 class DeviceConfig:
-
     def __init__(self, device: str = "auto") -> None:
         if device == "auto":
             # Automated device type detection
@@ -86,23 +85,17 @@ class ModelConfig:
 
     def _verify_load_format(self) -> None:
         load_format = self.load_format.lower()
-        supported_load_format = [
-            "auto", "pt", "pth", "safetensors", "npcache", "dummy", "onnx"
-        ]
+        supported_load_format = ["auto", "pt", "pth", "safetensors", "npcache", "dummy", "onnx"]
         rocm_not_supported_load_format = []
         if load_format not in supported_load_format:
             raise ValueError(
-                f"Unknown load format: {self.load_format}. Must be one of "
-                "'auto', 'pt', 'pth', 'safetensors', 'npcache', or 'dummy'.")
+                f"Unknown load format: {self.load_format}. Must be one of 'auto', 'pt', 'pth', 'safetensors', 'npcache', or 'dummy'."
+            )
         if is_hip() and load_format in rocm_not_supported_load_format:
-            rocm_supported_load_format = [
-                f for f in supported_load_format
-                if (f not in rocm_not_supported_load_format)
-            ]
+            rocm_supported_load_format = [f for f in supported_load_format if (f not in rocm_not_supported_load_format)]
             raise ValueError(
-                f"load format \'{load_format}\' is not supported in ROCm. "
-                f"Supported load format are "
-                f"{rocm_supported_load_format}")
+                f"load format '{load_format}' is not supported in ROCm. Supported load format are {rocm_supported_load_format}"
+            )
 
         self.load_format = load_format
 
@@ -117,18 +110,16 @@ class EngineConfig:
     model_configs: List[ModelConfig]
 
     def __post_init__(self):
-        """Verify configs are valid & consistent with each other.
-        """
+        """Verify configs are valid & consistent with each other."""
         # self.model_config.verify_with_parallel_config(self.parallel_config)
 
     def to_dict(self):
-        """Return the configs as a dictionary, for use in **kwargs.
-        """
+        """Return the configs as a dictionary, for use in **kwargs."""
         return dict((field.name, getattr(self, field.name)) for field in fields(self))
 
     @classmethod
     def load_config_from_yaml(cls, yaml_file_path: str) -> "EngineConfig":
-        with open(yaml_file_path, 'r') as file:
+        with open(yaml_file_path, "r") as file:
             config_data = yaml.safe_load(file)
 
         model_configs = []
@@ -151,9 +142,7 @@ _STR_DTYPE_TO_TORCH_DTYPE = {
 _ROCM_NOT_SUPPORTED_DTYPE = ["float", "float32"]
 
 
-def _get_and_verify_dtype(
-    dtype: Union[str, torch.dtype],
-) -> torch.dtype:
+def _get_and_verify_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
 
     config_dtype = torch.float32
 

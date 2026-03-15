@@ -47,9 +47,7 @@ class ResidualStack(torch.nn.Module):
             self.stack = torch.nn.Sequential(
                 getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                 getattr(torch.nn, pad)((kernel_size - 1) // 2 * dilation, **pad_params),
-                torch.nn.Conv1d(
-                    channels, channels, kernel_size, dilation=dilation, bias=bias
-                ),
+                torch.nn.Conv1d(channels, channels, kernel_size, dilation=dilation, bias=bias),
                 getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                 torch.nn.Conv1d(channels, channels, 1, bias=bias),
             )
@@ -57,13 +55,7 @@ class ResidualStack(torch.nn.Module):
             self.stack = torch.nn.Sequential(
                 getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                 CausalConv1d(
-                    channels,
-                    channels,
-                    kernel_size,
-                    dilation=dilation,
-                    bias=bias,
-                    pad=pad,
-                    pad_params=pad_params,
+                    channels, channels, kernel_size, dilation=dilation, bias=bias, pad=pad, pad_params=pad_params
                 ),
                 getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                 torch.nn.Conv1d(channels, channels, 1, bias=bias),
