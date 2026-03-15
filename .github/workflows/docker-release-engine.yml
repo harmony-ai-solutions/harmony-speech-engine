@@ -17,16 +17,15 @@ jobs:
     steps:
       # Frees up additional disk space on GHA runner for building the image
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
-          remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -100,16 +99,15 @@ jobs:
     steps:
       # Frees up additional disk space on GHA runner for building the image
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
-          remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -196,16 +194,15 @@ jobs:
     steps:
       # Frees up additional disk space on GHA runner for building the image
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
-          remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -279,16 +276,15 @@ jobs:
     steps:
       # Frees up additional disk space on GHA runner for building the image
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
-          remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4

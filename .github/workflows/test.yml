@@ -97,16 +97,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -124,14 +124,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -142,6 +134,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run KittenTTS E2E tests
         run: |
@@ -156,16 +157,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -183,14 +184,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -201,6 +194,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run MeloTTS and OpenVoice V2 E2E tests
         run: |
@@ -215,16 +217,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -242,14 +244,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -260,6 +254,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run OpenVoice V1 E2E tests
         run: |
@@ -274,16 +277,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -301,14 +304,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -319,6 +314,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run HarmonySpeech E2E tests
         run: |
@@ -333,16 +337,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -360,14 +364,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -378,6 +374,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run Whisper E2E tests
         run: |
@@ -392,16 +397,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -419,14 +424,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -437,6 +434,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run SileroVAD E2E tests
         run: |
@@ -451,16 +457,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -478,14 +484,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -496,6 +494,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run VoiceFixer E2E tests
         run: |
@@ -510,16 +517,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -537,14 +544,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -556,6 +555,16 @@ jobs:
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
           pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run Chatterbox E2E tests
         run: |
@@ -570,16 +579,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -597,14 +606,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -616,6 +617,16 @@ jobs:
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
           pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run ChatterboxTurbo E2E tests
         run: |
@@ -630,16 +641,16 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -657,14 +668,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Cache HuggingFace models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-${{ hashFiles('**/conftest.py') }}
-          restore-keys: |
-            hf-models-
-
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -676,6 +679,16 @@ jobs:
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
           pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run ChatterboxMultilingual E2E tests
         run: |

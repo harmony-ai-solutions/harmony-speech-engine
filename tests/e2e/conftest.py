@@ -1,6 +1,7 @@
 """E2E test conftest.py — marks all e2e tests and provides model download fixtures."""
 
 import base64
+import os
 import struct
 from unittest.mock import AsyncMock, MagicMock
 
@@ -479,8 +480,15 @@ def models_cache_dir(tmp_path_factory):
     """
     Session-scoped temp directory for model weight caching during E2E tests.
     Models downloaded here are shared across all e2e tests in one session.
+
+    Sets HF_HOME and HUGGINGFACE_HUB_CACHE so that HuggingFace actually
+    writes model files into this controlled directory instead of the default
+    ~/.cache/huggingface, preventing uncontrolled disk growth on CI runners.
     """
-    return tmp_path_factory.mktemp("models_cache")
+    cache_dir = tmp_path_factory.mktemp("models_cache")
+    os.environ["HF_HOME"] = str(cache_dir)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(cache_dir / "hub")
+    return cache_dir
 
 
 @pytest.fixture(scope="module")
