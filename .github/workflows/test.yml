@@ -42,9 +42,9 @@ jobs:
           pip install -r requirements-common.txt
           pip install --no-deps -r requirements-chatterbox.txt
 
-      - name: Run unit and integration tests
+      - name: Run unit and integration tests with coverage
         run: |
-          python -m pytest --device=cpu --dtype=float32 -v --tb=short -m "not e2e"
+          python -m pytest --device=cpu --dtype=float32 -v --tb=short -m "not e2e" --cov=harmonyspeech --cov-report=term-missing --cov-report=xml
 
       - name: Upload coverage report
         if: always()
@@ -55,7 +55,7 @@ jobs:
           retention-days: 7
 
   lint:
-    name: Lint (ruff)
+    name: Linting & Formatting
     runs-on: ubuntu-latest
 
     steps:

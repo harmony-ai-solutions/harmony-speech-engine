@@ -137,7 +137,10 @@ class ChatterboxTurboTTSModel:
 
         # Use the caller-supplied token if available, otherwise None (allow anonymous
         # access to this public repo rather than forcing token=True).
+        # Also treat empty string as None to avoid 'Illegal header value b'Bearer '' errors.
         hf_token = os.getenv("HF_TOKEN") or None
+        if hf_token == "":
+            hf_token = None
 
         local_path = snapshot_download(
             repo_id=_CHATTERBOX_TURBO_REPO_ID,

@@ -123,8 +123,10 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
-# Environments
+# Environments & local secrets should not be committed
 .env
+.env.local
+.env.*.local
 .venv
 env/
 venv/
