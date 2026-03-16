@@ -171,9 +171,7 @@ frontend/
 
 #.current_work/
 .current_work/chatterbox-tts
-.current_work/chatterbox-tts-expansion
-.current_work/KittenTTS
-# .current_work/kittentts-integration
+.current_work/Chatterbox-TTS-Server
 
 /docs/api/jsclient/
 /docs/api/goclient/

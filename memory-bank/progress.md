@@ -115,14 +115,14 @@
 - ✅ Phonemizer: misaki[en]
 - ✅ 4 e2e tests validated and passing on CPU
 
-### 🔄 Chatterbox TTS (IN PROGRESS — Phase 1 of 7 Complete)
+### ✅ Chatterbox TTS (COMPLETE — All 7 Phases)
 - ✅ Phase 1: Dependencies installed — chatterbox-tts==0.1.6 (--no-deps), resemble-perth, pyloudnorm, einops, omegaconf, conformer, s3tokenizer, spacy-pkuseg; all 7 import tests pass
-- ❌ Phase 2: Model Registration (ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS in ModelRegistry)
-- ❌ Phase 3: Input Preparation
-- ❌ Phase 4: Model Execution
-- ❌ Phase 5: Request Routing (including multi-step voice cloning)
-- ❌ Phase 6: Configuration & Performance
-- ❌ Phase 7: Testing & Documentation
+- ✅ Phase 2: Model Registration — ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS in ModelRegistry
+- ✅ Phase 3: Input Preparation — speed, normalize_audio (renamed from norm_loudness), split_text parameters
+- ✅ Phase 4: Model Execution — execute methods and dispatch
+- ✅ Phase 5: Request Routing — Chatterbox request routing to engine and serving layer, embed-dispatch support
+- ✅ Phase 6: Configuration & Performance — Chatterbox entries in config.yml/config.gpu.yml, watermarker swap
+- ✅ Phase 7: Testing & Documentation — Comprehensive unit and e2e tests for all 4 variants
 
 ### 🔄 Planned Model Integrations (IN PROGRESS)
 

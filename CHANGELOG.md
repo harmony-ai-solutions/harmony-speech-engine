@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.2.0
+
+### New Features
+
+*   **Chatterbox TTS Integration**:
+    *   Added comprehensive support for Resemble AI's Chatterbox TTS family with 4 model variants: ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS
+    *   23 supported languages (multilingual variant)
+    *   Voice cloning with watermarking (resemble-perth)
+    *   Implemented embed-dispatch support for embedding-capable TTS models
+    *   Added watermarker swap in loader for voice cloning workflows
 
 ### Improvements
 
@@ -9,10 +18,22 @@
     *   Updated UI release workflow behavior to explicitly build and publish the Speech Engine UI variant from the canonical unified frontend source.
     *   Added clearer local setup guidance for cloning and running the unified frontend in Speech Engine mode from this repository context.
 
+*   **Protocol Updates**:
+    *   Renamed `norm_loudness` to `normalize_audio` across TTS protocol for clarity
+    *   Added `SpeechEmbeddingRequestInput` handling in TTS inputs
+
 ### Fixes
 
 *   **Container UI Runtime Build Reliability**:
     *   Improved Docker build context handling for the frontend image to avoid local dependency contamination that could break runtime UI builds.
+
+*   **CI/Testing Improvements**:
+    *   Fixed e2e patching and monkey patching for watermarking on CI runners
+    *   Fixed caching and runner cleanup
+    *   Fixed pkg_resources compatibility for Python >= 3.12
+    *   Fixed requirement ordering
+    *   Fixed missing package installations for chatterbox that break unit tests
+    *   Fixed docker images and requirements
 
 ## v0.1.1-rc1
 

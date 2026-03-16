@@ -1,4 +1,4 @@
-name: Test Suite
+name: Run Test Suites
 
 on:
   push:
@@ -92,9 +92,6 @@ jobs:
     name: E2E KittenTTS (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -155,9 +152,6 @@ jobs:
     name: E2E MeloTTS and OpenVoice V2 (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -218,9 +212,6 @@ jobs:
     name: E2E OpenVoice V1 (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -281,9 +272,6 @@ jobs:
     name: E2E HarmonySpeech (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -344,9 +332,6 @@ jobs:
     name: E2E Whisper STT (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -407,9 +392,6 @@ jobs:
     name: E2E SileroVAD (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -470,9 +452,6 @@ jobs:
     name: E2E VoiceFixer (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -533,9 +512,6 @@ jobs:
     name: E2E Chatterbox (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -597,9 +573,6 @@ jobs:
     name: E2E ChatterboxTurbo (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -661,9 +634,6 @@ jobs:
     name: E2E ChatterboxMultilingual (CPU)
     runs-on: ubuntu-latest
     needs: [test]
-    concurrency:
-      group: e2e-${{ github.ref }}
-      cancel-in-progress: false
     env:
       HF_HOME: ~/.cache/huggingface
     steps:

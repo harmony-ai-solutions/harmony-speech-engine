@@ -2,11 +2,41 @@
 
 ## Current Development Phase
 
-**Release Status**: Release Candidate 9 (v0.1.0-rc9)  
-**Development Focus**: Stabilization and feature completion for v0.1.0 release  
-**Target Timeline**: Preparing for stable v0.1.0 release  
+**Release Status**: Release Candidate 9 (v0.1.0-rc9)
+**Development Focus**: Chatterbox TTS integration and feature completion for v0.1.0 release
+**Target Timeline**: Preparing for stable v0.1.0 release
 
 ## Recent Changes and Developments
+
+### Chatterbox TTS Integration (MAJOR FEATURE - COMPLETE)
+
+**Overview**
+- Resemble AI's open-source TTS family: 4 model variants (ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS)
+- 23 supported languages (multilingual variant)
+- Voice cloning with watermarking (resemble-perth)
+
+**Phase Status (All 7 Phases Complete)**
+- ✅ Phase 1: Dependencies and setup
+- ✅ Phase 2: Model Registration — ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS registered in ModelRegistry
+- ✅ Phase 3: Input Preparation — Added speed, normalize_audio, split_text parameters
+- ✅ Phase 4: Model Execution — Implemented execute methods and dispatch
+- ✅ Phase 5: Request Routing — Added Chatterbox request routing to engine and serving layer
+- ✅ Phase 6: Configuration & Performance — Added Chatterbox entries to config files, embed-dispatch and cache support
+- ✅ Phase 7: Testing & Documentation — Comprehensive unit and e2e tests added
+
+**Key Technical Changes**
+- Implemented watermarker swap in loader for voice cloning workflows
+- Added embed-dispatch support for embedding-capable TTS models
+
+### Future: Audio Enhancements Plan (PLANNED - NOT YET IMPLEMENTED)
+
+**Planned Features (Phase A + Phase B)**
+- Text chunking + smart crossfade stitching (model-agnostic)
+- Speed factor post-processing (librosa pitch-preserving)
+- Peak normalization / clip prevention (model-agnostic)
+- DC offset removal, leading/trailing silence trimming, internal silence reduction
+
+**Plan Document**: `.current_work/chatterbox-audio-enhancements/summary.md`
 
 ### Core Engine Improvements
 
@@ -32,9 +62,7 @@
 - ✅ VoiceFixer (Audio restoration: Restorer, Vocoder)
 - ✅ Silero VAD (High-performance voice activity detection)
 - ✅ KittenTTS (Ultra-lightweight ONNX TTS: mini, micro, nano, nano-int8)
-
-**In Progress:**
-- 🔄 Chatterbox TTS (4 variants: TTS, VC, Multilingual, Turbo) — Phase 1 of 7 complete
+- ✅ Chatterbox TTS (4 variants: TTS, VC, Multilingual, Turbo) — COMPLETE
 
 **Model Integration Patterns:**
 - Standardized model configuration via YAML
@@ -143,41 +171,50 @@
 
 ## Current Work Focus
 
-**1. Chatterbox TTS Integration (Active — GSD Roadmap Phase 1 of 7 complete)**
+**1. Chatterbox TTS Integration (COMPLETE — All 7 Phases Done)**
 - ✅ Phase 1: Dependencies and setup complete
-- → Phase 2 next: Model registration — register all 4 Chatterbox variants in ModelRegistry
-- Run `/gsd-plan-phase 2` to generate the Phase 2 implementation plan
+- ✅ Phase 2: Model Registration — ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS registered
+- ✅ Phase 3: Input Preparation — speed, normalize_audio, split_text parameters
+- ✅ Phase 4: Model Execution — execute methods and dispatch
+- ✅ Phase 5: Request Routing — Chatterbox request routing to engine and serving layer
+- ✅ Phase 6: Configuration & Performance — config entries, embed-dispatch, cache support
+- ✅ Phase 7: Testing & Documentation — comprehensive unit and e2e tests
 
-**2. Model Integration Completion (Backlog)**
+**2. Future: Audio Enhancements Plan (PLANNED)**
+- See `.current_work/chatterbox-audio-enhancements/summary.md` for details
+- Phase A: Text chunking, speed factor, peak normalization
+- Phase B: DC offset removal, silence trimming, internal silence reduction
+
+**3. Model Integration Completion (Backlog)**
 - [ ] StyleTTS 2 integration for advanced voice cloning
 - [ ] XTTS V2 multilingual support
 - [ ] Vall-E-X zero-shot voice cloning
 
-**3. Performance and Reliability**
-- [ ] Comprehensive error handling and recovery mechanisms
+**4. Performance and Reliability**
+- [x] Comprehensive error handling and recovery mechanisms
 - [ ] Memory optimization for large model loading
 - [ ] Request batching optimization for improved throughput
 - [ ] GPU memory management improvements
 
-**4. Testing and Quality Assurance**
-- 80 tests across unit / integration / e2e tiers, 80% coverage
+**5. Testing and Quality Assurance**
+- 80+ tests across unit / integration / e2e tiers
 - [ ] GPU executor path coverage (currently 0%)
-- [ ] Multi-step pipeline integration tests
+- [x] Multi-step pipeline integration tests
 - [ ] Performance benchmarking
 
-**5. Advanced Features**
+**6. Advanced Features**
 - [ ] TTS streaming capabilities for real-time applications
 - [ ] Input filters / pre-processing pipelines
 - [ ] Voice conversion post-processing pipelines
 - [ ] Advanced audio format support
 
-**6. Production Readiness**
+**7. Production Readiness**
 - [ ] Comprehensive monitoring and logging
-- [ ] Health check endpoints and diagnostics
+- [x] Health check endpoints and diagnostics
 - [ ] Horizontal scaling capabilities
 - [ ] Production deployment guides
 
-**7. Community and Ecosystem**
+**8. Community and Ecosystem**
 - [ ] Community model contribution guidelines
 - [ ] Third-party integration examples
 - [ ] Performance optimization documentation

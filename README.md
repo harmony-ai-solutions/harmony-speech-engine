@@ -138,7 +138,7 @@ May change over time as new models and frameworks are being developed.
   - [x] Harmony Speech V1 (english)
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 (English, Spanish, French, Chinese, Japanese and Korean)
-  - [ ] Chatterbox TTS (Multilingual, 23 languages — in progress)
+  - [x] Chatterbox TTS (Multilingual, 23 languages)
   - [ ] Vall-E-X (Multilingual)
   - [ ] XTTS V2 (Multilingual)
   - [ ] CosyVoice (Multilingual)
@@ -146,6 +146,7 @@ May change over time as new models and frameworks are being developed.
   - [x] OpenVoice V1 (English / Chinese + basic emotions)
   - [x] OpenVoice V2 / MeloTTS (English, Spanish, French, Chinese, Japanese and Korean)
   - [x] KittenTTS (English, ultra-lightweight ONNX — mini / micro / nano / nano-int8)
+  - [x] Chatterbox TTS (English + 23 languages)
 - [ ] Generic Multispeaker TTS
   - [ ] EmotiVoice (English / Chinese + basic emotions for a wide range of speakers)
 - [ ] Adaptive Voice Cloning
