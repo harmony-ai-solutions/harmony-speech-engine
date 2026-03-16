@@ -48,4 +48,5 @@
 - Update relevant documentation in /docs when modifying features
 - Keep README.md in sync with new capabilities
 - Maintain changelog entries in CHANGELOG.md for changes which are relevant for users.
-- Do not include implementation details like names of constants or code files in the changelog.
+- Do NOT include implementation details like names of constants or code files in the changelog.
+- Do NOT use the term smoke tests - The only kind of tests which exist are unit, integration, end-to-end (E2E) and acceptance tests.

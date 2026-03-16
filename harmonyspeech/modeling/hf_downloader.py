@@ -1,4 +1,5 @@
 """Utilities for downloading and initializing model weights."""
+
 import json
 import os
 
@@ -6,18 +7,17 @@ import huggingface_hub.constants
 import torch
 from huggingface_hub import hf_hub_download
 
-
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
 
 
 def enable_hf_transfer():
-    """automatically activates hf_transfer
-    """
+    """automatically activates hf_transfer"""
     if "HF_HUB_ENABLE_HF_TRANSFER" not in os.environ:
         try:
             # enable hf hub transfer if available
             import hf_transfer  # type: ignore # noqa
+
             huggingface_hub.constants.HF_HUB_ENABLE_HF_TRANSFER = True
         except ImportError:
             pass
@@ -26,12 +26,7 @@ def enable_hf_transfer():
 enable_hf_transfer()
 
 
-
-def initialize_dummy_weights(
-    model: torch.nn.Module,
-    low: float = -1e-3,
-    high: float = 1e-3,
-) -> None:
+def initialize_dummy_weights(model: torch.nn.Module, low: float = -1e-3, high: float = 1e-3) -> None:
     """Initialize model weights with random values.
 
     The model weights must be randomly initialized for accurate performance
@@ -77,7 +72,7 @@ class HParams:
 
 
 def get_hparams_from_file(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         data = f.read()
     config = json.loads(data)
 
@@ -91,11 +86,7 @@ def load_or_download_file(model_name_or_path: str, file_filename: str = "file.js
     if not os.path.isfile(file_path):
         # Try via Huggingface if path is not pointing to a local file
         # assuming file_base_path is a huggingface repo URL
-        file_path = hf_hub_download(
-            repo_id=file_base_path,
-            revision=revision,
-            filename=file_filename
-        )
+        file_path = hf_hub_download(repo_id=file_base_path, revision=revision, filename=file_filename)
     # Read file via binary mode
     with open(file_path, "rb") as f:
         data = f.read()
@@ -108,24 +99,18 @@ def load_or_download_config(model_name_or_path: str, config_filename: str = "con
     if not os.path.isfile(config_path):
         # Try via Huggingface if path is not pointing to a local file
         # assuming config_base_path is a huggingface repo URL
-        config_path = hf_hub_download(
-            repo_id=config_base_path,
-            revision=revision,
-            filename=config_filename
-        )
+        config_path = hf_hub_download(repo_id=config_base_path, revision=revision, filename=config_filename)
 
     return get_hparams_from_file(config_path)
 
 
-def load_or_download_model(model_name_or_path: str, device: str, ckpt_filename: str = "checkpoint.pth", revision: str = None):
+def load_or_download_model(
+    model_name_or_path: str, device: str, ckpt_filename: str = "checkpoint.pth", revision: str = None
+):
     ckpt_base_path = model_name_or_path
     ckpt_path = ckpt_base_path + "/" + ckpt_filename
     if not os.path.isfile(ckpt_path):
         # Try via Huggingface if path is not pointing to a local file
         # assuming ckpt_base_path is a huggingface repo URL
-        ckpt_path = hf_hub_download(
-            repo_id=ckpt_base_path,
-            revision=revision,
-            filename=ckpt_filename
-        )
+        ckpt_path = hf_hub_download(repo_id=ckpt_base_path, revision=revision, filename=ckpt_filename)
     return torch.load(ckpt_path, map_location=device, weights_only=False)

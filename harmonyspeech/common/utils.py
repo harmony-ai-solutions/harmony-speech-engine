@@ -2,26 +2,23 @@ import asyncio
 import enum
 import gc
 import os
+import socket
 import subprocess
 import uuid
-from functools import lru_cache, partial
-import socket
+from collections import OrderedDict
+from collections.abc import Awaitable, Callable, Hashable
+from functools import cache, partial
 from platform import uname
-from typing import Hashable, Optional, OrderedDict, Generic, TypeVar, Any, Callable, Awaitable, List
-from loguru import logger
-from packaging.version import Version, parse
+from typing import Any, Generic, TypeVar
 
 import psutil
 import torch
+from loguru import logger
+from packaging.version import Version, parse
 
 T = TypeVar("T")
 
-STR_DTYPE_TO_TORCH_DTYPE = {
-    "half": torch.half,
-    "bfloat16": torch.bfloat16,
-    "float": torch.float,
-    "fp8": torch.uint8,
-}
+STR_DTYPE_TO_TORCH_DTYPE = {"half": torch.half, "bfloat16": torch.bfloat16, "float": torch.float, "fp8": torch.uint8}
 
 
 class Device(enum.Enum):
@@ -30,7 +27,6 @@ class Device(enum.Enum):
 
 
 class Counter:
-
     def __init__(self, start: int = 0) -> None:
         self.counter = start
 
@@ -44,7 +40,6 @@ class Counter:
 
 
 class LRUCache(Generic[T]):
-
     def __init__(self, capacity: int):
         self.cache = OrderedDict[Hashable, T]()
         self.capacity = capacity
@@ -67,9 +62,7 @@ class LRUCache(Generic[T]):
     def touch(self, key: Hashable) -> None:
         self.cache.move_to_end(key)
 
-    def get(self,
-            key: Hashable,
-            default_value: Optional[T] = None) -> Optional[T]:
+    def get(self, key: Hashable, default_value: T | None = None) -> T | None:
         if key in self.cache:
             value = self.cache[key]
             self.cache.move_to_end(key)
@@ -95,7 +88,7 @@ class LRUCache(Generic[T]):
         while len(self.cache) > self.capacity:
             self.remove_oldest()
 
-    def pop(self, key: Hashable, default_value: Optional[Any] = None) -> T:
+    def pop(self, key: Hashable, default_value: Any | None = None) -> T:
         run_on_remove = key in self.cache
         value = self.cache.pop(key, default_value)
         if run_on_remove:
@@ -112,9 +105,10 @@ def is_hip() -> bool:
     return torch.version.hip is not None
 
 
-@lru_cache(maxsize=None)
+@cache
 def is_cpu() -> bool:
     from importlib.metadata import PackageNotFoundError, version
+
     try:
         return "cpu" in version("aphrodite-engine")
     except PackageNotFoundError:
@@ -130,7 +124,7 @@ def random_uuid() -> str:
     return str(uuid.uuid4().hex)
 
 
-@lru_cache(maxsize=None)
+@cache
 def in_wsl() -> bool:
     # Reference: https://github.com/microsoft/WSL/issues/4071
     return "microsoft" in " ".join(uname()).lower()
@@ -184,13 +178,13 @@ def get_open_port() -> int:
             return s.getsockname()[1]
 
 
-def set_cuda_visible_devices(device_ids: List[int]) -> None:
+def set_cuda_visible_devices(device_ids: list[int]) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, device_ids))
 
 
 def chunk_list(lst, chunk_size):
     """Yield successive chunk_size chunks from lst."""
-    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
+    return [lst[i : i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 
 def cdiv(a: int, b: int) -> int:
@@ -198,21 +192,17 @@ def cdiv(a: int, b: int) -> int:
     return -(a // -b)
 
 
-@lru_cache(maxsize=None)
-def get_nvcc_cuda_version() -> Optional[Version]:
-    cuda_home = os.environ.get('CUDA_HOME')
+@cache
+def get_nvcc_cuda_version() -> Version | None:
+    cuda_home = os.environ.get("CUDA_HOME")
     if not cuda_home:
-        cuda_home = '/usr/local/cuda'
-        if os.path.isfile(cuda_home + '/bin/nvcc'):
-            logger.info(
-                f'CUDA_HOME is not found in the environment. Using {cuda_home} '
-                'as CUDA_HOME.')
+        cuda_home = "/usr/local/cuda"
+        if os.path.isfile(cuda_home + "/bin/nvcc"):
+            logger.info(f"CUDA_HOME is not found in the environment. Using {cuda_home} as CUDA_HOME.")
         else:
-            logger.warning(
-                f'Not found nvcc in {cuda_home}. Skip cuda version check!')
+            logger.warning(f"Not found nvcc in {cuda_home}. Skip cuda version check!")
             return None
-    nvcc_output = subprocess.check_output([cuda_home + "/bin/nvcc", "-V"],
-                                          universal_newlines=True)
+    nvcc_output = subprocess.check_output([cuda_home + "/bin/nvcc", "-V"], universal_newlines=True)
     output = nvcc_output.split()
     release_idx = output.index("release") + 1
     nvcc_cuda_version = parse(output[release_idx].split(",")[0])
@@ -220,7 +210,6 @@ def get_nvcc_cuda_version() -> Optional[Version]:
 
 
 class CudaMemoryProfiler:
-
     def __init__(self, device=None):
         self.device = device
 

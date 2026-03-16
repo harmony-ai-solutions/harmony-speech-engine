@@ -1,33 +1,28 @@
 import sys
 
 import torch
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-model_id = 'dbmdz/bert-base-french-europeana-cased'
+model_id = "dbmdz/bert-base-french-europeana-cased"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 model = None
 
+
 def get_bert_feature(text, word2ph, device=None):
     global model
-    if (
-        sys.platform == "darwin"
-        and torch.backends.mps.is_available()
-        and device == "cpu"
-    ):
+    if sys.platform == "darwin" and torch.backends.mps.is_available() and device == "cpu":
         device = "mps"
     if not device:
         device = "cuda"
     if model is None:
-        model = AutoModelForMaskedLM.from_pretrained(model_id).to(
-            device
-        )
+        model = AutoModelForMaskedLM.from_pretrained(model_id).to(device)
     with torch.no_grad():
         inputs = tokenizer(text, return_tensors="pt")
         for i in inputs:
             inputs[i] = inputs[i].to(device)
         res = model(**inputs, output_hidden_states=True)
         res = torch.cat(res["hidden_states"][-3:-2], -1)[0].cpu()
-        
+
     assert inputs["input_ids"].shape[-1] == len(word2ph)
     word2phone = word2ph
     phone_level_feature = []

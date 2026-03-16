@@ -1,16 +1,28 @@
 """Utilities for selecting and loading models."""
-import contextlib
-from typing import Type, Optional
 
+import contextlib
+
+import perth
 import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
 from silero_vad import load_silero_vad
-from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.modeling.hf_downloader import (
+    initialize_dummy_weights,
+    load_or_download_config,
+    load_or_download_file,
+    load_or_download_model,
+)
 from harmonyspeech.modeling.models import ModelRegistry
-from harmonyspeech.modeling.hf_downloader import *
+from harmonyspeech.modeling.models.chatterbox.chatterbox import (
+    ChatterboxMultilingualTTSModel,
+    ChatterboxTTSModel,
+    ChatterboxTurboTTSModel,
+    ChatterboxVCModel,
+)
+from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
 
 
 @contextlib.contextmanager
@@ -22,15 +34,15 @@ def _set_default_torch_dtype(dtype: torch.dtype):
     torch.set_default_dtype(old_dtype)
 
 
-def _get_model_cls(model_config: ModelConfig) -> Type[nn.Module]:
-    model_type = getattr(model_config, 'model_type', None)
+def _get_model_cls(model_config: ModelConfig) -> type[nn.Module]:
+    model_type = getattr(model_config, "model_type", None)
     model_cls = ModelRegistry.load_model_cls(model_type)
     if model_cls is not None:
         return model_cls
     else:
         raise ValueError(
-            f"Model of type {model_type} is not supported for now. "
-            f"Supported models: {ModelRegistry.get_supported_archs()}")
+            f"Model of type {model_type} is not supported for now. Supported models: {ModelRegistry.get_supported_archs()}"
+        )
 
 
 _MODEL_CONFIGS = {
@@ -39,51 +51,31 @@ _MODEL_CONFIGS = {
         "EN": "checkpoints/base_speakers/EN/config.json",
         "ZH": "checkpoints/base_speakers/ZH/config.json",
     },
-    "OpenVoiceV1ToneConverter": {
-        "default": "checkpoints/converter/config.json",
-    },
-    "OpenVoiceV1ToneConverterEncoder": {
-        "default": "checkpoints/converter/config.json",
-    },
+    "OpenVoiceV1ToneConverter": {"default": "checkpoints/converter/config.json"},
+    "OpenVoiceV1ToneConverterEncoder": {"default": "checkpoints/converter/config.json"},
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
-    "MeloTTSSynthesizer": {
-        "default": "config.json",
-    },
-    "OpenVoiceV2ToneConverter": {
-        "default": "converter/config.json",
-    },
-    "OpenVoiceV2ToneConverterEncoder": {
-        "default": "converter/config.json",
-    },
+    "MeloTTSSynthesizer": {"default": "config.json"},
+    "OpenVoiceV2ToneConverter": {"default": "converter/config.json"},
+    "OpenVoiceV2ToneConverterEncoder": {"default": "converter/config.json"},
     # Harmony Speech V1
-    "HarmonySpeechEncoder": {
-        "default": "encoder/config.json"
-    },
-    "HarmonySpeechSynthesizer": {
-        "default": "synthesizer/config.json"
-    },
-    "HarmonySpeechVocoder": {
-        "default": "vocoder/config.json"
-    },
+    "HarmonySpeechEncoder": {"default": "encoder/config.json"},
+    "HarmonySpeechSynthesizer": {"default": "synthesizer/config.json"},
+    "HarmonySpeechVocoder": {"default": "vocoder/config.json"},
     # VoiceFixer
-    "VoiceFixerRestorer": {
-        "default": "native"
-    },
-    "VoiceFixerVocoder": {
-        "default": "native"
-    },
+    "VoiceFixerRestorer": {"default": "native"},
+    "VoiceFixerVocoder": {"default": "native"},
     # Faster-Whisper
-    "FasterWhisper": {
-        "default": "native"
-    },
+    "FasterWhisper": {"default": "native"},
     # Silero VAD
-    "SileroVAD": {
-        "default": "native"
-    },
+    "SileroVAD": {"default": "native"},
     # KittenTTS
-    "KittenTTSSynthesizer": {
-        "default": "native"
-    }
+    "KittenTTSSynthesizer": {"default": "native"},
+    # Chatterbox TTS
+    "ChatterboxTTS": {"default": "native"},
+    "ChatterboxTurboTTS": {"default": "native"},
+    "ChatterboxMultilingualTTS": {"default": "native"},
+    "ChatterboxEmbedding": {"default": "native"},
+    "ChatterboxVC": {"default": "native"},
 }
 
 _MODEL_WEIGHTS = {
@@ -92,51 +84,31 @@ _MODEL_WEIGHTS = {
         "EN": "checkpoints/base_speakers/EN/checkpoint.pth",
         "ZH": "checkpoints/base_speakers/ZH/checkpoint.pth",
     },
-    "OpenVoiceV1ToneConverter": {
-        "default": "checkpoints/converter/checkpoint.pth",
-    },
-    "OpenVoiceV1ToneConverterEncoder": {
-        "default": "checkpoints/converter/checkpoint.pth",
-    },
+    "OpenVoiceV1ToneConverter": {"default": "checkpoints/converter/checkpoint.pth"},
+    "OpenVoiceV1ToneConverterEncoder": {"default": "checkpoints/converter/checkpoint.pth"},
     # OpenVoice V2 / MeloTTS - Different Repos but same structure per language
-    "MeloTTSSynthesizer": {
-        "default": "checkpoint.pth",
-    },
-    "OpenVoiceV2ToneConverter": {
-        "default": "converter/checkpoint.pth",
-    },
-    "OpenVoiceV2ToneConverterEncoder": {
-        "default": "converter/checkpoint.pth",
-    },
+    "MeloTTSSynthesizer": {"default": "checkpoint.pth"},
+    "OpenVoiceV2ToneConverter": {"default": "converter/checkpoint.pth"},
+    "OpenVoiceV2ToneConverterEncoder": {"default": "converter/checkpoint.pth"},
     # Harmony Speech V1
-    "HarmonySpeechEncoder": {
-        "default": "encoder/encoder.pt"
-    },
-    "HarmonySpeechSynthesizer": {
-        "default": "synthesizer/synthesizer.pt"
-    },
-    "HarmonySpeechVocoder": {
-        "default": "vocoder/vocoder.pt"
-    },
+    "HarmonySpeechEncoder": {"default": "encoder/encoder.pt"},
+    "HarmonySpeechSynthesizer": {"default": "synthesizer/synthesizer.pt"},
+    "HarmonySpeechVocoder": {"default": "vocoder/vocoder.pt"},
     # VoiceFixer
-    "VoiceFixerRestorer": {
-        "default": "vf.ckpt"
-    },
-    "VoiceFixerVocoder": {
-        "default": "model.ckpt-1490000_trimed.pt"
-    },
+    "VoiceFixerRestorer": {"default": "vf.ckpt"},
+    "VoiceFixerVocoder": {"default": "model.ckpt-1490000_trimed.pt"},
     # Faster-Whisper
-    "FasterWhisper": {
-        "default": "native"
-    },
+    "FasterWhisper": {"default": "native"},
     # Silero VAD
-    "SileroVAD": {
-        "default": "native"
-    },
+    "SileroVAD": {"default": "native"},
     # KittenTTS
-    "KittenTTSSynthesizer": {
-        "default": "native"
-    }
+    "KittenTTSSynthesizer": {"default": "native"},
+    # Chatterbox TTS
+    "ChatterboxTTS": {"default": "native"},
+    "ChatterboxTurboTTS": {"default": "native"},
+    "ChatterboxMultilingualTTS": {"default": "native"},
+    "ChatterboxEmbedding": {"default": "native"},
+    "ChatterboxVC": {"default": "native"},
 }
 
 _MODEL_SPEAKERS = {
@@ -152,9 +124,7 @@ _MODEL_SPEAKERS = {
             "sad": "checkpoints/base_speakers/EN/en_style_se.pth",
             "friendly": "checkpoints/base_speakers/EN/en_style_se.pth",
         },
-        "ZH": {
-            "default": "checkpoints/base_speakers/ZH/zh_default_se.pth"
-        },
+        "ZH": {"default": "checkpoints/base_speakers/ZH/zh_default_se.pth"},
     },
     "OpenVoiceV2ToneConverter": {
         "EN": {
@@ -165,50 +135,37 @@ _MODEL_SPEAKERS = {
             "EN-AU": "base_speakers/ses/en-au.pth",
             "EN-Default": "base_speakers/ses/en-default.pth",
         },
-        "ES": {
-            "ES": "base_speakers/ses/es.pth"
-        },
-        "FR": {
-            "FR": "base_speakers/ses/fr.pth"
-        },
-        "JP": {
-            "JP": "base_speakers/ses/jp.pth"
-        },
-        "KR": {
-            "KR": "base_speakers/ses/kr.pth"
-        },
-        "ZH": {
-            "ZH": "base_speakers/ses/zh.pth"
-        },
-    }
+        "ES": {"ES": "base_speakers/ses/es.pth"},
+        "FR": {"FR": "base_speakers/ses/fr.pth"},
+        "JP": {"JP": "base_speakers/ses/jp.pth"},
+        "KR": {"KR": "base_speakers/ses/kr.pth"},
+        "ZH": {"ZH": "base_speakers/ses/zh.pth"},
+    },
 }
 
 
 def get_model_speaker(
     model_name_or_path: str,
     model_type: str,
-    revision: Optional[str] = None,
+    revision: str | None = None,
     language: str = "default",
-    speaker: str = "default"
+    speaker: str = "default",
 ):
     if model_type not in _MODEL_SPEAKERS:
         raise NotImplementedError(f"model type {model_type} has no language option.")
     if language not in _MODEL_SPEAKERS[model_type]:
         raise NotImplementedError(f"model language {language} for model {model_type} does not exist.")
     if speaker not in _MODEL_SPEAKERS[model_type][language]:
-        raise NotImplementedError(f"model speaker {speaker} for model {model_type} and language {language} does not exist.")
+        raise NotImplementedError(
+            f"model speaker {speaker} for model {model_type} and language {language} does not exist."
+        )
 
     # Get Speaker
     speaker_data = load_or_download_file(model_name_or_path, _MODEL_SPEAKERS[model_type][language][speaker], revision)
     return speaker_data
 
 
-def get_model_config(
-    model_name_or_path: str,
-    model_type: str,
-    revision: Optional[str] = None,
-    flavour: str = "default"
-):
+def get_model_config(model_name_or_path: str, model_type: str, revision: str | None = None, flavour: str = "default"):
     if model_type not in _MODEL_CONFIGS:
         raise NotImplementedError(f"model type {model_type} is not implemented.")
     if flavour not in _MODEL_CONFIGS[model_type]:
@@ -224,11 +181,7 @@ def get_model_config(
 
 
 def get_model_weights(
-    model_name_or_path: str,
-    model_type: str,
-    revision: Optional[str] = None,
-    device: str = "cpu",
-    flavour: str = "default"
+    model_name_or_path: str, model_type: str, revision: str | None = None, device: str = "cpu", flavour: str = "default"
 ):
     if model_type not in _MODEL_WEIGHTS:
         raise NotImplementedError(f"model type {model_type} is not implemented.")
@@ -259,7 +212,6 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
         # Create a model instance.
         # The weights will be initialized as empty tensors.
         with torch.device(device_config.device):
-
             # Bailout for native models
             if model_class == "native" and hf_config == "native":
                 if model_config.model_type == "FasterWhisper":
@@ -267,16 +219,50 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     device_str = str(device_config.device)
                     model = WhisperModel(model_config.model, device=device_str)
                     return model
-                elif model_config.model_type == "SileroVAD":                    
+                elif model_config.model_type == "SileroVAD":
                     # Support both ONNX and PyTorch formats based on config
                     use_onnx = True
-                    load_format = getattr(model_config, 'load_format', 'onnx')
-                    if load_format not in ['auto', 'onnx']:
+                    load_format = getattr(model_config, "load_format", "onnx")
+                    if load_format not in ["auto", "onnx"]:
                         use_onnx = False
                     model = load_silero_vad(onnx=use_onnx)
                     return model
                 elif model_config.model_type == "KittenTTSSynthesizer":
                     model = KittenTTSSynthesizer(model_name_or_path=model_config.model)
+                    return model
+                elif model_config.model_type == "ChatterboxTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, "watermark", True):
+                        model.watermarker = perth.DummyWatermarker()
+                    return model
+                elif model_config.model_type == "ChatterboxTurboTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, "watermark", True):
+                        model.watermarker = perth.DummyWatermarker()
+                    return model
+                elif model_config.model_type == "ChatterboxMultilingualTTS":
+                    device = str(device_config.device)
+                    model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    if not getattr(model_config, "watermark", True):
+                        model.watermarker = perth.DummyWatermarker()
+                    return model
+                elif model_config.model_type == "ChatterboxVC":
+                    device = str(device_config.device)
+                    model = ChatterboxVCModel.from_pretrained(device=device)
+                    if not getattr(model_config, "watermark", True):
+                        model.watermarker = perth.DummyWatermarker()
+                    return model
+                elif model_config.model_type == "ChatterboxEmbedding":
+                    device = str(device_config.device)
+                    model_name = getattr(model_config, "model", "") or ""
+                    if "turbo" in model_name.lower():
+                        model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    elif "multilingual" in model_name.lower():
+                        model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    else:
+                        model = ChatterboxTTSModel.from_pretrained(device=device)
                     return model
 
             # Handle VoiceFixer models (native / fixed config but not native class)
@@ -290,17 +276,15 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     "OpenVoiceV1ToneConverter",
                     "OpenVoiceV1ToneConverterEncoder",
                     "OpenVoiceV2ToneConverter",
-                    "OpenVoiceV2ToneConverterEncoder"
+                    "OpenVoiceV2ToneConverterEncoder",
                 ]:
                     # Dynamic Parameters for OpenVoice
-                    hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))
+                    hf_config.model.n_vocab = len(getattr(hf_config, "symbols", []))
                     hf_config.model.spec_channels = hf_config.data.filter_length // 2 + 1
                     hf_config.model.n_speakers = hf_config.data.n_speakers
-                if model_config.model_type in [
-                    "MeloTTSSynthesizer",
-                ]:
+                if model_config.model_type in ["MeloTTSSynthesizer"]:
                     # Dynamic Parameters for MeloTTS
-                    hf_config.model.n_vocab = len(getattr(hf_config, 'symbols', []))
+                    hf_config.model.n_vocab = len(getattr(hf_config, "symbols", []))
                     hf_config.model.spec_channels = hf_config.data.filter_length // 2 + 1
                     hf_config.model.segment_size = hf_config.train.segment_size // hf_config.data.hop_length
                     hf_config.model.n_speakers = hf_config.data.n_speakers
@@ -318,11 +302,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
         else:
             # Load the weights from the cached or downloaded files.
             checkpoint = get_model_weights(
-                model_config.model,
-                model_config.model_type,
-                model_config.revision,
-                device_config.device,
-                flavour
+                model_config.model, model_config.model_type, model_config.revision, device_config.device, flavour
             )
             # Run the load weight method of the model
             # Every model needs to implement this seperately, because state dicts can differ

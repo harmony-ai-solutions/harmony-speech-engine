@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2019 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 
@@ -12,12 +10,11 @@ import re
 import sys
 import tarfile
 
-from filelock import FileLock
-
 import h5py
 import numpy as np
 import torch
 import yaml
+from filelock import FileLock
 
 PRETRAINED_MODEL_LIST = {
     "ljspeech_parallel_wavegan.v1": "1PdZv37JhAQH6AwNh31QlqruqrvjTBq7U",
@@ -132,14 +129,11 @@ def write_hdf5(hdf5_name, hdf5_path, write_data, is_overwrite=True):
         # check dataset existence
         if hdf5_path in hdf5_file:
             if is_overwrite:
-                logging.warning(
-                    "Dataset in hdf5 file already exists. recreate dataset in hdf5."
-                )
+                logging.warning("Dataset in hdf5 file already exists. recreate dataset in hdf5.")
                 hdf5_file.__delitem__(hdf5_path)
             else:
                 logging.error(
-                    "Dataset in hdf5 file already exists. "
-                    "if you want to overwrite, please set is_overwrite = True."
+                    "Dataset in hdf5 file already exists. if you want to overwrite, please set is_overwrite = True."
                 )
                 hdf5_file.close()
                 sys.exit(1)
@@ -153,7 +147,7 @@ def write_hdf5(hdf5_name, hdf5_path, write_data, is_overwrite=True):
     hdf5_file.close()
 
 
-class HDF5ScpLoader(object):
+class HDF5ScpLoader:
     """Loader class for a fests.scp file of hdf5 file.
 
     Examples:
@@ -213,9 +207,7 @@ class HDF5ScpLoader(object):
             else:
                 p1, p2 = p.split(":")
                 feats = [read_hdf5(p1, p) for p in p2.split(",")]
-                return np.concatenate(
-                    [f if len(f.shape) != 1 else f.reshape(-1, 1) for f in feats], 1
-                )
+                return np.concatenate([f if len(f.shape) != 1 else f.reshape(-1, 1) for f in feats], 1)
         else:
             return read_hdf5(p, self.default_hdf5_path)
 
@@ -237,7 +229,7 @@ class HDF5ScpLoader(object):
             yield self[key]
 
 
-class NpyScpLoader(object):
+class NpyScpLoader:
     """Loader class for a fests.scp file of npy file.
 
     Examples:
@@ -314,19 +306,13 @@ def load_model(checkpoint, config=None, stats=None):
     import parallel_wavegan.models
 
     # get model and load parameters
-    model_class = getattr(
-        parallel_wavegan.models,
-        config.get("generator_type", "ParallelWaveGANGenerator"),
-    )
+    model_class = getattr(parallel_wavegan.models, config.get("generator_type", "ParallelWaveGANGenerator"))
     # workaround for typo #295
     generator_params = {
-        k.replace("upsample_kernal_sizes", "upsample_kernel_sizes"): v
-        for k, v in config["generator_params"].items()
+        k.replace("upsample_kernal_sizes", "upsample_kernel_sizes"): v for k, v in config["generator_params"].items()
     }
     model = model_class(**generator_params)
-    model.load_state_dict(
-        torch.load(checkpoint, map_location="cpu")["model"]["generator"]
-    )
+    model.load_state_dict(torch.load(checkpoint, map_location="cpu")["model"]["generator"])
 
     # check stats existence
     if stats is None:
@@ -351,10 +337,7 @@ def load_model(checkpoint, config=None, stats=None):
         if LooseVersion(config.get("version", "0.1.0")) <= LooseVersion("0.4.2"):
             # For compatibility, here we set default values in version <= 0.4.2
             pqmf_params.update(taps=62, cutoff_ratio=0.15, beta=9.0)
-        model.pqmf = PQMF(
-            subbands=config["generator_params"]["out_channels"],
-            **config.get("pqmf_params", pqmf_params),
-        )
+        model.pqmf = PQMF(subbands=config["generator_params"]["out_channels"], **config.get("pqmf_params", pqmf_params))
 
     return model
 
@@ -393,9 +376,7 @@ def download_pretrained_model(tag_or_url, download_dir=None):
         tag = tag_or_url
     else:
         # get google drive id from the url link
-        assert (
-            "drive.google.com" in tag_or_url
-        ), "Unknown URL format. Please use google drive for the model."
+        assert "drive.google.com" in tag_or_url, "Unknown URL format. Please use google drive for the model."
         p = re.compile(r"/[-\w]{25,}")
         id_ = p.findall(tag_or_url)[0][1:]
         tag = id_
@@ -407,9 +388,7 @@ def download_pretrained_model(tag_or_url, download_dir=None):
             # lazy load for compatibility
             import gdown
 
-            gdown.download(
-                f"https://drive.google.com/uc?id={id_}", output_path, quiet=False
-            )
+            gdown.download(f"https://drive.google.com/uc?id={id_}", output_path, quiet=False)
             with tarfile.open(output_path, "r:*") as tar:
                 for member in tar.getmembers():
                     if member.isreg():

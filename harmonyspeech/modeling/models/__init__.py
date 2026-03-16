@@ -1,8 +1,8 @@
 import importlib
-from typing import Optional, Type, Dict, List
-from loguru import logger
+from typing import Dict, List, Optional, Type
 
 import torch.nn as nn
+from loguru import logger
 
 from harmonyspeech.common.utils import is_hip
 
@@ -29,11 +29,17 @@ _MODELS = {
     "SileroVAD": ("silero-vad", "native"),
     # KittenTTS
     "KittenTTSSynthesizer": ("kittentts", "native"),
+    # Chatterbox TTS
+    "ChatterboxTTS": ("chatterbox", "native"),
+    "ChatterboxTurboTTS": ("chatterbox", "native"),
+    "ChatterboxMultilingualTTS": ("chatterbox", "native"),
+    "ChatterboxEmbedding": ("chatterbox", "native"),
+    "ChatterboxVC": ("chatterbox", "native"),
 }
 
 # Architecture -> type.
 # out of tree models
-_OOT_MODELS: Dict[str, Type[nn.Module]] = {}
+_OOT_MODELS: dict[str, type[nn.Module]] = {}
 
 # Models not supported by ROCm.
 _ROCM_UNSUPPORTED_MODELS = []
@@ -51,7 +57,6 @@ _ROCM_PARTIALLY_SUPPORTED_MODELS = {
 
 
 class ModelRegistry:
-
     @staticmethod
     def load_model_cls(model_arch: str):
         if model_arch in _OOT_MODELS:
@@ -60,13 +65,12 @@ class ModelRegistry:
             return None
         if is_hip():
             if model_arch in _ROCM_UNSUPPORTED_MODELS:
-                raise ValueError(
-                    f"Model architecture {model_arch} is not supported by "
-                    "ROCm for now.")
+                raise ValueError(f"Model architecture {model_arch} is not supported by ROCm for now.")
             if model_arch in _ROCM_PARTIALLY_SUPPORTED_MODELS:
                 logger.warning(
-                    f"Model architecture {model_arch} is partially supported "
-                    "by ROCm: " + _ROCM_PARTIALLY_SUPPORTED_MODELS[model_arch])
+                    f"Model architecture {model_arch} is partially supported by ROCm: "
+                    + _ROCM_PARTIALLY_SUPPORTED_MODELS[model_arch]
+                )
 
         module_name, model_cls_name = _MODELS[model_arch]
 
@@ -74,25 +78,21 @@ class ModelRegistry:
         if model_cls_name == "native":
             return "native"
 
-        module = importlib.import_module(
-            f"harmonyspeech.modeling.models.{module_name}")
+        module = importlib.import_module(f"harmonyspeech.modeling.models.{module_name}")
         return getattr(module, model_cls_name, None)
 
     @staticmethod
-    def get_supported_archs() -> List[str]:
+    def get_supported_archs() -> list[str]:
         return list(_MODELS.keys())
 
     @staticmethod
-    def register_model(model_arch: str, model_cls: Type[nn.Module]):
+    def register_model(model_arch: str, model_cls: type[nn.Module]):
         if model_arch in _MODELS:
             logger.warning(
-                f"Model architecture {model_arch} is already registered, "
-                "and will be overwritten by the new model "
-                f"class {model_cls.__name__}.")
+                f"Model architecture {model_arch} is already registered, and will be overwritten by the new model class {model_cls.__name__}."
+            )
         global _OOT_MODELS
         _OOT_MODELS[model_arch] = model_cls
 
 
-__all__ = [
-    "ModelRegistry",
-]
+__all__ = ["ModelRegistry"]

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set, Tuple
+
 from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
@@ -13,17 +13,13 @@ class ExecutorBase(ABC):
     that can execute the model on multiple devices.
     """
 
-    def __init__(
-        self,
-        model_config: ModelConfig,
-    ) -> None:
+    def __init__(self, model_config: ModelConfig) -> None:
         self.model_config = model_config
         self.device_config = model_config.device_config
 
         self._init_executor()
         logger.info(
-            f"Successfully initialized executor for model {self.model_config.name} ({self.model_config.model_type}) "
-            f"on device {self.device_config.device}"
+            f"Successfully initialized executor for model {self.model_config.name} ({self.model_config.model_type}) on device {self.device_config.device}"
         )
 
     @abstractmethod
@@ -31,10 +27,7 @@ class ExecutorBase(ABC):
         pass
 
     @abstractmethod
-    def execute_model(
-        self,
-        requests_to_batch: List[EngineRequest],
-    ) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 
@@ -46,12 +39,8 @@ class ExecutorBase(ABC):
 
 
 class ExecutorAsyncBase(ExecutorBase):
-
     @abstractmethod
-    async def execute_model_async(
-        self,
-        requests_to_batch: List[EngineRequest],
-    ) -> List[ExecutorResult]:
+    async def execute_model_async(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Executes one model step on the given sequences."""
         raise NotImplementedError
 

@@ -108,6 +108,22 @@
 - ✅ Enhanced `/v1/audio/vad` endpoint with configurable parameters
 - ✅ Native model integration following HSE patterns
 
+### ✅ KittenTTS (COMPLETE)
+- ✅ KittenTTSSynthesizer — ONNX-based English TTS
+- ✅ 4 model variants: mini (80MB), micro (41MB), nano-fp32 (56MB), nano-int8 (25MB)
+- ✅ 8 voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+- ✅ Phonemizer: misaki[en]
+- ✅ 4 e2e tests validated and passing on CPU
+
+### ✅ Chatterbox TTS (COMPLETE — All 7 Phases)
+- ✅ Phase 1: Dependencies installed — chatterbox-tts==0.1.6 (--no-deps), resemble-perth, pyloudnorm, einops, omegaconf, conformer, s3tokenizer, spacy-pkuseg; all 7 import tests pass
+- ✅ Phase 2: Model Registration — ChatterboxTTS, ChatterboxVC, ChatterboxMultilingualTTS, ChatterboxTurboTTS in ModelRegistry
+- ✅ Phase 3: Input Preparation — speed, normalize_audio (renamed from norm_loudness), split_text parameters
+- ✅ Phase 4: Model Execution — execute methods and dispatch
+- ✅ Phase 5: Request Routing — Chatterbox request routing to engine and serving layer, embed-dispatch support
+- ✅ Phase 6: Configuration & Performance — Chatterbox entries in config.yml/config.gpu.yml, watermarker swap
+- ✅ Phase 7: Testing & Documentation — Comprehensive unit and e2e tests for all 4 variants
+
 ### 🔄 Planned Model Integrations (IN PROGRESS)
 
 **StyleTTS 2** (Priority: High)
@@ -178,15 +194,17 @@
 
 ## Testing and Quality Assurance
 
-### 🔄 Testing Infrastructure (PARTIAL)
-- 🔄 Unit tests for core components
-- ❌ Integration tests for API endpoints
+### ✅ Testing Infrastructure (ESTABLISHED)
+- ✅ 28 unit tests — config parsing, dtype resolution, engine init, model loader registry
+- ✅ 17 integration tests — all 7 HTTP endpoints via mocked serving layer
+- ✅ 35 e2e tests — full model pipelines for KittenTTS, MeloTTS, OpenVoice V1/V2, HarmonySpeech, FasterWhisper, SileroVAD, VoiceFixer
+- ✅ 80% overall coverage
+- ❌ GPU executor path untested (gpu_model_runner.py, gpu_worker.py — 0% coverage)
 - ❌ Performance benchmarking suite
-- ❌ Model accuracy validation tests
 - ❌ Load testing framework
 
 ### 🔄 Documentation (PARTIAL)
-- ✅ API documentation (auto-generated)
+- ✅ API documentation (auto-generated via Swagger/ReDoc)
 - ✅ Setup and installation guides
 - 🔄 Model configuration examples
 - ❌ Advanced usage tutorials

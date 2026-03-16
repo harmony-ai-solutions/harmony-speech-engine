@@ -1,12 +1,13 @@
-import re
 import json
+import re
+
 import numpy as np
 
 from harmonyspeech.modeling.models.openvoice.text import cleaners
 
 
 def get_hparams_from_file(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         data = f.read()
     config = json.loads(data)
 
@@ -67,19 +68,19 @@ def string_to_bits(string, pad_len=8):
 
 def bits_to_string(bits_array):
     # Convert each row of the array to a binary string
-    binary_values = [''.join(str(bit) for bit in row) for row in bits_array]
+    binary_values = ["".join(str(bit) for bit in row) for row in bits_array]
 
     # Convert binary strings to ASCII values
     ascii_values = [int(binary, 2) for binary in binary_values]
 
     # Convert ASCII values to characters
-    output_string = ''.join(chr(value) for value in ascii_values)
+    output_string = "".join(chr(value) for value in ascii_values)
 
     return output_string
 
 
-def split_sentence(text, min_len=10, language_str='[EN]'):
-    if language_str in ['EN']:
+def split_sentence(text, min_len=10, language_str="[EN]"):
+    if language_str in ["EN"]:
         sentences = split_sentences_latin(text, min_len=min_len)
     else:
         sentences = split_sentences_zh(text, min_len=min_len)
@@ -96,16 +97,17 @@ def split_sentences_latin(text, min_len=10):
         List[str]: list of output sentences.
     """
     # deal with dirty sentences
-    text = re.sub('[。！？；]', '.', text)
-    text = re.sub('[，]', ',', text)
-    text = re.sub('[“”]', '"', text)
-    text = re.sub('[‘’]', "'", text)
+    text = re.sub("[。！？；]", ".", text)
+    text = re.sub("[，]", ",", text)
+    text = re.sub("[“”]", '"', text)
+    text = re.sub("[‘’]", "'", text)
     text = re.sub(r"[\<\>\(\)\[\]\"\«\»]+", "", text)
-    text = re.sub('[\n\t ]+', ' ', text)
-    text = re.sub('([,.!?;])', r'\1 $#!', text)
+    text = re.sub("[\n\t ]+", " ", text)
+    text = re.sub("([,.!?;])", r"\1 $#!", text)
     # split
-    sentences = [s.strip() for s in text.split('$#!')]
-    if len(sentences[-1]) == 0: del sentences[-1]
+    sentences = [s.strip() for s in text.split("$#!")]
+    if len(sentences[-1]) == 0:
+        del sentences[-1]
 
     new_sentences = []
     new_sent = []
@@ -116,7 +118,7 @@ def split_sentences_latin(text, min_len=10):
         count_len += len(sent.split(" "))
         if count_len > min_len or ind == len(sentences) - 1:
             count_len = 0
-            new_sentences.append(' '.join(new_sent))
+            new_sentences.append(" ".join(new_sent))
             new_sent = []
     return merge_short_sentences_latin(new_sentences)
 
@@ -148,16 +150,17 @@ def merge_short_sentences_latin(sens):
 
 
 def split_sentences_zh(text, min_len=10):
-    text = re.sub('[。！？；]', '.', text)
-    text = re.sub('[，]', ',', text)
+    text = re.sub("[。！？；]", ".", text)
+    text = re.sub("[，]", ",", text)
     # 将文本中的换行符、空格和制表符替换为空格
-    text = re.sub('[\n\t ]+', ' ', text)
+    text = re.sub("[\n\t ]+", " ", text)
     # 在标点符号后添加一个空格
-    text = re.sub('([,.!?;])', r'\1 $#!', text)
+    text = re.sub("([,.!?;])", r"\1 $#!", text)
     # 分隔句子并去除前后空格
     # sentences = [s.strip() for s in re.split('(。|！|？|；)', text)]
-    sentences = [s.strip() for s in text.split('$#!')]
-    if len(sentences[-1]) == 0: del sentences[-1]
+    sentences = [s.strip() for s in text.split("$#!")]
+    if len(sentences[-1]) == 0:
+        del sentences[-1]
 
     new_sentences = []
     new_sent = []
@@ -167,7 +170,7 @@ def split_sentences_zh(text, min_len=10):
         count_len += len(sent)
         if count_len > min_len or ind == len(sentences) - 1:
             count_len = 0
-            new_sentences.append(' '.join(new_sent))
+            new_sentences.append(" ".join(new_sent))
             new_sent = []
     return merge_short_sentences_zh(new_sentences)
 
@@ -203,26 +206,26 @@ def _clean_text(text, cleaner_names):
     for name in cleaner_names:
         cleaner = getattr(cleaners, name)  # this is so dirty...
         if not cleaner:
-            raise Exception('Unknown cleaner: %s' % name)
+            raise Exception("Unknown cleaner: %s" % name)
         text = cleaner(text)
     return text
 
 
 def text_to_sequence(text, symbols, cleaner_names):
-    '''Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
-      Args:
-        text: string to convert to a sequence
-        cleaner_names: names of the cleaner functions to run the text through
-      Returns:
-        List of integers corresponding to the symbols in the text
-    '''
+    """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
+    Args:
+      text: string to convert to a sequence
+      cleaner_names: names of the cleaner functions to run the text through
+    Returns:
+      List of integers corresponding to the symbols in the text
+    """
     sequence = []
     symbol_to_id = {s: i for i, s in enumerate(symbols)}
     clean_text = _clean_text(text, cleaner_names)
     print(clean_text)
     print(f" length:{len(clean_text)}")
     for symbol in clean_text:
-        if symbol not in symbol_to_id.keys():
+        if symbol not in symbol_to_id:
             continue
         symbol_id = symbol_to_id[symbol]
         sequence += [symbol_id]

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2021 Tomoki Hayashi
 #  MIT License (https://opensource.org/licenses/MIT)
 
@@ -12,12 +10,7 @@ import torch.nn.functional as F
 class FeatureMatchLoss(torch.nn.Module):
     """Feature matching loss module."""
 
-    def __init__(
-        self,
-        average_by_layers=True,
-        average_by_discriminators=True,
-        include_final_outputs=False,
-    ):
+    def __init__(self, average_by_layers=True, average_by_discriminators=True, include_final_outputs=False):
         """Initialize FeatureMatchLoss module."""
         super().__init__()
         self.average_by_layers = average_by_layers

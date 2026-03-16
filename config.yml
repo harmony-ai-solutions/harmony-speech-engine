@@ -229,3 +229,60 @@ model_configs:
   #   dtype: "float32"
   #   device_config:
   #     device: "cpu"
+
+  # ===========================================================================
+  # Chatterbox TTS - High-quality voice cloning TTS (requires CUDA for practical use)
+  # ===========================================================================
+  # NOTE: Chatterbox models are ~1-2GB and run very slowly on CPU.
+  #       For real-time use, enable in config.gpu.yml instead.
+  #
+  # Chatterbox TTS (standard) - voice cloning + 8 languages
+  # - name: "chatterbox"
+  #   model: "resemble-ai/chatterbox"
+  #   model_type: "ChatterboxTTS"
+  #   watermark: true          # Set to false to disable perth audio watermarking
+  #   max_batch_size: 1
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # Chatterbox Turbo TTS - faster synthesis with loudness normalization
+  # - name: "chatterbox_turbo"
+  #   model: "resemble-ai/chatterbox"
+  #   model_type: "ChatterboxTurboTTS"
+  #   watermark: true
+  #   max_batch_size: 1
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # Chatterbox Multilingual TTS - 23-language support with voice cloning
+  # - name: "chatterbox_multilingual"
+  #   model: "resemble-ai/chatterbox"
+  #   model_type: "ChatterboxMultilingualTTS"
+  #   watermark: true
+  #   max_batch_size: 1
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # Chatterbox Voice Conversion - convert speech from one voice to another
+  # - name: "chatterbox_vc"
+  #   model: "resemble-ai/chatterbox"
+  #   model_type: "ChatterboxVC"
+  #   watermark: true
+  #   max_batch_size: 1
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"
+
+  # Chatterbox Embedding (OPTIONAL) - dedicated executor for /v1/embeddings endpoint
+  # If omitted, embedding requests are handled by the ChatterboxTTS executor above.
+  # Add this only if you need concurrent TTS + high-throughput standalone embeddings.
+  # - name: "chatterbox_embedding"
+  #   model: "resemble-ai/chatterbox"
+  #   model_type: "ChatterboxEmbedding"
+  #   max_batch_size: 1
+  #   dtype: "float32"
+  #   device_config:
+  #     device: "cpu"

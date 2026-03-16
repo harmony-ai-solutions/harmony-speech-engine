@@ -26,6 +26,9 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# weird windows BS
+nul
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -168,9 +171,7 @@ frontend/
 
 #.current_work/
 .current_work/chatterbox-tts
-.current_work/chatterbox-tts-expansion
-.current_work/KittenTTS
-# .current_work/kittentts-integration
+.current_work/Chatterbox-TTS-Server
 
 /docs/api/jsclient/
 /docs/api/goclient/

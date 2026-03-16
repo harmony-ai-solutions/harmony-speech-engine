@@ -12,19 +12,14 @@ class EngineArgs:
     disable_log_stats: bool = False
 
     @staticmethod
-    def add_cli_args(
-        parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         """Shared CLI arguments for the Aphrodite engine."""
 
         # NOTE: If you update any of the arguments below, please also
         # make sure to update docs/source/models/engine_args.rst
 
         # Model arguments
-        parser.add_argument(
-            "--disable-log-stats",
-            action="store_true",
-            help="disable logging statistics",
-        )
+        parser.add_argument("--disable-log-stats", action="store_true", help="disable logging statistics")
         return parser
 
     @classmethod
@@ -48,21 +43,13 @@ class AsyncEngineArgs(EngineArgs):
     max_log_len: int = 0
 
     @staticmethod
-    def add_cli_args(
-            parser: argparse.ArgumentParser
-    ) -> argparse.ArgumentParser:
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser = EngineArgs.add_cli_args(parser)
-        parser.add_argument(
-            "--disable-log-requests",
-            action="store_true",
-            help="disable logging requests",
-        )
+        parser.add_argument("--disable-log-requests", action="store_true", help="disable logging requests")
         parser.add_argument(
             "--max-log-len",
             type=int,
             default=0,
-            help="max number of prompt characters or prompt "
-            "ID numbers being printed in log. "
-            "Default: unlimited.",
+            help="max number of prompt characters or prompt ID numbers being printed in log. Default: unlimited.",
         )
         return parser

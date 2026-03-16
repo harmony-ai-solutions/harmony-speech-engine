@@ -1,13 +1,11 @@
-# -*- coding: utf-8 -*-
-
 """RAdam optimizer.
 
 This code is drived from https://github.com/LiyuanLucasLiu/RAdam.
 """
 
 import math
-import torch
 
+import torch
 from torch.optim.optimizer import Optimizer
 
 
@@ -18,11 +16,11 @@ class RAdam(Optimizer):
         """Initilize RAdam optimizer."""
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         self.buffer = [[None, None, None] for ind in range(10)]
-        super(RAdam, self).__init__(params, defaults)
+        super().__init__(params, defaults)
 
     def __setstate__(self, state):
         """Set state."""
-        super(RAdam, self).__setstate__(state)
+        super().__setstate__(state)
 
     def step(self, closure=None):
         """Run one step."""
@@ -31,7 +29,6 @@ class RAdam(Optimizer):
             loss = closure()
 
         for group in self.param_groups:
-
             for p in group["params"]:
                 if p.grad is None:
                     continue
@@ -78,9 +75,7 @@ class RAdam(Optimizer):
                             / N_sma
                             * N_sma_max
                             / (N_sma_max - 2)
-                        ) / (
-                            1 - beta1 ** state["step"]
-                        )  # NOQA
+                        ) / (1 - beta1 ** state["step"])  # NOQA
                     else:
                         step_size = 1.0 / (1 - beta1 ** state["step"])
                     buffered[2] = step_size

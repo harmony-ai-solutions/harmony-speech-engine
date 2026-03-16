@@ -1,14 +1,9 @@
-from typing import Dict, List, Set
-
-from loguru import logger
-
-from harmonyspeech.executor.executor_base import ExecutorAsyncBase, ExecutorBase
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import make_async
+from harmonyspeech.executor.executor_base import ExecutorAsyncBase, ExecutorBase
 
 
 class GPUExecutor(ExecutorBase):
-
     def _init_executor(self) -> None:
         """Initialize the worker and load the model.
         If speculative decoding is enabled, we instead create the speculative
@@ -31,13 +26,8 @@ class GPUExecutor(ExecutorBase):
         self.driver_worker.init_device()
         self.driver_worker.load_model()
 
-    def execute_model(
-        self,
-        requests_to_batch: List[EngineRequest]
-    ) -> List[ExecutorResult]:
-        output = self.driver_worker.execute_model(
-            requests_to_batch=requests_to_batch
-        )
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
+        output = self.driver_worker.execute_model(requests_to_batch=requests_to_batch)
         return output
 
     def check_health(self) -> None:
@@ -47,12 +37,6 @@ class GPUExecutor(ExecutorBase):
 
 
 class GPUExecutorAsync(GPUExecutor, ExecutorAsyncBase):
-
-    async def execute_model_async(
-        self,
-        requests_to_batch: List[EngineRequest],
-    ) -> List[ExecutorResult]:
-        output = await make_async(self.driver_worker.execute_model)(
-            requests_to_batch=requests_to_batch,
-        )
+    async def execute_model_async(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
+        output = await make_async(self.driver_worker.execute_model)(requests_to_batch=requests_to_batch)
         return output

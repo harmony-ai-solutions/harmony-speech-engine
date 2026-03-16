@@ -8,5 +8,5 @@ def es2ipa(text):
     return phonemes
 
 
-if __name__ == '__main__':
-  print(es2ipa('¿Y a quién echaría de menos, en el mundo si no fuese a vos?'))
+if __name__ == "__main__":
+    print(es2ipa("¿Y a quién echaría de menos, en el mundo si no fuese a vos?"))

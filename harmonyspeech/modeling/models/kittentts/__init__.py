@@ -1,5 +1,3 @@
 from .kittentts import KittenTTSSynthesizer
 
-__all__ = [
-    "KittenTTSSynthesizer",
-]
+__all__ = ["KittenTTSSynthesizer"]

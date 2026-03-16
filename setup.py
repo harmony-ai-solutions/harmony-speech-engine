@@ -407,6 +407,9 @@ def get_requirements() -> List[str]:
             requirements = f.read().strip().split("\n")
         resolved_requirements = []
         for line in requirements:
+            # Skip empty lines and pip options (lines starting with --)
+            if not line or line.startswith("--"):
+                continue
             if line.startswith("-r "):
                 resolved_requirements += _read_requirements(line.split()[1])
             else:

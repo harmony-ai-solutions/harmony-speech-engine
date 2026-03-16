@@ -1,20 +1,22 @@
 """E2E test conftest.py — marks all e2e tests and provides model download fixtures."""
-import struct
-import base64
 
-import pytest
+import base64
+import os
+import struct
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from harmonyspeech.common.config import EngineConfig, ModelConfig, DeviceConfig
+import pytest
+
+from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
+from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
+from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
+from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
+from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
-from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
-from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
-from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
-from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
-from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
-
 
 # KittenTTS voices available across all variants
 KITTENTTS_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
@@ -22,6 +24,7 @@ KITTENTTS_VOICES = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki",
 
 def _create_kittentts_engine_fixture(name: str, model: str):
     """Factory to create a KittenTTS engine fixture for a specific variant."""
+
     def fixture(models_cache_dir):
         # Build ModelConfig for the KittenTTS variant
         model_config = ModelConfig(
@@ -33,31 +36,23 @@ def _create_kittentts_engine_fixture(name: str, model: str):
             device_config=DeviceConfig(device="cpu"),
             voices=KITTENTTS_VOICES,
         )
-        
+
         # Build EngineConfig with the single model
         engine_config = EngineConfig(model_configs=[model_config])
-        
+
         # Build AsyncEngineArgs
-        engine_args = AsyncEngineArgs(
-            disable_log_stats=True,
-            disable_log_requests=True,
-        )
-        
+        engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+
         # Create the async engine
-        engine = AsyncHarmonySpeech.from_engine_args_and_config(
-            engine_args,
-            engine_config,
-            start_engine_loop=True
-        )
-        
+        engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+
         # Create the serving handler
         serving_tts = OpenAIServingTextToSpeech(
-            engine,
-            OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+            engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
         )
-        
+
         return (engine, serving_tts)
-    
+
     fixture.__name__ = f"kittentts_{name}_engine"
     return pytest.fixture(scope="session")(fixture)
 
@@ -66,33 +61,48 @@ def _create_kittentts_engine_fixture(name: str, model: str):
 kittentts_mini_engine = _create_kittentts_engine_fixture("kitten-tts-mini", "KittenML/kitten-tts-mini-0.8")
 kittentts_micro_engine = _create_kittentts_engine_fixture("kitten-tts-micro", "KittenML/kitten-tts-micro-0.8")
 kittentts_nano_engine = _create_kittentts_engine_fixture("kitten-tts-nano", "KittenML/kitten-tts-nano-0.8-fp32")
-kittentts_nano_int8_engine = _create_kittentts_engine_fixture("kitten-tts-nano-int8", "KittenML/kitten-tts-nano-0.8-int8")
+kittentts_nano_int8_engine = _create_kittentts_engine_fixture(
+    "kitten-tts-nano-int8", "KittenML/kitten-tts-nano-0.8-int8"
+)
 
 
 def make_silent_wav_b64(sample_rate: int = 24000, duration_secs: int = 1) -> str:
     """Generate a minimal silent WAV file as base64 string for voice cloning reference audio."""
     num_samples = sample_rate * duration_secs
-    pcm_data = struct.pack('<' + 'h' * num_samples, *([0] * num_samples))
-    header = struct.pack('<4sI4s4sIHHIIHH4sI',
-        b'RIFF', 36 + len(pcm_data), b'WAVE',
-        b'fmt ', 16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
-        b'data', len(pcm_data))
+    pcm_data = struct.pack("<" + "h" * num_samples, *([0] * num_samples))
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(pcm_data),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        sample_rate * 2,
+        2,
+        16,
+        b"data",
+        len(pcm_data),
+    )
     return base64.b64encode(header + pcm_data).decode()
 
 
 def load_sample_audio_b64(sample_name: str = "wanda4") -> str:
     """Load a sample WAV file from tests/test-data/samples/ and return base64-encoded content."""
     import os
+
     sample_path = os.path.join(os.path.dirname(__file__), "..", "test-data", "samples", f"{sample_name}.wav")
     with open(sample_path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
 
 # MeloTTS / OpenVoice V2 engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def melotts_en_engine(models_cache_dir):
-    """Session-scoped engine fixture for MeloTTS / OpenVoice V2 tests.
-    
+    """Module-scoped engine fixture for MeloTTS / OpenVoice V2 tests.
+
     Loads 4 models:
     - faster-whisper (FasterWhisper) - required for VAD processing in embed stage
     - ov2-synthesizer-en (MeloTTSSynthesizer)
@@ -136,37 +146,27 @@ def melotts_en_engine(models_cache_dir):
             device_config=DeviceConfig(device="cpu"),
         ),
     ]
-    
+
     # Build EngineConfig with all models
     engine_config = EngineConfig(model_configs=model_configs)
-    
+
     # Build AsyncEngineArgs
-    engine_args = AsyncEngineArgs(
-        disable_log_stats=True,
-        disable_log_requests=True,
-    )
-    
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+
     # Create the async engine
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args,
-        engine_config,
-        start_engine_loop=True
-    )
-    
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+
     # Create the serving handlers
     serving_tts = OpenAIServingTextToSpeech(
-        engine,
-        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
     )
     serving_embed = OpenAIServingVoiceEmbedding(
-        engine,
-        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
     )
     serving_vc = OpenAIServingVoiceConversion(
-        engine,
-        OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
     )
-    
+
     return (engine, serving_tts, serving_embed, serving_vc)
 
 
@@ -209,7 +209,7 @@ def melotts_en_engine(models_cache_dir):
 #             device_config=DeviceConfig(device="cuda"),
 #         ),
 #     ]
-    
+
 #     engine_config = EngineConfig(model_configs=model_configs)
 #     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
 #     engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
@@ -220,10 +220,10 @@ def melotts_en_engine(models_cache_dir):
 
 
 # OpenVoice V1 engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def openvoice_v1_en_engine(models_cache_dir):
-    """Session-scoped engine fixture for OpenVoice V1 tests.
-    
+    """Module-scoped engine fixture for OpenVoice V1 tests.
+
     Loads 4 models:
     - faster-whisper (FasterWhisper) - required for VAD processing in embed stage
     - ov1-synthesizer-en (OpenVoiceV1Synthesizer)
@@ -248,7 +248,17 @@ def openvoice_v1_en_engine(models_cache_dir):
             dtype="float32",
             device_config=DeviceConfig(device="cpu"),
             language="EN",
-            voices=["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"],
+            voices=[
+                "default",
+                "whispering",
+                "shouting",
+                "excited",
+                "cheerful",
+                "terrified",
+                "angry",
+                "sad",
+                "friendly",
+            ],
         ),
         ModelConfig(
             name="ov1-tone-converter",
@@ -267,61 +277,49 @@ def openvoice_v1_en_engine(models_cache_dir):
             device_config=DeviceConfig(device="cpu"),
         ),
     ]
-    
+
     # Build EngineConfig with all models
     engine_config = EngineConfig(model_configs=model_configs)
-    
+
     # Build AsyncEngineArgs
-    engine_args = AsyncEngineArgs(
-        disable_log_stats=True,
-        disable_log_requests=True,
-    )
-    
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+
     # Create the async engine
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args,
-        engine_config,
-        start_engine_loop=True
-    )
-    
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+
     # Create the serving handlers
     serving_tts = OpenAIServingTextToSpeech(
-        engine,
-        OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
     )
     serving_embed = OpenAIServingVoiceEmbedding(
-        engine,
-        OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
     )
     serving_vc = OpenAIServingVoiceConversion(
-        engine,
-        OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
     )
-    
+
     return (engine, serving_tts, serving_embed, serving_vc)
 
 
 # HarmonySpeech engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def harmonyspeech_engine(models_cache_dir):
-    """Session-scoped engine fixture for HarmonySpeech tests.
-    
+    """Module-scoped engine fixture for HarmonySpeech tests.
+
     Loads 3 models:
     - hs1-encoder (HarmonySpeechEncoder)
     - hs1-synthesizer (HarmonySpeechSynthesizer)
     - hs1-vocoder (HarmonySpeechVocoder)
-    
+
     Returns: (engine, serving_tts, serving_embed)
     - engine: AsyncHarmonySpeech instance
     - serving_tts: OpenAIServingTextToSpeech for full pipeline tests
     - serving_embed: OpenAIServingVoiceEmbedding for embed stage tests
-    
+
     For direct synthesis/vocode stage tests, use engine.generate() directly with
     SynthesisRequestInput or VocodeRequestInput.
     """
-    from harmonyspeech.common.inputs import SynthesisRequestInput, VocodeRequestInput
-    from harmonyspeech.common.outputs import SpeechSynthesisRequestOutput, VocodeRequestOutput
-    
+
     device_config = DeviceConfig(device="cpu")
     model_configs = [
         ModelConfig(
@@ -354,17 +352,19 @@ def harmonyspeech_engine(models_cache_dir):
     engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config)
 
     serving_tts = OpenAIServingTextToSpeech(
-        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs))
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+    )
     serving_embed = OpenAIServingVoiceEmbedding(
-        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs))
-    
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+    )
+
     return (engine, serving_tts, serving_embed)
 
 
 # FasterWhisper STT engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def whisper_engine(models_cache_dir):
-    """Session-scoped engine fixture for FasterWhisper STT tests (whisper-tiny variant)."""
+    """Module-scoped engine fixture for FasterWhisper STT tests (whisper-tiny variant)."""
     model_config = ModelConfig(
         name="faster-whisper",
         model="Systran/faster-whisper-tiny",
@@ -375,20 +375,17 @@ def whisper_engine(models_cache_dir):
     )
     engine_config = EngineConfig(model_configs=[model_config])
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args, engine_config, start_engine_loop=True
-    )
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
     serving_stt = OpenAIServingSpeechToText(
-        engine,
-        OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingSpeechToText.models_from_config(engine_config.model_configs)
     )
     return (engine, serving_stt)
 
 
 # SileroVAD engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def vad_engine(models_cache_dir):
-    """Session-scoped engine fixture for SileroVAD voice activity detection tests."""
+    """Module-scoped engine fixture for SileroVAD voice activity detection tests."""
     model_config = ModelConfig(
         name="silero-vad",
         model="silero-vad",
@@ -399,20 +396,17 @@ def vad_engine(models_cache_dir):
     )
     engine_config = EngineConfig(model_configs=[model_config])
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args, engine_config, start_engine_loop=True
-    )
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
     serving_vad = OpenAIServingVoiceActivityDetection(
-        engine,
-        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
     )
     return (engine, serving_vad)
 
 
 # Whisper VAD engine fixture (uses OpenAIServingVoiceActivityDetection for VAD)
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def whisper_vad_engine(models_cache_dir):
-    """Session-scoped engine fixture for Whisper-based VAD tests."""
+    """Module-scoped engine fixture for Whisper-based VAD tests."""
     model_config = ModelConfig(
         name="faster-whisper",
         model="Systran/faster-whisper-tiny",
@@ -423,20 +417,17 @@ def whisper_vad_engine(models_cache_dir):
     )
     engine_config = EngineConfig(model_configs=[model_config])
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args, engine_config, start_engine_loop=True
-    )
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
     serving_vad = OpenAIServingVoiceActivityDetection(
-        engine,
-        OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingVoiceActivityDetection.models_from_config(engine_config.model_configs)
     )
     return (engine, serving_vad)
 
 
 # VoiceFixer audio restoration engine fixture
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def voicefixer_engine(models_cache_dir):
-    """Session-scoped engine fixture for VoiceFixer audio restoration tests.
+    """Module-scoped engine fixture for VoiceFixer audio restoration tests.
 
     Loads 2 models in pipeline sequence:
     - voicefixer-restorer (VoiceFixerRestorer): audio → enhanced mel spectrogram
@@ -463,12 +454,9 @@ def voicefixer_engine(models_cache_dir):
     ]
     engine_config = EngineConfig(model_configs=model_configs)
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(
-        engine_args, engine_config, start_engine_loop=True
-    )
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
     serving_audio = OpenAIServingAudioConversion(
-        engine,
-        OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
+        engine, OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
     )
     return (engine, serving_audio)
 
@@ -489,10 +477,149 @@ def pytest_collection_modifyitems(items):
 
 
 @pytest.fixture(scope="session")
-def models_cache_dir(tmp_path_factory):
+def models_cache_dir():
     """
-    Session-scoped temp directory for model weight caching during E2E tests.
-    Models downloaded here are shared across all e2e tests in one session.
-    """
-    return tmp_path_factory.mktemp("models_cache")
+    Session-scoped fixture that returns the HuggingFace model cache directory.
 
+    Uses the system default (~/.cache/huggingface) which HuggingFace already
+    respects.  In CI the workflow sets HF_HOME explicitly and caches that path
+    between runs; locally the default is used transparently.
+
+    Any pre-existing HF_HOME / HUGGINGFACE_HUB_CACHE environment variables
+    are honoured, so per-machine overrides still work.
+    """
+    hf_home = os.environ.get("HF_HOME", os.path.join(Path.home(), ".cache", "huggingface"))
+    hub_dir = os.path.join(hf_home, "hub")
+    os.makedirs(hub_dir, exist_ok=True)
+    # Keep HUGGINGFACE_HUB_CACHE in sync in case the caller set only HF_HOME
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hub_dir)
+    return hf_home
+
+
+@pytest.fixture(scope="module")
+def chatterbox_turbo_engine(models_cache_dir, device):
+    """Module-scoped engine fixture for ChatterboxTurboTTS E2E tests.
+
+    Loads 1 model:
+    - chatterbox_turbo (ChatterboxTurboTTS) — faster TTS with top_k/norm_loudness support
+
+    Supports both CPU and CUDA based on the device fixture.
+    """
+    model_configs = [
+        ModelConfig(
+            name="chatterbox_turbo",
+            model="ResembleAI/chatterbox-turbo",
+            model_type="ChatterboxTurboTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+        ModelConfig(
+            name="chatterbox_turbo_embedding",
+            model="ResembleAI/chatterbox-turbo",
+            model_type="ChatterboxEmbedding",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+    serving_tts = OpenAIServingTextToSpeech(
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_tts, serving_embed)
+
+
+@pytest.fixture(scope="module")
+def chatterbox_multilingual_engine(models_cache_dir, device):
+    """Module-scoped engine fixture for ChatterboxMultilingualTTS E2E tests.
+
+    Loads 2 models:
+    - chatterbox_multilingual (ChatterboxMultilingualTTS) — multilingual TTS
+    - chatterbox_multilingual_embedding (ChatterboxEmbedding) — embedding for multilingual voice cloning
+
+    Supports both CPU and CUDA based on the device fixture.
+    """
+    model_configs = [
+        ModelConfig(
+            name="chatterbox_multilingual",
+            model="ResembleAI/chatterbox-multilingual",
+            model_type="ChatterboxMultilingualTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+        ModelConfig(
+            name="chatterbox_multilingual_embedding",
+            model="ResembleAI/chatterbox-multilingual",
+            model_type="ChatterboxEmbedding",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+    serving_tts = OpenAIServingTextToSpeech(
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_tts, serving_embed)
+
+
+@pytest.fixture(scope="module")
+def chatterbox_engine(models_cache_dir, device):
+    """Module-scoped engine fixture for Chatterbox TTS E2E tests.
+
+    Loads 2 models:
+    - chatterbox (ChatterboxTTS) — TTS + voice cloning
+    - chatterbox-vc (ChatterboxVC) — voice conversion
+
+    Supports both CPU and CUDA based on the device fixture.
+    """
+    from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+    from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+    from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
+    from harmonyspeech.engine.args_tools import AsyncEngineArgs
+    from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+
+    model_configs = [
+        ModelConfig(
+            name="chatterbox",
+            model="resemble-ai/chatterbox",
+            model_type="ChatterboxTTS",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+        ModelConfig(
+            name="chatterbox-vc",
+            model="resemble-ai/chatterbox",
+            model_type="ChatterboxVC",
+            max_batch_size=1,
+            dtype="float32",
+            device_config=DeviceConfig(device=device),
+        ),
+    ]
+    engine_config = EngineConfig(model_configs=model_configs)
+    engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+    serving_tts = OpenAIServingTextToSpeech(
+        engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
+    )
+    serving_embed = OpenAIServingVoiceEmbedding(
+        engine, OpenAIServingVoiceEmbedding.models_from_config(engine_config.model_configs)
+    )
+    serving_vc = OpenAIServingVoiceConversion(
+        engine, OpenAIServingVoiceConversion.models_from_config(engine_config.model_configs)
+    )
+    return (engine, serving_tts, serving_embed, serving_vc)

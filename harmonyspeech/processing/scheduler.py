@@ -1,13 +1,10 @@
-import enum
 import time
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple, Union
-
-from loguru import logger
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from harmonyspeech.common.config import ModelConfig
-from harmonyspeech.common.request import (RequestStatus, RequestMetrics, EngineRequest)
+from harmonyspeech.common.request import EngineRequest, RequestStatus
 
 
 @dataclass
@@ -15,8 +12,9 @@ class SchedulingBudget:
     """The available slots for scheduling.
     Slots are being defined
     """
-    request_per_model_budget: Dict[str, int]
-    _num_per_model_requests: Dict[str, int]
+
+    request_per_model_budget: dict[str, int]
+    _num_per_model_requests: dict[str, int]
 
     def can_schedule(self, model: str, num_requests: int):
         assert num_requests != 0
@@ -48,10 +46,11 @@ class SchedulingBudget:
 @dataclass
 class SchedulerOutputs:
     """The scheduling decision made from a scheduler."""
+
     # Scheduled requests per model.
-    scheduled_requests_per_model: Dict[str, List[EngineRequest]]
+    scheduled_requests_per_model: dict[str, list[EngineRequest]]
     # Sequence groups that are going to be ignored.
-    ignored_requests: List[EngineRequest]
+    ignored_requests: list[EngineRequest]
 
     def is_empty(self) -> bool:
         # NOTE: We do not consider the ignored sequence groups.
@@ -60,33 +59,26 @@ class SchedulerOutputs:
 
 @dataclass
 class SchedulerWaitingOutputs:
-    """The requests that are scheduled from a waiting queue.
-    """
+    """The requests that are scheduled from a waiting queue."""
+
     # Selected requests for processing
-    requests: List[EngineRequest]
+    requests: list[EngineRequest]
     # Ignored Requests
-    ignored_requests: List[EngineRequest]
+    ignored_requests: list[EngineRequest]
 
     @classmethod
     def create_empty(cls) -> "SchedulerWaitingOutputs":
-        return SchedulerWaitingOutputs(
-            requests=[],
-            ignored_requests=[],
-        )
+        return SchedulerWaitingOutputs(requests=[], ignored_requests=[])
 
 
 class Scheduler:
-
-    def __init__(
-        self,
-        model_configs: Optional[List[ModelConfig]]
-    ) -> None:
+    def __init__(self, model_configs: list[ModelConfig] | None) -> None:
         self.model_configs = model_configs
 
         # Requests in the WAITING state.
-        self.waiting: Deque[EngineRequest] = deque()
+        self.waiting: deque[EngineRequest] = deque()
         # Requests in the RUNNING state.
-        self.running: Deque[EngineRequest] = deque()
+        self.running: deque[EngineRequest] = deque()
 
         # Time at previous scheduling step
         self.prev_time = 0.0
@@ -95,7 +87,7 @@ class Scheduler:
         # Add sequence groups to the waiting queue.
         self.waiting.append(request)
 
-    def update_request_status(self, request_id: Union[str, Iterable[str]], new_status: RequestStatus) -> None:
+    def update_request_status(self, request_id: str | Iterable[str], new_status: RequestStatus) -> None:
         """Updates status for requests with the given ID.
 
         Check if the requests with the given ID are present in any of the state queues.
@@ -110,7 +102,7 @@ class Scheduler:
             request_id = (request_id,)
         request_ids = set(request_id)
         for state_queue in [self.waiting, self.running]:
-            updated_requests: List[EngineRequest] = []
+            updated_requests: list[EngineRequest] = []
             for request in state_queue:
                 if not request_ids:
                     # Using 'break' here may add two extra iterations,
@@ -140,10 +132,8 @@ class Scheduler:
         return len(self.waiting) + len(self.running)
 
     def _schedule_waiting_requests(
-        self,
-        waiting_queue: deque,
-        budget: SchedulingBudget,
-    ) -> Tuple[deque, SchedulerWaitingOutputs]:
+        self, waiting_queue: deque, budget: SchedulingBudget
+    ) -> tuple[deque, SchedulerWaitingOutputs]:
         """Schedule sequence groups that are in prefill stage.
 
         Note that the current scheduler treats PREEMPTED_FOR_RECOMPUTE
@@ -164,8 +154,8 @@ class Scheduler:
             A tuple of remaining waiting_queue after scheduling and
             SchedulerSwappedInOutputs.
         """
-        ignored_requests: List[EngineRequest] = []
-        requests: List[EngineRequest] = []
+        ignored_requests: list[EngineRequest] = []
+        requests: list[EngineRequest] = []
         # We don't sort waiting queue because we assume it is sorted.
         # Copy the queue so that the input queue is not modified.
         waiting_queue = deque([s for s in waiting_queue])
@@ -196,22 +186,17 @@ class Scheduler:
             if model_name not in new_scheduled_for_models:
                 new_scheduled_for_models.append(model_name)
 
-        return waiting_queue, SchedulerWaitingOutputs(
-            requests=requests,
-            ignored_requests=ignored_requests)
+        return waiting_queue, SchedulerWaitingOutputs(requests=requests, ignored_requests=ignored_requests)
 
     def get_scheduling_budget(self) -> SchedulingBudget:
-        """ Calculate the overall scheduling Budget for requests per Model """
+        """Calculate the overall scheduling Budget for requests per Model"""
         budget_count = {}
         per_model_requests = {}
         for model_cfg in self.model_configs:
             budget_count[model_cfg.name] = model_cfg.max_batch_size
             per_model_requests[model_cfg.name] = 0
 
-        return SchedulingBudget(
-            request_per_model_budget=budget_count,
-            _num_per_model_requests=per_model_requests
-        )
+        return SchedulingBudget(request_per_model_budget=budget_count, _num_per_model_requests=per_model_requests)
 
     def _schedule_default(self) -> SchedulerOutputs:
         """Schedule queued requests."""
@@ -234,7 +219,7 @@ class Scheduler:
             # Set Request to running state
             r.set_running()
             # Fill into dict
-            if r.request_data.model not in per_model_scheduled.keys():
+            if r.request_data.model not in per_model_scheduled:
                 per_model_scheduled[r.request_data.model] = [r]
             else:
                 per_model_scheduled[r.request_data.model].append(r)
@@ -242,10 +227,7 @@ class Scheduler:
         # Update running requests.
         self.running.extend(ready.requests)
 
-        return SchedulerOutputs(
-            scheduled_requests_per_model=per_model_scheduled,
-            ignored_requests=[]
-        )
+        return SchedulerOutputs(scheduled_requests_per_model=per_model_scheduled, ignored_requests=[])
 
     def _schedule(self) -> SchedulerOutputs:
         """Schedule queued requests."""

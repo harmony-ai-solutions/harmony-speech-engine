@@ -1,4 +1,4 @@
-name: Test Suite
+name: Run Test Suites
 
 on:
   push:
@@ -40,6 +40,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
 
       - name: Run unit and integration tests
         run: |
@@ -54,7 +55,7 @@ jobs:
           retention-days: 7
 
   lint:
-    name: Lint (black + flake8)
+    name: Lint (ruff)
     runs-on: ubuntu-latest
 
     steps:
@@ -74,35 +75,37 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-lint-pip-
 
-      - name: Install linting tools
+      - name: Install ruff
         run: |
           python -m pip install --upgrade pip
-          pip install black>=24.0.0 flake8>=7.0.0
+          pip install ruff>=0.8.0
 
-      - name: Check formatting with black
+      - name: Check formatting with ruff
         run: |
-          black --check --diff harmonyspeech/ tests/
+          ruff format --check --diff harmonyspeech/ tests/
 
-      - name: Check style with flake8
+      - name: Check linting with ruff
         run: |
-          flake8 harmonyspeech/ tests/
+          ruff check harmonyspeech/ tests/
 
   e2e-kittentts:
     name: E2E KittenTTS (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -130,6 +133,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run KittenTTS E2E tests
         run: |
@@ -139,18 +152,20 @@ jobs:
     name: E2E MeloTTS and OpenVoice V2 (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -178,6 +193,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run MeloTTS and OpenVoice V2 E2E tests
         run: |
@@ -187,18 +212,20 @@ jobs:
     name: E2E OpenVoice V1 (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -226,6 +253,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run OpenVoice V1 E2E tests
         run: |
@@ -235,18 +272,20 @@ jobs:
     name: E2E HarmonySpeech (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -274,6 +313,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run HarmonySpeech E2E tests
         run: |
@@ -283,18 +332,20 @@ jobs:
     name: E2E Whisper STT (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -322,6 +373,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run Whisper E2E tests
         run: |
@@ -331,18 +392,20 @@ jobs:
     name: E2E SileroVAD (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -370,6 +433,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run SileroVAD E2E tests
         run: |
@@ -379,18 +452,20 @@ jobs:
     name: E2E VoiceFixer (CPU)
     runs-on: ubuntu-latest
     needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
     steps:
       - name: Maximize build space
-        uses: easimon/maximize-build-space@master
+        uses: AdityaGarg8/remove-unwanted-software@v5
         with:
-          root-reserve-mb: 2048
-          temp-reserve-mb: 100
-          swap-size-mb: 1024
           remove-dotnet: 'true'
           remove-docker-images: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -418,7 +493,200 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-cpu.txt
           pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-
+            hf-models-
 
       - name: Run VoiceFixer E2E tests
         run: |
           python -m pytest -k "voicefixer" tests/e2e/ --device=cpu --dtype=float32 -v --tb=short --no-cov
+
+  e2e-chatterbox:
+    name: E2E Chatterbox (CPU)
+    runs-on: ubuntu-latest
+    needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-docker-images: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmecab-dev ffmpeg libsndfile1 espeak-ng
+
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
+
+      - name: Run Chatterbox E2E tests
+        run: |
+          python -m pytest -k "chatterbox and not turbo and not multilingual" tests/e2e/ --device=cpu --dtype=float32 -v --tb=short --no-cov
+
+  e2e-chatterbox-turbo:
+    name: E2E ChatterboxTurbo (CPU)
+    runs-on: ubuntu-latest
+    needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-docker-images: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmecab-dev ffmpeg libsndfile1 espeak-ng
+
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
+
+      - name: Run ChatterboxTurbo E2E tests
+        run: |
+          python -m pytest -k "chatterbox_turbo" tests/e2e/ --device=cpu --dtype=float32 -v --tb=short --no-cov
+
+  e2e-chatterbox-multilingual:
+    name: E2E ChatterboxMultilingual (CPU)
+    runs-on: ubuntu-latest
+    needs: [test]
+    env:
+      HF_HOME: ~/.cache/huggingface
+    steps:
+      - name: Maximize build space
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'
+          remove-docker-images: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-large-packages: 'true'
+          remove-swapfile: 'true'
+          remove-cached-tools: 'true'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmecab-dev ffmpeg libsndfile1 espeak-ng
+
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cpu.txt
+          pip install -r requirements-common.txt
+          pip install --no-deps -r requirements-chatterbox.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ runner.os }}-chatterbox-${{ hashFiles('requirements-common.txt', 'requirements-cpu.txt', 'requirements-chatterbox.txt') }}
+          restore-keys: |
+            hf-models-${{ runner.os }}-chatterbox-
+            hf-models-${{ runner.os }}-
+            hf-models-
+
+      - name: Run ChatterboxMultilingual E2E tests
+        run: |
+          python -m pytest -k "chatterbox_multilingual" tests/e2e/ --device=cpu --dtype=float32 -v --tb=short --no-cov

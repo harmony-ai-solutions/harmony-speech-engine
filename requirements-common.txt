@@ -30,7 +30,7 @@ g2pkk
 matplotlib
 anyascii
 jamo
-webrtcvad
+webrtcvad-wheels
 pyyaml
 pydub
 mecab-python3
@@ -53,6 +53,25 @@ misaki[en]>=0.9.4
 espeakng_loader
 num2words
 spacy
+
+# Chatterbox TTS dependencies
+# chatterbox-tts cannot be installed normally: its pip metadata pins torch==2.6.0,
+# transformers==4.46.3, numpy<1.26.0 etc., which conflict with HSE's stack.
+# The code itself works fine on newer versions — the pins are overcautious.
+# Solution: install chatterbox-tts separately with --no-deps (see requirements-chatterbox.txt),
+# then install only the transitive deps that don't conflict, listed here.
+# IMPORTANT: When upgrading chatterbox-tts, see .planning/codebase/CONCERNS.md
+# § "Chatterbox TTS Dependency Pinning" for the upgrade checklist.
+resemble-perth==1.0.1
+pyloudnorm
+einops
+omegaconf
+conformer==0.3.2
+s3tokenizer
+spacy-pkuseg
+peft
+diffusers
+# pykakasi already listed above (MeloTTS Japanese); also used by Chatterbox MTL tokenizer
 
 # Testing
 pytest>=8.0.0

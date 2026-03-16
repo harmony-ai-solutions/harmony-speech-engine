@@ -1,11 +1,9 @@
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, Optional
 
 import numpy as np
 from loguru import logger
-from prometheus_client import (REGISTRY, Counter, Gauge, Histogram, Info,
-                               disable_created_metrics)
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Info, disable_created_metrics
 
 disable_created_metrics()
 
@@ -15,18 +13,14 @@ disable_created_metrics()
 
 # begin-metrics-definitions
 class Metrics:
-
-    def __init__(self, labelnames: List[str]):
+    def __init__(self, labelnames: list[str]):
         # Unregister any existing Aphrodite collectors
         for collector in list(REGISTRY._collector_to_names):
             if hasattr(collector, "_name") and "aphrodite" in collector._name:
                 REGISTRY.unregister(collector)
 
         # Config Information
-        self.info_cache_config = Info(
-            name="aphrodite:cache_config",
-            documentation="information of cache_config",
-        )
+        self.info_cache_config = Info(name="aphrodite:cache_config", documentation="information of cache_config")
 
         # System stats
         self.gauge_scheduler_running = Gauge(
@@ -70,44 +64,13 @@ class Metrics:
             name="aphrodite:time_to_first_token_seconds",
             documentation="Histogram of time to first token in seconds.",
             labelnames=labelnames,
-            buckets=[
-                0.001,
-                0.005,
-                0.01,
-                0.02,
-                0.04,
-                0.06,
-                0.08,
-                0.1,
-                0.25,
-                0.5,
-                0.75,
-                1.0,
-                2.5,
-                5.0,
-                7.5,
-                10.0,
-            ],
+            buckets=[0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0],
         )
         self.histogram_time_per_output_token = Histogram(
             name="aphrodite:time_per_output_token_seconds",
             documentation="Histogram of time per output token in seconds.",
             labelnames=labelnames,
-            buckets=[
-                0.01,
-                0.025,
-                0.05,
-                0.075,
-                0.1,
-                0.15,
-                0.2,
-                0.3,
-                0.4,
-                0.5,
-                0.75,
-                1.0,
-                2.5,
-            ],
+            buckets=[0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5],
         )
         self.histogram_e2e_request_latency = Histogram(
             name="aphrodite:e2e_request_latency_seconds",
@@ -158,14 +121,14 @@ class Stats:
 class StatLogger:
     """StatLogger is used AphroditeEngine to log to Promethus and Stdout."""
 
-    def __init__(self, local_interval: float, labels: Dict[str, str]) -> None:
+    def __init__(self, local_interval: float, labels: dict[str, str]) -> None:
         # Metadata for logging locally.
         self.last_local_log = time.monotonic()
         self.local_interval = local_interval
 
         # Tracked stats over current local logging interval.
-        self.num_prompt_tokens: List[int] = []
-        self.num_generation_tokens: List[int] = []
+        self.num_prompt_tokens: list[int] = []
+        self.num_generation_tokens: list[int] = []
 
         # Prometheus metrics
         self.labels = labels
@@ -175,7 +138,7 @@ class StatLogger:
         if type == "cache_config":
             self.metrics.info_cache_config.info(obj.metrics_info())
 
-    def _get_throughput(self, tracked_stats: List[int], now: float) -> float:
+    def _get_throughput(self, tracked_stats: list[int], now: float) -> float:
         return float(np.sum(tracked_stats) / (now - self.last_local_log))
 
     def _local_interval_elapsed(self, now: float) -> bool:
@@ -192,10 +155,7 @@ class StatLogger:
             # prometheus if applicable).
 
             # Log to stdout.
-            logger.info(
-                f"Running: {stats.num_running} reqs, "
-                f"Pending: {stats.num_waiting} reqs"
-            )
+            logger.info(f"Running: {stats.num_running} reqs, Pending: {stats.num_waiting} reqs")
 
             # Reset tracked stats for next interval.
             self.num_prompt_tokens = []

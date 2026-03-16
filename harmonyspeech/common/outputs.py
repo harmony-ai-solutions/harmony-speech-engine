@@ -1,5 +1,3 @@
-from typing import Optional, List
-
 from harmonyspeech.common.metrics import RequestMetrics
 
 
@@ -9,16 +7,20 @@ class RequestOutput:
     Args:
         request_id: The unique ID of the request.
         finish_reason: Reason why this request finished, if set.
+        error: Error message if finish_reason is "error", otherwise None.
         metrics: Metrics associated with the request.
     """
+
     def __init__(
         self,
         request_id: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        finish_reason: str | None = None,
+        error: str | None = None,
+        metrics: RequestMetrics | None = None,
     ) -> None:
         self.request_id = request_id
         self.finish_reason = finish_reason
+        self.error = error
         self.metrics = metrics
 
     def finished(self) -> bool:
@@ -42,20 +44,15 @@ class TextToSpeechRequestOutput(RequestOutput):
         request_id: str,
         text: str,
         output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        finish_reason: str | None = None,
+        metrics: RequestMetrics | None = None,
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.input_text = text
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"TextToSpeechRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"TextToSpeechRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class SpeechEmbeddingRequestOutput(RequestOutput):
@@ -70,22 +67,13 @@ class SpeechEmbeddingRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"SpeechEmbeddingRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"SpeechEmbeddingRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class SpeechSynthesisRequestOutput(RequestOutput):
@@ -100,22 +88,13 @@ class SpeechSynthesisRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"SpeechSynthesisRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"SpeechSynthesisRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class VocodeRequestOutput(RequestOutput):
@@ -130,22 +109,13 @@ class VocodeRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"VocodeRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"VocodeRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class AudioConversionRequestOutput(RequestOutput):
@@ -160,22 +130,13 @@ class AudioConversionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"AudioConversionRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"AudioConversionRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class VoiceConversionRequestOutput(RequestOutput):
@@ -190,22 +151,13 @@ class VoiceConversionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"VoiceConversionRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"VoiceConversionRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class SpeechTranscriptionRequestOutput(RequestOutput):
@@ -220,22 +172,13 @@ class SpeechTranscriptionRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"SpeechTranscriptionRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
+        return f"SpeechTranscriptionRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"
 
 
 class DetectVoiceActivityRequestOutput(RequestOutput):
@@ -250,20 +193,10 @@ class DetectVoiceActivityRequestOutput(RequestOutput):
     """
 
     def __init__(
-        self,
-        request_id: str,
-        output: str,
-        finish_reason: Optional[str] = None,
-        metrics: Optional[RequestMetrics] = None,
+        self, request_id: str, output: str, finish_reason: str | None = None, metrics: RequestMetrics | None = None
     ) -> None:
-        super().__init__(
-            request_id=request_id,
-            finish_reason=finish_reason,
-            metrics=metrics,
-        )
+        super().__init__(request_id=request_id, finish_reason=finish_reason, metrics=metrics)
         self.output = output
 
     def __repr__(self) -> str:
-        return (f"DetectVoiceActivityRequestOutput(request_id={self.request_id}, "
-                f"data=bytes({len(self.output)})")
-
+        return f"DetectVoiceActivityRequestOutput(request_id={self.request_id}, data=bytes({len(self.output)})"

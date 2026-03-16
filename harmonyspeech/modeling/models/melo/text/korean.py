@@ -37,6 +37,8 @@ def normalize_english(text):
 
 
 g2p_kr = None
+
+
 def korean_text_to_phonemes(text, character: str = "hangeul") -> str:
     """
 
@@ -56,6 +58,7 @@ def korean_text_to_phonemes(text, character: str = "hangeul") -> str:
 
     if character == "english":
         from anyascii import anyascii
+
         text = normalize(text)
         text = g2p_kr(text)
         text = anyascii(text)
@@ -65,6 +68,7 @@ def korean_text_to_phonemes(text, character: str = "hangeul") -> str:
     text = g2p_kr(text)
     text = list(hangul_to_jamo(text))  # '하늘' --> ['ᄒ', 'ᅡ', 'ᄂ', 'ᅳ', 'ᆯ']
     return "".join(text)
+
 
 def text_normalize(text):
     # res = unicodedata.normalize("NFKC", text)
@@ -84,11 +88,11 @@ def distribute_phone(n_phone, n_word):
     return phones_per_word
 
 
-
 # tokenizer = AutoTokenizer.from_pretrained('cl-tohoku/bert-base-japanese-v3')
 
-model_id = 'kykim/bert-kor-base'
+model_id = "kykim/bert-kor-base"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+
 
 def g2p(norm_text):
     tokenized = tokenizer.tokenize(norm_text)
@@ -104,8 +108,8 @@ def g2p(norm_text):
         text = ""
         for ch in group:
             text += ch
-        if text == '[UNK]':
-            phs += ['_']
+        if text == "[UNK]":
+            phs += ["_"]
             word2ph += [1]
             continue
         elif text in punctuation:
@@ -130,12 +134,14 @@ def g2p(norm_text):
         phs += phonemes
     phones = ["_"] + phs + ["_"]
     tones = [0 for i in phones]
-    word2ph =  [1] + word2ph + [1]
+    word2ph = [1] + word2ph + [1]
     assert len(word2ph) == len(tokenized) + 2
     return phones, tones, word2ph
 
-def get_bert_feature(text, word2ph, device='cuda'):
+
+def get_bert_feature(text, word2ph, device="cuda"):
     from . import japanese_bert
+
     return japanese_bert.get_bert_feature(text, word2ph, device=device, model_id=model_id)
 
 
@@ -170,7 +176,6 @@ def get_bert_feature(text, word2ph, device='cuda'):
 #                 with open('korean_symbol.txt', 'w') as f:
 #                     f.write(f'{new_symbols}')
 
-        
 
 # if __name__ == '__main__':
 #     from pykakasi import kakasi

@@ -1,15 +1,13 @@
 from dataclasses import dataclass, fields
-from typing import Optional, Union, List
-from loguru import logger
 
 import torch
 import yaml
+from loguru import logger
 
 from harmonyspeech.common.utils import is_cpu, is_hip
 
 
 class DeviceConfig:
-
     def __init__(self, device: str = "auto") -> None:
         if device == "auto":
             # Automated device type detection
@@ -51,16 +49,17 @@ class ModelConfig:
         model_type: str,
         max_batch_size: int,
         device_config: DeviceConfig,
-        language: Optional[str] = None,
-        voices: Optional[List[str]] = None,
-        trust_remote_code: Optional[bool] = False,
-        download_dir: Optional[str] = None,
-        load_format: Optional[str] = "auto",
-        dtype: Optional[Union[str, torch.dtype]] = "bfloat16",
-        seed: Optional[int] = 0,
-        revision: Optional[str] = None,
-        code_revision: Optional[str] = None,
+        language: str | None = None,
+        voices: list[str] | None = None,
+        trust_remote_code: bool | None = False,
+        download_dir: str | None = None,
+        load_format: str | None = "auto",
+        dtype: str | torch.dtype | None = "bfloat16",
+        seed: int | None = 0,
+        revision: str | None = None,
+        code_revision: str | None = None,
         enforce_eager: bool = True,
+        watermark: bool = True,
     ) -> None:
         self.name = name
         self.model = model
@@ -77,6 +76,7 @@ class ModelConfig:
         self.revision = revision
         self.code_revision = code_revision
         self.enforce_eager = enforce_eager
+        self.watermark = watermark
 
         self.dtype = _get_and_verify_dtype(dtype)
 
@@ -84,23 +84,17 @@ class ModelConfig:
 
     def _verify_load_format(self) -> None:
         load_format = self.load_format.lower()
-        supported_load_format = [
-            "auto", "pt", "pth", "safetensors", "npcache", "dummy", "onnx"
-        ]
+        supported_load_format = ["auto", "pt", "pth", "safetensors", "npcache", "dummy", "onnx"]
         rocm_not_supported_load_format = []
         if load_format not in supported_load_format:
             raise ValueError(
-                f"Unknown load format: {self.load_format}. Must be one of "
-                "'auto', 'pt', 'pth', 'safetensors', 'npcache', or 'dummy'.")
+                f"Unknown load format: {self.load_format}. Must be one of 'auto', 'pt', 'pth', 'safetensors', 'npcache', or 'dummy'."
+            )
         if is_hip() and load_format in rocm_not_supported_load_format:
-            rocm_supported_load_format = [
-                f for f in supported_load_format
-                if (f not in rocm_not_supported_load_format)
-            ]
+            rocm_supported_load_format = [f for f in supported_load_format if (f not in rocm_not_supported_load_format)]
             raise ValueError(
-                f"load format \'{load_format}\' is not supported in ROCm. "
-                f"Supported load format are "
-                f"{rocm_supported_load_format}")
+                f"load format '{load_format}' is not supported in ROCm. Supported load format are {rocm_supported_load_format}"
+            )
 
         self.load_format = load_format
 
@@ -112,21 +106,19 @@ class EngineConfig:
     simplifies passing around the distinct configurations in the codebase.
     """
 
-    model_configs: List[ModelConfig]
+    model_configs: list[ModelConfig]
 
     def __post_init__(self):
-        """Verify configs are valid & consistent with each other.
-        """
+        """Verify configs are valid & consistent with each other."""
         # self.model_config.verify_with_parallel_config(self.parallel_config)
 
     def to_dict(self):
-        """Return the configs as a dictionary, for use in **kwargs.
-        """
+        """Return the configs as a dictionary, for use in **kwargs."""
         return dict((field.name, getattr(self, field.name)) for field in fields(self))
 
     @classmethod
     def load_config_from_yaml(cls, yaml_file_path: str) -> "EngineConfig":
-        with open(yaml_file_path, 'r') as file:
+        with open(yaml_file_path) as file:
             config_data = yaml.safe_load(file)
 
         model_configs = []
@@ -149,9 +141,7 @@ _STR_DTYPE_TO_TORCH_DTYPE = {
 _ROCM_NOT_SUPPORTED_DTYPE = ["float", "float32"]
 
 
-def _get_and_verify_dtype(
-    dtype: Union[str, torch.dtype],
-) -> torch.dtype:
+def _get_and_verify_dtype(dtype: str | torch.dtype) -> torch.dtype:
 
     config_dtype = torch.float32
 

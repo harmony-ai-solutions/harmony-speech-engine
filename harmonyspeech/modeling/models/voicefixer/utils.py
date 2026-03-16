@@ -1,15 +1,15 @@
 """
 Utility functions adapted from VoiceFixer for Harmony Speech Engine integration.
 """
+
 import math
 import warnings
 
-from torchlibrosa.stft import STFT
+import librosa
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import librosa
-from typing import Optional, Tuple
+from torchlibrosa.stft import STFT
 
 EPS = 1e-8
 
@@ -45,10 +45,11 @@ def to_log(x: torch.Tensor) -> torch.Tensor:
 def save_wave(wav: np.ndarray, fname: str, sample_rate: int = 44100):
     """Save waveform to file using librosa."""
     import soundfile as sf
+
     sf.write(fname, wav, sample_rate)
 
 
-def read_wave(fname: str, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
+def read_wave(fname: str, sample_rate: int = 44100) -> tuple[np.ndarray, int]:
     """Read waveform from file using librosa."""
     wav, sr = librosa.load(fname, sr=sample_rate)
     return wav, int(sr)
@@ -56,13 +57,16 @@ def read_wave(fname: str, sample_rate: int = 44100) -> Tuple[np.ndarray, int]:
 
 class FDomainHelper(nn.Module):
     """Frequency domain helper for spectrogram operations. Significantly cut down in scope for HSE."""
-    def __init__(self, 
-                 window_size: int = 2048,
-                 hop_size: int = 441,
-                 center: bool = True,
-                 pad_mode: str = "reflect",
-                 window: str = "hann",
-                 freeze_parameters: bool = True):
+
+    def __init__(
+        self,
+        window_size: int = 2048,
+        hop_size: int = 441,
+        center: bool = True,
+        pad_mode: str = "reflect",
+        window: str = "hann",
+        freeze_parameters: bool = True,
+    ):
         super().__init__()
         self.window_size = window_size
         self.hop_size = hop_size
@@ -133,16 +137,17 @@ class MelScale(nn.Module):
         :py:func:`torchaudio.functional.melscale_fbanks` - The function used to
         generate the filter banks.
     """
+
     __constants__ = ["n_mels", "sample_rate", "f_min", "f_max"]
-    
+
     def __init__(
         self,
         n_mels: int = 128,
         sample_rate: int = 16000,
         f_min: float = 0.0,
-        f_max: Optional[float] = None,
+        f_max: float | None = None,
         n_stft: int = 201,
-        norm: Optional[str] = None,
+        norm: str | None = None,
         mel_scale: str = "htk",
     ):
         super().__init__()
@@ -153,11 +158,11 @@ class MelScale(nn.Module):
         self.n_stft = n_stft
         self.norm = norm
         self.mel_scale = mel_scale
-        
+
         # Create mel filter bank
         fb = self._melscale_fbanks()
         self.register_buffer("fb", fb)
-    
+
     def forward(self, spectrogram: torch.Tensor) -> torch.Tensor:
         r"""
         Args:
@@ -168,9 +173,7 @@ class MelScale(nn.Module):
         """
 
         # (..., time, freq) dot (freq, n_mels) -> (..., n_mels, time)
-        mel_specgram = torch.matmul(spectrogram.transpose(-1, -2), self.fb).transpose(
-            -1, -2
-        )
+        mel_specgram = torch.matmul(spectrogram.transpose(-1, -2), self.fb).transpose(-1, -2)
 
         return mel_specgram
 
@@ -218,18 +221,12 @@ class MelScale(nn.Module):
 
         if (fb.max(dim=0).values == 0.0).any():
             warnings.warn(
-                "At least one mel filterbank has all zero values. "
-                f"The value for `n_mels` ({self.n_mels}) may be set too high. "
-                f"Or, the value for `n_stft` ({self.n_stft}) may be set too low."
+                f"At least one mel filterbank has all zero values. The value for `n_mels` ({self.n_mels}) may be set too high. Or, the value for `n_stft` ({self.n_stft}) may be set too low."
             )
 
         return fb
 
-    def _create_triangular_filterbank(
-        self,
-        all_freqs: torch.Tensor,
-        f_pts: torch.Tensor,
-    ) -> torch.Tensor:
+    def _create_triangular_filterbank(self, all_freqs: torch.Tensor, f_pts: torch.Tensor) -> torch.Tensor:
         """Create a triangular filter bank.
 
         Args:
@@ -266,27 +263,18 @@ def tr_normalize(S: torch.Tensor) -> torch.Tensor:
     symmetric_mels = True
     max_abs_value = 4.0
     min_db = -115
-    
+
     if allow_clipping_in_normalization:
         if symmetric_mels:
             return torch.clip(
-                (2 * max_abs_value) * ((S - min_db) / (-min_db))
-                - max_abs_value,
-                -max_abs_value,
-                max_abs_value,
+                (2 * max_abs_value) * ((S - min_db) / (-min_db)) - max_abs_value, -max_abs_value, max_abs_value
             )
         else:
-            return torch.clip(
-                max_abs_value * ((S - min_db) / (-min_db)),
-                0,
-                max_abs_value,
-            )
+            return torch.clip(max_abs_value * ((S - min_db) / (-min_db)), 0, max_abs_value)
 
     assert S.max() <= 0 and S.min() - min_db >= 0
     if symmetric_mels:
-        return (2 * max_abs_value) * (
-            (S - min_db) / (-min_db)
-        ) - max_abs_value
+        return (2 * max_abs_value) * ((S - min_db) / (-min_db)) - max_abs_value
     else:
         return max_abs_value * ((S - min_db) / (-min_db))
 
@@ -306,12 +294,7 @@ def tr_pre(npy: torch.Tensor) -> torch.Tensor:
     conditions = npy.transpose(1, 2)
     l = conditions.size(-1)
     pad_tail = l % 2 + 4
-    zeros = (
-        torch.zeros([conditions.size()[0], num_mels, pad_tail]).type_as(
-            conditions
-        )
-        + -4.0
-    )
+    zeros = torch.zeros([conditions.size()[0], num_mels, pad_tail]).type_as(conditions) + -4.0
     return torch.cat([conditions, zeros], dim=-1)
 
 

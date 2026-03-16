@@ -1,7 +1,6 @@
-""" from https://github.com/keithito/tacotron """
+"""from https://github.com/keithito/tacotron"""
 
 import re
-from typing import Dict
 
 import inflect
 
@@ -21,7 +20,7 @@ def _expand_decimal_point(m):
     return m.group(1).replace(".", " point ")
 
 
-def __expand_currency(value: str, inflection: Dict[float, str]) -> str:
+def __expand_currency(value: str, inflection: dict[float, str]) -> str:
     parts = value.replace(",", "").split(".")
     if len(parts) > 2:
         return f"{value} {inflection[2]}"  # Unexpected format
@@ -41,24 +40,9 @@ def __expand_currency(value: str, inflection: Dict[float, str]) -> str:
 
 def _expand_currency(m: "re.Match") -> str:
     currencies = {
-        "$": {
-            0.01: "cent",
-            0.02: "cents",
-            1: "dollar",
-            2: "dollars",
-        },
-        "€": {
-            0.01: "cent",
-            0.02: "cents",
-            1: "euro",
-            2: "euros",
-        },
-        "£": {
-            0.01: "penny",
-            0.02: "pence",
-            1: "pound sterling",
-            2: "pounds sterling",
-        },
+        "$": {0.01: "cent", 0.02: "cents", 1: "dollar", 2: "dollars"},
+        "€": {0.01: "cent", 0.02: "cents", 1: "euro", 2: "euros"},
+        "£": {0.01: "penny", 0.02: "pence", 1: "pound sterling", 2: "pounds sterling"},
         "¥": {
             # TODO rin
             0.02: "sen",

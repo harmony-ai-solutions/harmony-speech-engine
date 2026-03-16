@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """Residual block modules.
 
 References:
@@ -21,7 +19,7 @@ class Conv1d(torch.nn.Conv1d):
 
     def __init__(self, *args, **kwargs):
         """Initialize Conv1d module."""
-        super(Conv1d, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def reset_parameters(self):
         """Reset parameters."""
@@ -35,9 +33,7 @@ class Conv1d1x1(Conv1d):
 
     def __init__(self, in_channels, out_channels, bias):
         """Initialize 1x1 Conv1d module."""
-        super(Conv1d1x1, self).__init__(
-            in_channels, out_channels, kernel_size=1, padding=0, dilation=1, bias=bias
-        )
+        super().__init__(in_channels, out_channels, kernel_size=1, padding=0, dilation=1, bias=bias)
 
 
 class WaveNetResidualBlock(torch.nn.Module):
@@ -79,14 +75,7 @@ class WaveNetResidualBlock(torch.nn.Module):
         self.use_causal_conv = use_causal_conv
 
         # dilation conv
-        self.conv = Conv1d(
-            residual_channels,
-            gate_channels,
-            kernel_size,
-            padding=padding,
-            dilation=dilation,
-            bias=bias,
-        )
+        self.conv = Conv1d(residual_channels, gate_channels, kernel_size, padding=padding, dilation=dilation, bias=bias)
 
         # local conditioning
         if aux_channels > 0:
@@ -178,9 +167,7 @@ class HiFiGANResidualBlock(torch.nn.Module):
             if not use_causal_conv:
                 self.convs1 += [
                     torch.nn.Sequential(
-                        getattr(torch.nn, nonlinear_activation)(
-                            **nonlinear_activation_params
-                        ),
+                        getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                         torch.nn.Conv1d(
                             channels,
                             channels,
@@ -195,49 +182,26 @@ class HiFiGANResidualBlock(torch.nn.Module):
             else:
                 self.convs1 += [
                     torch.nn.Sequential(
-                        getattr(torch.nn, nonlinear_activation)(
-                            **nonlinear_activation_params
-                        ),
-                        CausalConv1d(
-                            channels,
-                            channels,
-                            kernel_size,
-                            dilation=dilation,
-                            bias=bias,
-                        ),
+                        getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
+                        CausalConv1d(channels, channels, kernel_size, dilation=dilation, bias=bias),
                     )
                 ]
             if use_additional_convs:
                 if not use_causal_conv:
                     self.convs2 += [
                         torch.nn.Sequential(
-                            getattr(torch.nn, nonlinear_activation)(
-                                **nonlinear_activation_params
-                            ),
+                            getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
                             torch.nn.Conv1d(
-                                channels,
-                                channels,
-                                kernel_size,
-                                dilation=1,
-                                bias=bias,
-                                padding=(kernel_size - 1) // 2,
+                                channels, channels, kernel_size, dilation=1, bias=bias, padding=(kernel_size - 1) // 2
                             ),
                         )
                     ]
                 else:
                     self.convs2 += [
                         torch.nn.Sequential(
-                            getattr(torch.nn, nonlinear_activation)(
-                                **nonlinear_activation_params
-                            ),
-                            CausalConv1d(
-                                channels,
-                                channels,
-                                kernel_size,
-                                dilation=1,
-                                bias=bias,
-                            ),
-                        ),
+                            getattr(torch.nn, nonlinear_activation)(**nonlinear_activation_params),
+                            CausalConv1d(channels, channels, kernel_size, dilation=1, bias=bias),
+                        )
                     ]
 
     def forward(self, x):

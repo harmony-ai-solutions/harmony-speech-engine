@@ -1,56 +1,56 @@
 import base64
 import io
 import json
+import logging
 import time
+import traceback
 from dataclasses import asdict
-from typing import List
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import soundfile as sf
 import torch
-
 from faster_whisper import BatchedInferencePipeline
 from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import *
-from harmonyspeech.common.outputs import *
+from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
+from harmonyspeech.common.outputs import (
+    AudioConversionRequestOutput,
+    DetectVoiceActivityRequestOutput,
+    RequestOutput,
+    SpeechEmbeddingRequestOutput,
+    SpeechSynthesisRequestOutput,
+    SpeechTranscriptionRequestOutput,
+    TextToSpeechRequestOutput,
+    VocodeRequestOutput,
+    VoiceConversionRequestOutput,
+)
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
-from harmonyspeech.modeling.loader import get_model, get_model_flavour, get_model_config
+from harmonyspeech.modeling.loader import get_model, get_model_config, get_model_flavour
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.inputs import prepare_inputs
 
 
 class ModelRunnerBase:
-
     def __init__(
-        self,
-        model_config: ModelConfig,
-        device_config: DeviceConfig,
-        is_driver_worker: bool = False,
-        *args,
-        **kwargs,
+        self, model_config: ModelConfig, device_config: DeviceConfig, is_driver_worker: bool = False, *args, **kwargs
     ):
         self.model_config = model_config
         self.is_driver_worker = is_driver_worker
 
-        self.device_config = (device_config if device_config is not None else DeviceConfig())
+        self.device_config = device_config if device_config is not None else DeviceConfig()
         self.device = self.device_config.device
 
         self.model = None
         self.model_memory_usage = 0
 
     def _load_model(self):
-        return get_model(
-                self.model_config,
-                self.device_config,
-            )
+        return get_model(self.model_config, self.device_config)
 
     @torch.inference_mode()
-    def execute_model(
-        self,
-        requests_to_batch: List[EngineRequest]
-    ) -> List[ExecutorResult]:
+    def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """
         Executes a group of batched requests against the model which is loaded
         :param requests_to_batch:
@@ -59,7 +59,7 @@ class ModelRunnerBase:
         inputs = prepare_inputs(self.model_config, requests_to_batch)
         outputs = []
 
-        model_type = getattr(self.model_config, 'model_type', None)
+        model_type = getattr(self.model_config, "model_type", None)
         if model_type == "HarmonySpeechEncoder":
             outputs = self._execute_harmonyspeech_encoder(inputs, requests_to_batch)
         elif model_type == "HarmonySpeechSynthesizer":
@@ -84,37 +84,67 @@ class ModelRunnerBase:
             outputs = self._execute_silero_vad(inputs, requests_to_batch)
         elif model_type == "KittenTTSSynthesizer":
             outputs = self._execute_kittentts_synthesizer(inputs, requests_to_batch)
+        elif model_type == "ChatterboxTTS":
+            # Check if this is an embedding request routed to the TTS model
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxTurboTTS":
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxMultilingualTTS":
+            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
+                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            else:
+                outputs = self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
+        elif model_type == "ChatterboxEmbedding":
+            outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+        elif model_type == "ChatterboxVC":
+            outputs = self._execute_chatterbox_vc(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
         return outputs
 
+    def _build_error_result(self, initial_request, exception: Exception):
+        """Build an error ExecutorResult for a single request that failed during inference.
+        Wraps in ExecutorResult so _process_model_outputs / check_forward_processing can handle it
+        without crashing. The serving layer then checks finish_reason == 'error' on result_data
+        and returns an HTTP error to the caller.
+        """
+        request_id = initial_request.request_id
+        metrics = initial_request.metrics
+        metrics.finished_time = time.time()
+        # Log full stack trace so the server-side cause is always visible in logs
+        logger.error("Inference error for request %s: %s\n%s", request_id, exception, traceback.format_exc())
+        error_output = RequestOutput(
+            request_id=request_id, finish_reason="error", error=str(exception), metrics=metrics
+        )
+        return ExecutorResult(request_id=request_id, input_data=initial_request.request_data, result_data=error_output)
+
     def _build_result(self, initial_request, inference_result, result_cls):
         request_id = initial_request.request_id
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
-        
+
         # Build kwargs based on result_cls type
-        kwargs = {
-            "request_id": request_id,
-            "finish_reason": "stop",
-            "metrics": metrics
-        }
-        
+        kwargs = {"request_id": request_id, "finish_reason": "stop", "metrics": metrics}
+
         # TextToSpeechRequestOutput requires text and output parameters
         if result_cls == TextToSpeechRequestOutput:
             input_text = ""
-            if hasattr(initial_request.request_data, 'input_text'):
+            if hasattr(initial_request.request_data, "input_text"):
                 input_text = initial_request.request_data.input_text
             kwargs["text"] = input_text
             kwargs["output"] = inference_result
         else:
             kwargs["output"] = inference_result
-        
+
         result = ExecutorResult(
-            request_id=request_id,
-            input_data=initial_request.request_data,
-            result_data=result_cls(**kwargs)
+            request_id=request_id, input_data=initial_request.request_data, result_data=result_cls(**kwargs)
         )
         return result
 
@@ -122,21 +152,22 @@ class ModelRunnerBase:
         # FIXME: This is not properly batched
         def embed_utterance(utterances):
             utterances_tensor = torch.from_numpy(utterances).to(self.device)
-            kwargs = {
-                "utterances": utterances_tensor
-            }
+            kwargs = {"utterances": utterances_tensor}
             partial_embeds = self.model(**kwargs).detach().cpu().numpy()
             # Compute the utterance embedding from the partial embeddings
             raw_embed = np.mean(partial_embeds, axis=0)
             embed = raw_embed / np.linalg.norm(raw_embed, 2)
-            embed = base64.b64encode(embed).decode('UTF-8')
+            embed = base64.b64encode(embed).decode("UTF-8")
             return embed
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = embed_utterance(x)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            try:
+                inference_result = embed_utterance(x)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -155,9 +186,9 @@ class ModelRunnerBase:
                 "spk_emb": speaker_embeddings,
                 "alpha": speed_modifier,
                 "pitch_function": pitch_function,
-                "energy_function": energy_function
+                "energy_function": energy_function,
             }
-            _, mels, _, _, _  = self.model.generate(**kwargs)
+            _, mels, _, _, _ = self.model.generate(**kwargs)
             mels = mels.detach().cpu().numpy()
             # Combine Spectograms from generation
             specs = []
@@ -168,20 +199,23 @@ class ModelRunnerBase:
 
             # Build response - TODO: This whole encoding process can be optimized later I think
             breaks_json = json.dumps(breaks)
-            full_spectogram_json = full_spectogram.copy(order='C')  # Make C-Contigous to allow encoding
+            full_spectogram_json = full_spectogram.copy(order="C")  # Make C-Contigous to allow encoding
             full_spectogram_json = json.dumps(full_spectogram_json.tolist())
 
             response = {
-                "mel": base64.b64encode(full_spectogram_json.encode('utf-8')).decode('utf-8'),
-                "breaks": base64.b64encode(breaks_json.encode('utf-8')).decode('utf-8')
+                "mel": base64.b64encode(full_spectogram_json.encode("utf-8")).decode("utf-8"),
+                "breaks": base64.b64encode(breaks_json.encode("utf-8")).decode("utf-8"),
             }
             return json.dumps(response)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -189,9 +223,7 @@ class ModelRunnerBase:
         # FIXME: This is not properly batched
         def vocode_mel(input_params):
             mel, breaks = input_params
-            kwargs = {
-                "c": mel.T
-            }
+            kwargs = {"c": mel.T}
             wav = self.model.inference(**kwargs).detach().cpu().numpy()
             wav = wav.squeeze(1)
 
@@ -200,7 +232,7 @@ class ModelRunnerBase:
                 # Add breaks - FIXME: Make this parameterized
                 b_ends = np.cumsum(np.array(breaks) * 200)  # hop_size 200
                 b_starts = np.concatenate(([0], b_ends[:-1]))
-                wavs = [wav[start:end] for start, end, in zip(b_starts, b_ends)]
+                wavs = [wav[start:end] for start, end in zip(b_starts, b_ends)]
                 syn_breaks = [np.zeros(int(0.15 * 16000))] * len(breaks)  # Sample Rate 16000
                 wav = np.concatenate([i for w, b in zip(wavs, syn_breaks) for i in (w, b)])
 
@@ -209,16 +241,19 @@ class ModelRunnerBase:
 
             # Encode as WAV and return base64
             with io.BytesIO() as handle:
-                sf.write(handle, wav, samplerate=16000, format='wav')
+                sf.write(handle, wav, samplerate=16000, format="wav")
                 wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
             return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = vocode_mel(x)
-            result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
+            try:
+                inference_result = vocode_mel(x)
+                result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -227,10 +262,7 @@ class ModelRunnerBase:
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
-            self.model_config.model,
-            self.model_config.model_type,
-            self.model_config.revision,
-            flavour
+            self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
         # FIXME: This is not properly batched
@@ -242,10 +274,14 @@ class ModelRunnerBase:
                 y = torch.FloatTensor(audio_data)
                 y = y.to(self.device)
                 y = y.unsqueeze(0)
-                y = spectrogram_torch(y, hf_config.data.filter_length,
-                                      hf_config.data.sampling_rate, hf_config.data.hop_length,
-                                      hf_config.data.win_length,
-                                      center=False).to(self.device)
+                y = spectrogram_torch(
+                    y,
+                    hf_config.data.filter_length,
+                    hf_config.data.sampling_rate,
+                    hf_config.data.hop_length,
+                    hf_config.data.win_length,
+                    center=False,
+                ).to(self.device)
                 with torch.no_grad():
                     g = self.model.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
                     gs.append(g.detach())
@@ -255,14 +291,17 @@ class ModelRunnerBase:
             with io.BytesIO() as handle:
                 torch.save(gs.cpu(), handle)
                 embedding_string = handle.getvalue()
-            encoded_embedding = base64.b64encode(embedding_string).decode('UTF-8')
+            encoded_embedding = base64.b64encode(embedding_string).decode("UTF-8")
             return encoded_embedding
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_converter_encoder(x)
-            result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            try:
+                inference_result = run_converter_encoder(x)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -271,10 +310,7 @@ class ModelRunnerBase:
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
-            self.model_config.model,
-            self.model_config.model_type,
-            self.model_config.revision,
-            flavour
+            self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
         # FIXME: This is not properly batched
@@ -287,10 +323,14 @@ class ModelRunnerBase:
             audio = torch.tensor(audio_ref).float()
             y = torch.FloatTensor(audio).to(self.device)
             y = y.unsqueeze(0)
-            spec = spectrogram_torch(y, hf_config.data.filter_length,
-                                  hf_config.data.sampling_rate, hf_config.data.hop_length,
-                                  hf_config.data.win_length,
-                                  center=False).to(self.device)
+            spec = spectrogram_torch(
+                y,
+                hf_config.data.filter_length,
+                hf_config.data.sampling_rate,
+                hf_config.data.hop_length,
+                hf_config.data.win_length,
+                center=False,
+            ).to(self.device)
             spec_lengths = torch.LongTensor([spec.size(-1)]).to(self.device)
 
             with torch.no_grad():
@@ -301,16 +341,19 @@ class ModelRunnerBase:
 
                 # Encode as WAV and return base64
                 with io.BytesIO() as handle:
-                    sf.write(handle, output_audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                    sf.write(handle, output_audio, samplerate=hf_config.data.sampling_rate, format="wav")
                     wav_string = handle.getvalue()
-                encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+                encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
                 return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_converter_encoder(x)
-            result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            try:
+                inference_result = run_converter_encoder(x)
+                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -325,18 +368,17 @@ class ModelRunnerBase:
                 text += segment.text
                 segment_data.append(asdict(segment))
 
-            response = {
-                "text": text,
-                "segments": segment_data,
-                "info": asdict(info)
-            }
+            response = {"text": text, "segments": segment_data, "info": asdict(info)}
             return json.dumps(response)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_batched_transcribe(x)
-            result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            try:
+                inference_result = run_batched_transcribe(x)
+                result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -346,10 +388,7 @@ class ModelRunnerBase:
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
-            self.model_config.model,
-            self.model_config.model_type,
-            self.model_config.revision,
-            flavour
+            self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
         def synthesize_text(input_params):
@@ -362,8 +401,19 @@ class ModelRunnerBase:
                     x_tst = text_element.unsqueeze(0).to(self.device)
                     x_tst_lengths = torch.LongTensor([text_element.size(0)]).to(self.device)
                     sid = torch.LongTensor([speaker_id]).to(self.device)
-                    audio = self.model.infer(x_tst, x_tst_lengths, sid=sid, noise_scale=0.667, noise_scale_w=0.6,
-                                             length_scale=1.0 / speed_modifier)[0][0, 0].data.cpu().float().numpy()
+                    audio = (
+                        self.model.infer(
+                            x_tst,
+                            x_tst_lengths,
+                            sid=sid,
+                            noise_scale=0.667,
+                            noise_scale_w=0.6,
+                            length_scale=1.0 / speed_modifier,
+                        )[0][0, 0]
+                        .data.cpu()
+                        .float()
+                        .numpy()
+                    )
                 audio_segment_list.append(audio)
 
             # Concat Output Audio
@@ -375,16 +425,19 @@ class ModelRunnerBase:
 
             # Encode as WAV and return base64
             with io.BytesIO() as handle:
-                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format="wav")
                 wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
             return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -394,10 +447,7 @@ class ModelRunnerBase:
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
-            self.model_config.model,
-            self.model_config.model_type,
-            self.model_config.revision,
-            flavour
+            self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
         def synthesize_text(input_params):
@@ -418,19 +468,24 @@ class ModelRunnerBase:
                     x_tst_lengths = torch.LongTensor([phones.size(0)]).to(self.device)
                     del phones
                     speakers = torch.LongTensor([speaker_id]).to(self.device)
-                    audio = self.model.infer(
-                        x_tst,
-                        x_tst_lengths,
-                        speakers,
-                        tones,
-                        lang_ids,
-                        bert,
-                        ja_bert,
-                        sdp_ratio=0.2,
-                        noise_scale=0.6,
-                        noise_scale_w=0.8,
-                        length_scale=1.0 / speed_modifier
-                    )[0][0, 0].data.cpu().float().numpy()
+                    audio = (
+                        self.model.infer(
+                            x_tst,
+                            x_tst_lengths,
+                            speakers,
+                            tones,
+                            lang_ids,
+                            bert,
+                            ja_bert,
+                            sdp_ratio=0.2,
+                            noise_scale=0.6,
+                            noise_scale_w=0.8,
+                            length_scale=1.0 / speed_modifier,
+                        )[0][0, 0]
+                        .data.cpu()
+                        .float()
+                        .numpy()
+                    )
                     del x_tst, tones, lang_ids, bert, ja_bert, x_tst_lengths, speakers
                 audio_segment_list.append(audio)
 
@@ -443,16 +498,19 @@ class ModelRunnerBase:
 
             # Encode as WAV and return base64
             with io.BytesIO() as handle:
-                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format='wav')
+                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format="wav")
                 wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
             return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -463,7 +521,7 @@ class ModelRunnerBase:
             # Ensure tensor has batch dimension: [channels, samples] -> [batch, channels, samples]
             if audio_tensor.dim() == 2:
                 audio_tensor = audio_tensor.unsqueeze(0)
-            
+
             # Move tensor to device
             audio_tensor = audio_tensor.to(self.device)
 
@@ -476,14 +534,17 @@ class ModelRunnerBase:
             mel_json = json.dumps(enhanced_mel_np.tolist())
 
             # Encode as base64 for transport
-            encoded_mel = base64.b64encode(mel_json.encode('utf-8')).decode('utf-8')
+            encoded_mel = base64.b64encode(mel_json.encode("utf-8")).decode("utf-8")
             return encoded_mel
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = restore_audio(x)
-            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            try:
+                inference_result = restore_audio(x)
+                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -509,61 +570,63 @@ class ModelRunnerBase:
 
             # Encode as WAV and return base64
             with io.BytesIO() as handle:
-                sf.write(handle, audio_np, samplerate=44100, format='wav')
+                sf.write(handle, audio_np, samplerate=44100, format="wav")
                 wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode('UTF-8')
+            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
             return encoded_wav
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = vocode_mel(x)
-            result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            try:
+                inference_result = vocode_mel(x)
+                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
     def _execute_silero_vad(self, inputs, requests_to_batch):
         """Execute Silero VAD model to detect voice activity."""
+
         def run_vad(input_params):
             audio_tensor, vad_params = input_params
-            
+
             # Extract parameters from the input object
-            threshold = vad_params['threshold']
-            min_speech_duration_ms = vad_params['min_speech_duration_ms']
-            min_silence_duration_ms = vad_params['min_silence_duration_ms']
-            speech_pad_ms = vad_params['speech_pad_ms']
-            return_seconds = vad_params['return_seconds']
-            get_timestamps = vad_params['get_timestamps']
-            
+            threshold = vad_params["threshold"]
+            min_speech_duration_ms = vad_params["min_speech_duration_ms"]
+            min_silence_duration_ms = vad_params["min_silence_duration_ms"]
+            speech_pad_ms = vad_params["speech_pad_ms"]
+            return_seconds = vad_params["return_seconds"]
+            get_timestamps = vad_params["get_timestamps"]
+
             # Run Silero VAD with dynamic parameters
             timestamps = get_speech_timestamps(
-                audio_tensor, 
+                audio_tensor,
                 self.model,
                 threshold=threshold,
                 min_speech_duration_ms=min_speech_duration_ms,
                 min_silence_duration_ms=min_silence_duration_ms,
                 speech_pad_ms=speech_pad_ms,
-                return_seconds=return_seconds
+                return_seconds=return_seconds,
             )
-            
+
             # Build response based on whether timestamps are requested
             if get_timestamps:
-                response = {
-                    "speech_activity": len(timestamps) > 0,
-                    "segments": timestamps
-                }
+                response = {"speech_activity": len(timestamps) > 0, "segments": timestamps}
             else:
-                response = {
-                    "speech_activity": len(timestamps) > 0
-                }
-            
+                response = {"speech_activity": len(timestamps) > 0}
+
             return json.dumps(response)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = run_vad(x)
-            result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+            try:
+                inference_result = run_vad(x)
+                result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
@@ -575,12 +638,7 @@ class ModelRunnerBase:
 
             # Run KittenTTS generation
             # Returns numpy float32 array at 24000 Hz
-            audio_array = self.model.generate(
-                text=input_text,
-                voice=voice,
-                speed=speed_modifier,
-                clean_text=True
-            )
+            audio_array = self.model.generate(text=input_text, voice=voice, speed=speed_modifier, clean_text=True)
 
             # Flatten to 1D if needed (KittenTTS may return 2D)
             if audio_array.ndim > 1:
@@ -588,16 +646,228 @@ class ModelRunnerBase:
 
             # Encode to WAV in memory and return as base64 string
             with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sample_rate, format='WAV')
+                sf.write(wav_buffer, audio_array, self.model.sample_rate, format="WAV")
                 wav_bytes = wav_buffer.getvalue()
 
-            encoded_audio = base64.b64encode(wav_bytes).decode('utf-8')
+            encoded_audio = base64.b64encode(wav_bytes).decode("utf-8")
             return encoded_audio
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
-            inference_result = synthesize_text(x)
-            result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            try:
+                inference_result = synthesize_text(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
+
+            if conditionals is not None:
+                # Pre-computed Conditionals provided — move to device and assign
+                self.model.conds = conditionals.to(self.device)
+            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
+                # No pre-computed Conditionals — use raw audio bytes from request
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+
+            wav = self.model.generate(
+                text,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                min_p=min_p,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode("utf-8")
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_turbo_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxTurboTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
+
+            if conditionals is not None:
+                # Pre-computed Conditionals provided — move to device and assign
+                self.model.conds = conditionals.to(self.device)
+            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
+                # No pre-computed Conditionals — use raw audio bytes from request
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, norm_loudness=norm_loudness)
+
+            wav = self.model.generate(
+                text,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                top_k=top_k,
+                norm_loudness=norm_loudness,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode("utf-8")
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_multilingual_tts(self, inputs, requests_to_batch):
+        """Execute ChatterboxMultilingualTTS to generate speech audio from text."""
+
+        def synthesize(input_params):
+            text, language_id, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
+                input_params
+            )
+
+            if conditionals is not None:
+                self.model.conds = conditionals.to(self.device)
+            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
+                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_buf = io.BytesIO(audio_bytes)
+                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+
+            wav = self.model.generate(
+                text,
+                language_id=language_id,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+                top_p=top_p,
+                min_p=min_p,
+            )
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode("utf-8")
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            try:
+                inference_result = synthesize(x)
+                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_embedding(self, inputs, requests_to_batch):
+        """Execute ChatterboxEmbedding to compute voice Conditionals from audio.
+
+        Architecture note (REQ-PERF-02):
+        The output is a base64-encoded serialized Conditionals object (via torch.save ->
+        BytesIO -> base64). This design supports a future embedding cache layer:
+
+            Cache key:   hash(audio_bytes)  or  user-provided voice_id
+            Cache value: base64 Conditionals string (returned by this method)
+            Cache hit:   skip this executor entirely; pass Conditionals directly to TTS
+
+        The cache intercept point is in check_forward_processing() in harmonyspeech_engine.py,
+        between the embed step completion and the TTS re-submission. No code changes required
+        to this method to enable caching -- only the engine's forward-processing block needs
+        a cache lookup before re-submitting the forwarding_request.
+        """
+
+        def compute_embedding(audio_bytes):
+            audio_buf = io.BytesIO(audio_bytes)
+            try:
+                self.model.prepare_conditionals(audio_buf)
+            except AssertionError as e:
+                # Upstream library uses AssertionError for input validation (e.g. "Audio prompt must be longer than 5 seconds!")
+                # Re-raise as ValueError so the engine can return a 400 Bad Request instead of crashing.
+                raise ValueError(str(e)) from e
+            conditionals = self.model.conds
+
+            # Serialize Conditionals to BytesIO using torch.save
+            buf = io.BytesIO()
+            arg_dict = dict(t3=conditionals.t3.__dict__, gen=conditionals.gen)
+            torch.save(arg_dict, buf)
+            buf.seek(0)
+            return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+        outputs = []
+        for i, audio_bytes in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            try:
+                inference_result = compute_embedding(audio_bytes)
+                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
+            outputs.append(result)
+        return outputs
+
+    def _execute_chatterbox_vc(self, inputs, requests_to_batch):
+        """Execute ChatterboxVC to perform voice conversion."""
+
+        def convert(input_params):
+            source_bytes, target_conditionals, target_audio_bytes = input_params
+
+            if target_conditionals is not None:
+                # Pre-computed Conditionals — extract .gen dict and assign to model.ref_dict
+                self.model.ref_dict = target_conditionals.to(self.device).gen
+            elif target_audio_bytes:
+                # Use target audio bytes to set target voice
+                target_buf = io.BytesIO(target_audio_bytes)
+                self.model.set_target_voice(target_buf)
+
+            source_buf = io.BytesIO(source_bytes)
+            wav = self.model.generate(audio=source_buf)
+
+            # Encode tensor to WAV base64
+            audio_array = wav.squeeze(0).detach().cpu().numpy()
+            with io.BytesIO() as wav_buffer:
+                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
+                wav_bytes = wav_buffer.getvalue()
+            return base64.b64encode(wav_bytes).decode("utf-8")
+
+        outputs = []
+        for i, x in enumerate(inputs):
+            initial_request = requests_to_batch[i]
+            try:
+                inference_result = convert(x)
+                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+            except Exception as e:
+                result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs

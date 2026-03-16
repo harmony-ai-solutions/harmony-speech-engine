@@ -4,6 +4,7 @@
     "plan": { "model": "anthropic/claude-sonnet-4-6" },
     "build": { "model": "openrouter/minimax/minimax-m2.5" },
     "coder": { "model": "google/gemini-3-flash-preview" },
+    "code-expert": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-codebase-mapper": { "model": "openrouter/minimax/minimax-m2.5" },
     "gsd-debugger": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-executor": { "model": "openrouter/minimax/minimax-m2.5" },

@@ -1,7 +1,7 @@
 import sys
-import torch
 
-from transformers import AutoTokenizer, AutoModelForMaskedLM
+import torch
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 # model_id = 'hfl/chinese-roberta-wwm-ext-large'
 local_path = "./bert/chinese-roberta-wwm-ext-large"
@@ -11,20 +11,14 @@ tokenizers = {}
 models = {}
 
 
-def get_bert_feature(text, word2ph, device=None, model_id='hfl/chinese-roberta-wwm-ext-large'):
+def get_bert_feature(text, word2ph, device=None, model_id="hfl/chinese-roberta-wwm-ext-large"):
     if model_id not in models:
-        models[model_id] = AutoModelForMaskedLM.from_pretrained(
-            model_id
-        ).to(device)
+        models[model_id] = AutoModelForMaskedLM.from_pretrained(model_id).to(device)
         tokenizers[model_id] = AutoTokenizer.from_pretrained(model_id)
     model = models[model_id]
     tokenizer = tokenizers[model_id]
 
-    if (
-        sys.platform == "darwin"
-        and torch.backends.mps.is_available()
-        and device == "cpu"
-    ):
+    if sys.platform == "darwin" and torch.backends.mps.is_available() and device == "cpu":
         device = "mps"
     if not device:
         device = "cuda"

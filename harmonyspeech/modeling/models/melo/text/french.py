@@ -13,12 +13,15 @@ def distribute_phone(n_phone, n_word):
         phones_per_word[min_index] += 1
     return phones_per_word
 
+
 def text_normalize(text):
     text = fr_cleaner.french_cleaners(text)
     return text
 
-model_id = 'dbmdz/bert-base-french-europeana-cased'
+
+model_id = "dbmdz/bert-base-french-europeana-cased"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+
 
 def g2p(text, pad_start_end=True, tokenized=None):
     if tokenized is None:
@@ -31,7 +34,7 @@ def g2p(text, pad_start_end=True, tokenized=None):
             ph_groups.append([t])
         else:
             ph_groups[-1].append(t.replace("#", ""))
-    
+
     phones = []
     tones = []
     word2ph = []
@@ -40,11 +43,11 @@ def g2p(text, pad_start_end=True, tokenized=None):
         w = "".join(group)
         phone_len = 0
         word_len = len(group)
-        if w == '[UNK]':
-            phone_list = ['UNK']
+        if w == "[UNK]":
+            phone_list = ["UNK"]
         else:
             phone_list = list(filter(lambda p: p != " ", fr_to_ipa.fr2ipa(w)))
-        
+
         for ph in phone_list:
             phones.append(ph)
             tones.append(0)
@@ -60,8 +63,10 @@ def g2p(text, pad_start_end=True, tokenized=None):
         word2ph = [1] + word2ph + [1]
     return phones, tones, word2ph
 
+
 def get_bert_feature(text, word2ph, device=None):
     return french_bert.get_bert_feature(text, word2ph, device=device)
+
 
 # if __name__ == "__main__":
 #     ori_text = 'Ce service gratuit est“”"" 【disponible》 en chinois 【simplifié] et autres 123'

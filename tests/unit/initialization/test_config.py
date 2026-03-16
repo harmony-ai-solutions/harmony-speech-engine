@@ -1,10 +1,12 @@
 """Unit tests for harmonyspeech/common/config.py — DeviceConfig, ModelConfig, EngineConfig."""
+
 import pytest
 import torch
-from harmonyspeech.common.config import DeviceConfig, ModelConfig, EngineConfig
 
+from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
 
 # ── DeviceConfig ──────────────────────────────────────────────────────────────
+
 
 def test_device_config_explicit_cpu():
     cfg = DeviceConfig("cpu")
@@ -29,6 +31,7 @@ def test_device_config_auto_no_device_raises(monkeypatch):
 
 
 # ── ModelConfig ───────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def cpu_device():
@@ -55,16 +58,24 @@ def test_model_config_valid_attributes(cpu_device):
 
 def test_model_config_dtype_float16(cpu_device):
     cfg = ModelConfig(
-        name="t", model="m", model_type="MeloTTSSynthesizer",
-        max_batch_size=1, device_config=cpu_device, dtype="float16",
+        name="t",
+        model="m",
+        model_type="MeloTTSSynthesizer",
+        max_batch_size=1,
+        device_config=cpu_device,
+        dtype="float16",
     )
     assert cfg.dtype == torch.float16
 
 
 def test_model_config_dtype_bfloat16(cpu_device):
     cfg = ModelConfig(
-        name="t", model="m", model_type="MeloTTSSynthesizer",
-        max_batch_size=1, device_config=cpu_device, dtype="bfloat16",
+        name="t",
+        model="m",
+        model_type="MeloTTSSynthesizer",
+        max_batch_size=1,
+        device_config=cpu_device,
+        dtype="bfloat16",
     )
     assert cfg.dtype == torch.bfloat16
 
@@ -72,36 +83,53 @@ def test_model_config_dtype_bfloat16(cpu_device):
 def test_model_config_invalid_dtype_raises(cpu_device):
     with pytest.raises(ValueError, match="Unknown dtype"):
         ModelConfig(
-            name="t", model="m", model_type="MeloTTSSynthesizer",
-            max_batch_size=1, device_config=cpu_device, dtype="invalid_dtype",
+            name="t",
+            model="m",
+            model_type="MeloTTSSynthesizer",
+            max_batch_size=1,
+            device_config=cpu_device,
+            dtype="invalid_dtype",
         )
 
 
 def test_model_config_invalid_load_format_raises(cpu_device):
     with pytest.raises(ValueError, match="Unknown load format"):
         ModelConfig(
-            name="t", model="m", model_type="MeloTTSSynthesizer",
-            max_batch_size=1, device_config=cpu_device,
-            dtype="float32", load_format="garbage",
+            name="t",
+            model="m",
+            model_type="MeloTTSSynthesizer",
+            max_batch_size=1,
+            device_config=cpu_device,
+            dtype="float32",
+            load_format="garbage",
         )
 
 
 def test_model_config_load_format_uppercase_normalized(cpu_device):
     """load_format is lowercased during validation."""
     cfg = ModelConfig(
-        name="t", model="m", model_type="MeloTTSSynthesizer",
-        max_batch_size=1, device_config=cpu_device,
-        dtype="float32", load_format="AUTO",
+        name="t",
+        model="m",
+        model_type="MeloTTSSynthesizer",
+        max_batch_size=1,
+        device_config=cpu_device,
+        dtype="float32",
+        load_format="AUTO",
     )
     assert cfg.load_format == "auto"
 
 
 # ── EngineConfig ──────────────────────────────────────────────────────────────
 
+
 def test_engine_config_to_dict(cpu_device):
     model_cfg = ModelConfig(
-        name="t", model="m", model_type="MeloTTSSynthesizer",
-        max_batch_size=1, device_config=cpu_device, dtype="float32",
+        name="t",
+        model="m",
+        model_type="MeloTTSSynthesizer",
+        max_batch_size=1,
+        device_config=cpu_device,
+        dtype="float32",
     )
     eng_cfg = EngineConfig(model_configs=[model_cfg])
     d = eng_cfg.to_dict()

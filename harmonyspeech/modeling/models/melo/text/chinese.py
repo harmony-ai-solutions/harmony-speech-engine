@@ -3,7 +3,7 @@ import os
 import re
 
 import cn2an
-from pypinyin import lazy_pinyin, Style
+from pypinyin import Style, lazy_pinyin
 
 from harmonyspeech.modeling.models.melo.text import chinese_bert
 from harmonyspeech.modeling.models.melo.text.symbols import punctuation
@@ -16,7 +16,6 @@ pinyin_to_symbol_map = {
 }
 
 import jieba.posseg as psg
-
 
 rep_map = {
     "：": ",",
@@ -56,13 +55,11 @@ tone_modifier = ToneSandhi()
 
 def replace_punctuation(text):
     text = text.replace("嗯", "恩").replace("呣", "母")
-    pattern = re.compile("|".join(re.escape(p) for p in rep_map.keys()))
+    pattern = re.compile("|".join(re.escape(p) for p in rep_map))
 
     replaced_text = pattern.sub(lambda x: rep_map[x.group()], text)
 
-    replaced_text = re.sub(
-        r"[^\u4e00-\u9fa5" + "".join(punctuation) + r"]+", "", replaced_text
-    )
+    replaced_text = re.sub(r"[^\u4e00-\u9fa5" + "".join(punctuation) + r"]+", "", replaced_text)
 
     return replaced_text
 
@@ -91,9 +88,7 @@ def _get_initials_finals(word):
     initials = []
     finals = []
     orig_initials = lazy_pinyin(word, neutral_tone_with_five=True, style=Style.INITIALS)
-    orig_finals = lazy_pinyin(
-        word, neutral_tone_with_five=True, style=Style.FINALS_TONE3
-    )
+    orig_finals = lazy_pinyin(word, neutral_tone_with_five=True, style=Style.FINALS_TONE3)
     for c, v in zip(orig_initials, orig_finals):
         initials.append(c)
         finals.append(v)
@@ -113,7 +108,9 @@ def _g2p(segments):
         seg_cut = tone_modifier.pre_merge_for_modify(seg_cut)
         for word, pos in seg_cut:
             if pos == "eng":
-                import pdb; pdb.set_trace()
+                import pdb
+
+                pdb.set_trace()
                 continue
             sub_initials, sub_finals = _get_initials_finals(word)
             sub_finals = tone_modifier.modified_tone(word, pos, sub_finals)
@@ -142,34 +139,20 @@ def _g2p(segments):
 
                 if c:
                     # 多音节
-                    v_rep_map = {
-                        "uei": "ui",
-                        "iou": "iu",
-                        "uen": "un",
-                    }
-                    if v_without_tone in v_rep_map.keys():
+                    v_rep_map = {"uei": "ui", "iou": "iu", "uen": "un"}
+                    if v_without_tone in v_rep_map:
                         pinyin = c + v_rep_map[v_without_tone]
                 else:
                     # 单音节
-                    pinyin_rep_map = {
-                        "ing": "ying",
-                        "i": "yi",
-                        "in": "yin",
-                        "u": "wu",
-                    }
-                    if pinyin in pinyin_rep_map.keys():
+                    pinyin_rep_map = {"ing": "ying", "i": "yi", "in": "yin", "u": "wu"}
+                    if pinyin in pinyin_rep_map:
                         pinyin = pinyin_rep_map[pinyin]
                     else:
-                        single_rep_map = {
-                            "v": "yu",
-                            "e": "e",
-                            "i": "y",
-                            "u": "w",
-                        }
-                        if pinyin[0] in single_rep_map.keys():
+                        single_rep_map = {"v": "yu", "e": "e", "i": "y", "u": "w"}
+                        if pinyin[0] in single_rep_map:
                             pinyin = single_rep_map[pinyin[0]] + pinyin[1:]
 
-                assert pinyin in pinyin_to_symbol_map.keys(), (pinyin, seg, raw_pinyin)
+                assert pinyin in pinyin_to_symbol_map, (pinyin, seg, raw_pinyin)
                 phone = pinyin_to_symbol_map[pinyin].split(" ")
                 word2ph.append(len(phone))
 

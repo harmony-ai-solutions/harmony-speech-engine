@@ -1,7 +1,5 @@
 import enum
 import time
-from dataclasses import dataclass
-from typing import Union, Optional
 
 from harmonyspeech.common.inputs import RequestInput
 from harmonyspeech.common.metrics import RequestMetrics
@@ -20,15 +18,11 @@ class RequestStatus(enum.Enum):
 
     @staticmethod
     def is_waiting(status: "RequestStatus") -> bool:
-        return status in [
-            RequestStatus.WAITING,
-        ]
+        return status in [RequestStatus.WAITING]
 
     @staticmethod
     def is_running(status: "RequestStatus") -> bool:
-        return status in [
-            RequestStatus.RUNNING,
-        ]
+        return status in [RequestStatus.RUNNING]
 
     @staticmethod
     def is_finished(status: "RequestStatus") -> bool:
@@ -40,7 +34,7 @@ class RequestStatus(enum.Enum):
         ]
 
     @staticmethod
-    def get_finished_reason(status: "RequestStatus") -> Union[str, None]:
+    def get_finished_reason(status: "RequestStatus") -> str | None:
         if status == RequestStatus.FINISHED_STOPPED:
             finish_reason = "stop"
         elif status == RequestStatus.FINISHED_ABORTED:
@@ -55,19 +49,10 @@ class RequestStatus(enum.Enum):
 
 
 class EngineRequest:
-    def __init__(
-        self,
-        request_id: str,
-        request_data: RequestInput,
-        arrival_time: float,
-    ) -> None:
+    def __init__(self, request_id: str, request_data: RequestInput, arrival_time: float) -> None:
         self.request_id = request_id
         self.request_data = request_data
-        self.metrics = RequestMetrics(
-            arrival_time=arrival_time,
-            first_scheduled_time=None,
-            time_in_queue=None,
-        )
+        self.metrics = RequestMetrics(arrival_time=arrival_time, first_scheduled_time=None, time_in_queue=None)
         self.status = RequestStatus.WAITING
 
     def is_waiting(self) -> bool:
@@ -87,12 +72,7 @@ class EngineRequest:
 
 
 class ExecutorResult:
-    def __init__(
-        self,
-        request_id: str,
-        input_data: RequestInput,
-        result_data: RequestOutput
-    ):
+    def __init__(self, request_id: str, input_data: RequestInput, result_data: RequestOutput):
         self.request_id = request_id
         self.input_data = input_data
         self.result_data = result_data
