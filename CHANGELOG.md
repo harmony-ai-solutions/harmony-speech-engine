@@ -11,6 +11,12 @@
     *   Implemented embed-dispatch support for embedding-capable TTS models
     *   Added watermarker swap in loader for voice cloning workflows
 
+*   **KittenTTS Integration**:
+    *   ultra-lightweight ONNX-based English TTS with 4 model variants: mini (80MB), micro (41MB), nano-fp32 (56MB), nano-int8 (25MB)
+    *   8 available voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+    *   Uses misaki[en] phonemizer for text-to-speech conversion
+    *   Native ONNX runtime integration (no torch dependency for inference)
+
 ### Improvements
 
 *   **Unified Frontend Tooling Alignment**:
