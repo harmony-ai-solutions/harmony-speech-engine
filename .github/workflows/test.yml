@@ -195,6 +195,10 @@ jobs:
           pip install -r requirements-common.txt
           pip install --no-deps -r requirements-chatterbox.txt
 
+      - name: Download NLTK data
+        run: |
+          python -m nltk.downloader all
+
       - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
