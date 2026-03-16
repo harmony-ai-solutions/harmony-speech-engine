@@ -24,10 +24,6 @@
     *   Updated UI release workflow behavior to explicitly build and publish the Speech Engine UI variant from the canonical unified frontend source.
     *   Added clearer local setup guidance for cloning and running the unified frontend in Speech Engine mode from this repository context.
 
-*   **Protocol Updates**:
-    *   Renamed `norm_loudness` to `normalize_audio` across TTS protocol for clarity
-    *   Added `SpeechEmbeddingRequestInput` handling in TTS inputs
-
 ### Fixes
 
 *   **Container UI Runtime Build Reliability**:
