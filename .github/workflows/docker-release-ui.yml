@@ -19,45 +19,41 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Determine Frontend Reference
-        shell: pwsh
+        shell: bash
         run: |
-          try {
-            $response = Invoke-WebRequest -Uri "https://api.github.com/repos/harmony-ai-solutions/harmony-link-ui/git/refs/tags/$env:VERSION" -Method Head -ErrorAction Stop
-            Write-Host "Frontend tag $env:VERSION found, using tag"
-            echo "FRONTEND_REF=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } catch {
-            Write-Host "Frontend tag $env:VERSION not found, using main branch"
-            echo "FRONTEND_REF=main" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
+          if curl -s -o /dev/null -w "%{http_code}" "https://api.github.com/repos/harmony-ai-solutions/harmony-link-ui/git/refs/tags/$VERSION" | grep -q "200"; then
+            echo "Frontend tag $VERSION found, using tag"
+            echo "FRONTEND_REF=$VERSION" >> $GITHUB_ENV
+          else
+            echo "Frontend tag $VERSION not found, using main branch"
+            echo "FRONTEND_REF=main" >> $GITHUB_ENV
+          fi
 
       - name: Checkout Frontend UI Source
-        shell: pwsh
+        shell: bash
         run: |
-          Write-Host "Preparing frontend source from harmony-link-ui at ref: $env:FRONTEND_REF"
-          if (Test-Path frontend) {
-            Remove-Item -Recurse -Force frontend
-          }
-          git clone --depth 1 --branch $env:FRONTEND_REF https://github.com/harmony-ai-solutions/harmony-link-ui.git frontend
-          Write-Host "Frontend source checkout complete."
+          echo "Preparing frontend source from harmony-link-ui at ref: $FRONTEND_REF"
+          rm -rf frontend
+          git clone --depth 1 --branch "$FRONTEND_REF" https://github.com/harmony-ai-solutions/harmony-link-ui.git frontend
+          echo "Frontend source checkout complete."
 
       - name: Log selected frontend ref and Dockerfile
-        shell: pwsh
+        shell: bash
         run: |
-          Write-Host "Using FRONTEND_REF=$env:FRONTEND_REF"
-          Write-Host "Using Dockerfile=./frontend/Dockerfile.speech-engine"
+          echo "Using FRONTEND_REF=$FRONTEND_REF"
+          echo "Using Dockerfile=./frontend/Dockerfile.speech-engine"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2

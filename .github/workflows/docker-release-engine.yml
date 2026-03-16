@@ -30,18 +30,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set VERSION variable
-        shell: pwsh
+      - name: Set VERSION
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Relocate Docker data-root into workspace
         shell: bash
@@ -113,17 +112,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Relocate Docker data-root into workspace
         shell: bash
@@ -157,17 +155,16 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -208,17 +205,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Relocate Docker data-root into workspace
         shell: bash
@@ -290,17 +286,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Relocate Docker data-root into workspace
         shell: bash
@@ -334,17 +329,16 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Set VERSION variable
-        shell: pwsh
+        shell: bash
         run: |
-          $inputsVersion = '${{ github.event.inputs.version }}'
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
-            $env:VERSION = $env:GITHUB_REF -replace 'refs/tags/', ''
-          } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $inputsVersion -ne '') {
-            $env:VERSION = $inputsVersion
-          } else {
-            $env:VERSION = 'v0.0.0-dev'
-          }
-          echo "VERSION=$env:VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="v0.0.0-dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
