@@ -5,16 +5,23 @@
     "build": { "model": "openrouter/minimax/minimax-m2.5" },
     "coder": { "model": "google/gemini-3-flash-preview" },
     "code-expert": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-advisor-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-assumptions-analyzer": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-codebase-mapper": { "model": "openrouter/minimax/minimax-m2.5" },
     "gsd-debugger": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-executor": { "model": "openrouter/minimax/minimax-m2.5" },
     "gsd-integration-checker": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-nyquist-auditor": { "model": "openrouter/minimax/minimax-m2.5" },
     "gsd-phase-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
     "gsd-plan-checker": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-planner": { "model": "anthropic/claude-sonnet-4-6" },
     "gsd-project-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
-    "gsd-research-synthesizer": { "model": "google/gemini-3.1-pro-preview" },
-    "gsd-roadmapper": { "model": "openrouter/minimax/minimax-m2.5" },
-    "gsd-verifier": { "model": "openrouter/minimax/minimax-m2.5" }
+    "gsd-research-synthesizer": { "model": "anthropic/claude-opus-4-6" },
+    "gsd-roadmapper": { "model": "anthropic/claude-opus-4-6" },
+    "gsd-ui-auditor": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-ui-checker": { "model": "anthropic/claude-sonnet-4-6" },
+    "gsd-ui-researcher": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-user-profiler": { "model": "openrouter/minimax/minimax-m2.5" },
+    "gsd-verifier": { "model": "anthropic/claude-sonnet-4-6" }
   }
 }
