@@ -56,7 +56,17 @@ class ModelRunnerBase:
         :param requests_to_batch:
         :return:
         """
-        inputs = prepare_inputs(self.model_config, requests_to_batch)
+        # Wrap prepare_inputs so that input-validation failures (e.g. wrong
+        # request type, bad base64, unsupported option) are converted to
+        # per-request error results instead of raising an unhandled exception
+        # that kills the async engine's background loop.
+        try:
+            inputs = prepare_inputs(self.model_config, requests_to_batch)
+        except Exception as e:
+            logger.error(
+                "Failed to prepare inputs for model %s: %s", getattr(self.model_config, "model_type", "?"), e
+            )
+            return [self._build_error_result(req, e) for req in requests_to_batch]
         outputs = []
 
         model_type = getattr(self.model_config, "model_type", None)

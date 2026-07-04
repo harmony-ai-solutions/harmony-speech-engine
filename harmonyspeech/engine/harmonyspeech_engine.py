@@ -370,6 +370,16 @@ class HarmonySpeechEngine:
                 returning_model_cfg = cfg
                 break
 
+        # If inference produced an error result (e.g. bad input, model failure),
+        # do NOT attempt to forward it through the multi-step pipeline. Mark the
+        # request as finished so the scheduler can clean it up, and let the error
+        # output flow back to the caller. Without this, a failed request would
+        # either be incorrectly re-forwarded or leak in the scheduler's running
+        # queue forever.
+        if isinstance(result.result_data, RequestOutput) and result.result_data.finish_reason == "error":
+            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
+            return RequestStatus.FINISHED_STOPPED, None
+
         # Explicit model selected, no forwarding needed
         if returning_model_cfg == requested_model:
             return new_status, None

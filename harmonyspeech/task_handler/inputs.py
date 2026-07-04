@@ -225,11 +225,18 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
                 raise ValueError(f"request ID {r.request_id} is not of type VoiceConversionRequestInput")
         return prepare_chatterbox_vc_inputs(inputs)
     elif model_config.model_type == "ChatterboxEmbedding":
+        # Accept both SpeechEmbeddingRequestInput (dedicated embed endpoint) and
+        # TextToSpeechRequestInput (voice-cloning pipeline routes the TTS request
+        # here for the embedding step before forwarding to the TTS executor).
+        # prepare_chatterbox_embedding_inputs only needs input_audio, which both
+        # request types carry.
         for r in requests_to_batch:
-            if isinstance(r.request_data, SpeechEmbeddingRequestInput):
+            if isinstance(r.request_data, (SpeechEmbeddingRequestInput, TextToSpeechRequestInput)):
                 inputs.append(r.request_data)
             else:
-                raise ValueError(f"request ID {r.request_id} is not of type SpeechEmbeddingRequestInput")
+                raise ValueError(
+                    f"request ID {r.request_id} is not of type SpeechEmbeddingRequestInput or TextToSpeechRequestInput"
+                )
         return prepare_chatterbox_embedding_inputs(inputs)
     else:
         raise NotImplementedError(f"Cannot provide Inputs for model {model_config.model_type}")

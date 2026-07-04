@@ -333,7 +333,26 @@ class AsyncHarmonySpeech:
         if finished_requests:
             await self._engine_abort(finished_requests)
 
-        request_outputs, forwarded_requests = await self.engine.step_async()
+        try:
+            request_outputs, forwarded_requests = await self.engine.step_async()
+        except Exception as e:
+            # A model-execution or output-processing error that was NOT caught
+            # by the per-request error handling in the model runner. Propagate
+            # it to the affected in-flight requests so a single failure does
+            # not permanently kill the engine's background loop (the
+            # "Background loop has errored already" cascading failure).
+            logger.error("Engine step failed - propagating error to in-flight requests.", exc_info=e)
+            in_flight_ids = [req.request_id for req in self.engine.scheduler.running]
+            for rid in in_flight_ids:
+                if rid in self._request_tracker:
+                    self._request_tracker.process_exception(rid, e, verbose=self.log_requests)
+                else:
+                    logger.warning("Engine step error for untracked request %s: %s", rid, e)
+            # Abort the failed requests in the underlying scheduler so they are
+            # cleaned up and don't block the model's batch slot forever.
+            if in_flight_ids:
+                await self._engine_abort(in_flight_ids)
+            return False
 
         # Put the outputs into the corresponding streams.
         for request_output in request_outputs:
