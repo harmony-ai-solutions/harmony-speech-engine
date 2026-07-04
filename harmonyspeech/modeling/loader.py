@@ -1,11 +1,14 @@
 """Utilities for selecting and loading models."""
 
 import contextlib
+import ctypes
+import sys
 
 import perth
 import torch
 import torch.nn as nn
 from faster_whisper import WhisperModel
+from loguru import logger
 from silero_vad import load_silero_vad
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
@@ -23,6 +26,51 @@ from harmonyspeech.modeling.models.chatterbox.chatterbox import (
     ChatterboxVCModel,
 )
 from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
+
+
+def _check_ctranslate2_cuda_available() -> bool:
+    """Pre-check whether CTranslate2 can safely use CUDA.
+
+    CTranslate2 (used by faster-whisper) calls ``abort()`` — a native SIGABRT
+    that kills the entire process instantly — if it cannot load cuDNN when
+    ``device='cuda'`` is passed to ``WhisperModel``.  No Python ``try/except``
+    can intercept this.
+
+    This function performs two safe pre-checks **before** model creation:
+      1. ``ctranslate2.get_cuda_device_count()`` — are there any CUDA devices?
+      2. ``ctypes.CDLL(...)`` — can the cuDNN shared libraries actually be
+         loaded by the dynamic linker?
+
+    If either check fails, callers should fall back to ``device='cpu'`` instead
+    of allowing CTranslate2 to abort the process.
+
+    Returns:
+        True if CUDA + cuDNN are available for CTranslate2, False otherwise.
+    """
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() == 0:
+            return False
+    except Exception:
+        return False
+
+    # CTranslate2 is compiled against cuDNN 8.  Verify the exact libraries it
+    # will try to dlopen are loadable.  Platform-specific names:
+    if sys.platform.startswith("linux"):
+        cudnn_libs = ["libcudnn_ops_infer.so.8", "libcudnn_cnn_infer.so.8"]
+    elif sys.platform == "win32":
+        cudnn_libs = ["cudnn_ops_infer64_8.dll", "cudnn_cnn_infer64_8.dll"]
+    else:
+        # Unknown platform — assume available (CTranslate2 will handle it).
+        return True
+
+    for lib_name in cudnn_libs:
+        try:
+            ctypes.CDLL(lib_name)
+        except OSError:
+            return False
+    return True
 
 
 @contextlib.contextmanager
@@ -215,9 +263,33 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
             # Bailout for native models
             if model_class == "native" and hf_config == "native":
                 if model_config.model_type == "FasterWhisper":
-                    # Convert torch.device to string (e.g., "cpu", "cuda")
+                    # Resolve device safely: CTranslate2 calls abort() (native
+                    # SIGABRT, uncatchable by Python) if cuDNN is missing when
+                    # device='cuda'. Pre-check and fall back to CPU gracefully.
                     device_str = str(device_config.device)
-                    model = WhisperModel(model_config.model, device=device_str)
+                    compute_type = getattr(model_config, "compute_type", None)
+
+                    if device_str == "cuda":
+                        if not _check_ctranslate2_cuda_available():
+                            logger.warning(
+                                "FasterWhisper model '%s' is configured for device='cuda' "
+                                "but cuDNN libraries are not available. Falling back to CPU "
+                                "(compute_type='int8'). Install cuDNN 8 or set device='cpu' "
+                                "in the config to suppress this warning.",
+                                model_config.model,
+                            )
+                            device_str = "cpu"
+                            compute_type = compute_type or "int8"
+                        else:
+                            compute_type = compute_type or "float16"
+                    else:
+                        compute_type = compute_type or "int8"
+
+                    model = WhisperModel(
+                        model_config.model,
+                        device=device_str,
+                        compute_type=compute_type,
+                    )
                     return model
                 elif model_config.model_type == "SileroVAD":
                     # Support both ONNX and PyTorch formats based on config
