@@ -6,9 +6,62 @@ import os
 import huggingface_hub.constants
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import LocalEntryNotFoundError
+from loguru import logger
 
 _xdg_cache_home = os.getenv("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
 _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
+
+# In-memory caches for configs and static files loaded via HuggingFace.
+# These are populated once (first request) and reused for every subsequent
+# request, eliminating redundant HEAD/ETag checks against huggingface.co on
+# every inference call.  Configs and speaker-embedding files are immutable
+# for the lifetime of the process, so cache invalidation is not needed.
+_config_cache: dict[tuple, object] = {}
+_file_cache: dict[tuple, bytes] = {}
+
+
+def _resolve_file_path(
+    base_path: str, filename: str, revision: str | None = None
+) -> str:
+    """Resolve a file path using a three-tier strategy, minimising network use.
+
+    Resolution order:
+      1. **Local filesystem** — ``base_path/filename`` if it exists on disk
+         (models unpacked to a local directory).
+      2. **HuggingFace disk cache** — ``hf_hub_download(local_files_only=True)``
+         checks the HF cache folder without any network request.
+      3. **Network download** — full ``hf_hub_download()`` as a last-resort
+         fallback for the very first fetch (logs a one-time INFO message).
+
+    Args:
+        base_path: Local directory path OR HuggingFace repo ID.
+        filename: File name relative to *base_path*.
+        revision: Optional HF model revision.
+
+    Returns:
+        Absolute path to the resolved file on disk.
+    """
+    # Tier 1: local filesystem
+    local_path = os.path.join(base_path, filename)
+    if os.path.isfile(local_path):
+        return local_path
+
+    # Tier 2: HuggingFace disk cache (no network)
+    try:
+        return hf_hub_download(
+            repo_id=base_path, revision=revision, filename=filename,
+            local_files_only=True,
+        )
+    except LocalEntryNotFoundError:
+        pass
+
+    # Tier 3: network download (first-ever fetch)
+    logger.info(f"Downloading '{filename}' from HuggingFace repo '{base_path}' "
+                f"(not found in local cache).")
+    return hf_hub_download(
+        repo_id=base_path, revision=revision, filename=filename,
+    )
 
 
 def enable_hf_transfer():
@@ -81,36 +134,30 @@ def get_hparams_from_file(config_path):
 
 
 def load_or_download_file(model_name_or_path: str, file_filename: str = "file.json", revision: str = None):
-    file_base_path = model_name_or_path
-    file_path = file_base_path + "/" + file_filename
-    if not os.path.isfile(file_path):
-        # Try via Huggingface if path is not pointing to a local file
-        # assuming file_base_path is a huggingface repo URL
-        file_path = hf_hub_download(repo_id=file_base_path, revision=revision, filename=file_filename)
-    # Read file via binary mode
+    cache_key = (model_name_or_path, file_filename, revision)
+    if cache_key in _file_cache:
+        return _file_cache[cache_key]
+
+    file_path = _resolve_file_path(model_name_or_path, file_filename, revision)
     with open(file_path, "rb") as f:
         data = f.read()
+    _file_cache[cache_key] = data
     return data
 
 
 def load_or_download_config(model_name_or_path: str, config_filename: str = "config.json", revision: str = None):
-    config_base_path = model_name_or_path
-    config_path = config_base_path + "/" + config_filename
-    if not os.path.isfile(config_path):
-        # Try via Huggingface if path is not pointing to a local file
-        # assuming config_base_path is a huggingface repo URL
-        config_path = hf_hub_download(repo_id=config_base_path, revision=revision, filename=config_filename)
+    cache_key = (model_name_or_path, config_filename, revision)
+    if cache_key in _config_cache:
+        return _config_cache[cache_key]
 
-    return get_hparams_from_file(config_path)
+    config_path = _resolve_file_path(model_name_or_path, config_filename, revision)
+    hparams = get_hparams_from_file(config_path)
+    _config_cache[cache_key] = hparams
+    return hparams
 
 
 def load_or_download_model(
     model_name_or_path: str, device: str, ckpt_filename: str = "checkpoint.pth", revision: str = None
 ):
-    ckpt_base_path = model_name_or_path
-    ckpt_path = ckpt_base_path + "/" + ckpt_filename
-    if not os.path.isfile(ckpt_path):
-        # Try via Huggingface if path is not pointing to a local file
-        # assuming ckpt_base_path is a huggingface repo URL
-        ckpt_path = hf_hub_download(repo_id=ckpt_base_path, revision=revision, filename=ckpt_filename)
+    ckpt_path = _resolve_file_path(model_name_or_path, ckpt_filename, revision)
     return torch.load(ckpt_path, map_location=device, weights_only=False)
