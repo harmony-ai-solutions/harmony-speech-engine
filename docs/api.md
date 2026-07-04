@@ -133,7 +133,7 @@ Based on the [OpenAI TTS API](https://platform.openai.com/docs/api-reference/aud
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `model` | string | Yes | - | Name of the TTS model or toolchain group (see [Model Selection](#tts-model-selection) below) |
-| `input` | string | Yes | - | The text to synthesize |
+| `input` | string | Yes | - | The text to synthesize. Some models (e.g. `chatterbox_turbo`) support [paralinguistic tags](#paralinguistic-tags) embedded in the text |
 | `mode` | string | Yes | - | Pipeline mode: `"single_speaker_tts"` or `"voice_cloning"` (see [Mode Selection](#tts-mode-selection) below) |
 | `language` | string | Conditional | null | Language ID — required by models with multiple languages (see [Language & Voice](#tts-language-and-voice) below) |
 | `voice` | string | Conditional | null | Voice ID — required when the selected language has preset voices |
@@ -155,12 +155,12 @@ The `model` parameter accepts either an **individual model name** or a **toolcha
 | `"kitten-tts-mini"` | Individual | Single-model TTS | No (defaults to `"default"`) | Yes | No | Ultra-lightweight English TTS (ONNX) |
 | `"kitten-tts-micro"` | Individual | Single-model TTS | No | Yes | No | Compact English TTS variant |
 | `"kitten-tts-nano"` | Individual | Single-model TTS | No | Yes | No | Smallest English TTS variant |
-| `"chatterbox"` | Toolchain | Embed → ChatterboxTTS | No | No | Yes | Chatterbox standard TTS (8 languages via cloning) |
-| `"chatterbox_turbo"` | Toolchain | Embed → ChatterboxTurboTTS | No | No | Yes | Faster Chatterbox variant |
+| `"chatterbox"` | Toolchain | Embed → ChatterboxTTS | No | No | Yes | English-only Chatterbox voice cloning |
+| `"chatterbox_turbo"` | Toolchain | Embed → ChatterboxTurboTTS | No | No | Yes | English-only Chatterbox voice cloning with [paralinguistic tags](#paralinguistic-tags) |
 | `"chatterbox_multilingual"` | Toolchain | Embed → ChatterboxMultilingualTTS | Yes (ISO code) | No | Yes | 23-language Chatterbox |
 | `"openvoice_v1"` | Toolchain | VAD → Encoder → Synthesizer → ToneConverter | Yes | Yes | Yes | OpenVoice V1 voice cloning |
 | `"openvoice_v2"` | Toolchain | VAD → Encoder → MeloTTS → ToneConverter | Yes | Yes | Yes | OpenVoice V2 voice cloning |
-| `"harmonyspeech"` | Toolchain | Encoder → Synthesizer → Vocoder | No | No | Yes | Harmony Speech V1 pipeline |
+| `"harmonyspeech"` | Toolchain | Encoder → Synthesizer → Vocoder | No | No | Yes | English-only voice cloning (always requires a reference voice; no `language` parameter) |
 
 > **`input_embedding` support:** Models marked "Yes" accept a pre-computed speaker embedding (from `POST /v1/embed/speaker`) via the `input_embedding` field. This skips the VAD and embedding-extraction steps, making voice-cloning requests significantly faster. KittenTTS does not support embeddings — it uses fixed preset voices only.
 
@@ -207,6 +207,45 @@ For models with multiple languages, the `language` parameter selects the languag
 **KittenTTS models:**
 
 No `language` parameter needed. Valid `voice` values: `"Bella"`, `"Jasper"`, `"Luna"`, `"Bruno"`, `"Rosie"`, `"Hugo"`, `"Kiki"`, `"Leo"`
+
+**Chatterbox, Chatterbox Turbo, and HarmonySpeech:**
+
+These models are **English-only** and use **voice cloning exclusively** — they do not expose a `language` or `voice` parameter. A reference voice must always be supplied via `input_audio` or `input_embedding` (see [Mode Selection](#tts-mode-selection)).
+
+- `"chatterbox"` — standard Chatterbox voice cloning
+- `"chatterbox_turbo"` — faster variant; additionally supports [paralinguistic tags](#paralinguistic-tags)
+- `"harmonyspeech"` — Harmony Speech V1 voice cloning pipeline
+
+> Only `"chatterbox_multilingual"`, `"openvoice_v1"`, and `"openvoice_v2"` accept the `language` parameter. All other TTS models are single-language (English) and do not expose it.
+
+#### Paralinguistic Tags
+
+`"chatterbox_turbo"` supports **paralinguistic tags** — effect and emotion tokens that can be embedded directly in the `input` text to shape the delivery of the synthesized speech. The tags are parsed out of the text before synthesis; no special request field is needed.
+
+Supported tags (19, sourced from the model's tokenizer):
+
+```
+[advertisement] [angry]      [chuckle]     [clear throat] [cough]
+[crying]        [dramatic]   [fear]        [gasp]         [groan]
+[happy]         [laugh]      [narration]   [sarcastic]    [shush]
+[sigh]          [sniff]      [surprised]   [whispering]
+```
+
+**Example — emotional speech with tags:**
+
+```bash
+curl -X POST "http://localhost:12080/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "chatterbox_turbo",
+    "mode": "voice_cloning",
+    "input": "[whispering] Did you hear that? [gasp]",
+    "input_audio": "base64_encoded_reference_audio"
+  }'
+```
+
+> Tag availability is model-specific. Future models may add support; check the engine catalog (`GET /v1/audio/speech/models`) or your gateway's model metadata to confirm which models accept paralinguistic tags.
 
 #### Examples
 
