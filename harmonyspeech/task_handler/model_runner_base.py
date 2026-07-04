@@ -1,12 +1,10 @@
 import base64
 import io
 import json
-import logging
 import time
-import traceback
 from dataclasses import asdict
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 import numpy as np
 import soundfile as sf
@@ -63,8 +61,9 @@ class ModelRunnerBase:
         try:
             inputs = prepare_inputs(self.model_config, requests_to_batch)
         except Exception as e:
-            logger.error(
-                "Failed to prepare inputs for model %s: %s", getattr(self.model_config, "model_type", "?"), e
+            logger.opt(exception=e).error(
+                f"Failed to prepare inputs for model "
+                f"{getattr(self.model_config, 'model_type', '?')}: {e}"
             )
             return [self._build_error_result(req, e) for req in requests_to_batch]
         outputs = []
@@ -128,8 +127,10 @@ class ModelRunnerBase:
         request_id = initial_request.request_id
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
-        # Log full stack trace so the server-side cause is always visible in logs
-        logger.error("Inference error for request %s: %s\n%s", request_id, exception, traceback.format_exc())
+        # Log full stack trace so the server-side cause is always visible in logs.
+        logger.opt(exception=exception).error(
+            f"Inference error for request {request_id}: {exception}"
+        )
         error_output = RequestOutput(
             request_id=request_id, finish_reason="error", error=str(exception), metrics=metrics
         )

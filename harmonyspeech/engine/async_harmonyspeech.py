@@ -347,7 +347,7 @@ class AsyncHarmonySpeech:
                 if rid in self._request_tracker:
                     self._request_tracker.process_exception(rid, e, verbose=self.log_requests)
                 else:
-                    logger.warning("Engine step error for untracked request %s: %s", rid, e)
+                    logger.warning(f"Engine step error for untracked request {rid}: {e}")
             # Abort the failed requests in the underlying scheduler so they are
             # cleaned up and don't block the model's batch slot forever.
             if in_flight_ids:

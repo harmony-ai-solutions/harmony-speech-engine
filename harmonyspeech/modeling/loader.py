@@ -272,11 +272,10 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     if device_str == "cuda":
                         if not _check_ctranslate2_cuda_available():
                             logger.warning(
-                                "FasterWhisper model '%s' is configured for device='cuda' "
-                                "but cuDNN libraries are not available. Falling back to CPU "
-                                "(compute_type='int8'). Install cuDNN 8 or set device='cpu' "
-                                "in the config to suppress this warning.",
-                                model_config.model,
+                                f"FasterWhisper model '{model_config.model}' is configured for "
+                                f"device='cuda' but cuDNN libraries are not available. Falling back "
+                                f"to CPU (compute_type='int8'). Install cuDNN 8 or set device='cpu' "
+                                f"in the config to suppress this warning."
                             )
                             device_str = "cpu"
                             compute_type = compute_type or "int8"
