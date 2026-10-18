@@ -839,6 +839,71 @@
             "title": "Get Timestamps",
             "description": "whether to return the word timestamps. Check model description if supported.",
             "default": false
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold",
+            "description": "Speech threshold. Probabilities above this value are considered as speech.",
+            "default": 0.5
+          },
+          "min_speech_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Speech Duration Ms",
+            "description": "Final speech chunks shorter than this duration (in ms) are discarded.",
+            "default": 250
+          },
+          "min_silence_duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Silence Duration Ms",
+            "description": "Minimum silence duration (in ms) before separating speech chunks.",
+            "default": 100
+          },
+          "speech_pad_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speech Pad Ms",
+            "description": "Speech chunks are padded by this duration (in ms) on each side.",
+            "default": 30
+          },
+          "return_seconds": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return Seconds",
+            "description": "Whether to return timestamps in seconds (default: samples).",
+            "default": false
           }
         },
         "type": "object",
