@@ -8,9 +8,10 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechSynthesisRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.output_encoding import apply_output_options, validate_output_options
+from harmonyspeech.endpoints.openai.output_encoding import validate_output_options
 from harmonyspeech.endpoints.openai.protocol import ErrorResponse, ModelCard, TextToSpeechRequest, TextToSpeechResponse
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling TTS Requests here
@@ -65,9 +66,14 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         request_id = f"tts-{random_uuid()}"
 
+        request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+        # Boundary decode-once: the reference audio becomes an artifact now, so
+        # no pipeline step re-reads the base64 field.
+        artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=TextToSpeechRequestInput.from_openai(request_id=request_id, request=request),
+            request_data=request_data,
+            artifacts=artifacts,
         )
 
         try:
@@ -102,13 +108,15 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         # Handle both TextToSpeechRequestOutput (KittenTTS) and SpeechSynthesisRequestOutput (MeloTTS)
         if isinstance(final_res, TextToSpeechRequestOutput) or isinstance(final_res, SpeechSynthesisRequestOutput):
-            audio_data = final_res.output
+            pass
         else:
             raise ValueError(
                 f"Expected TextToSpeechRequestOutput or SpeechSynthesisRequestOutput, got {type(final_res).__name__}"
             )
 
-        encoded = apply_output_options(audio_data, request.output_options)
+        # Encode from the typed artifact when present (no base64 WAV decode);
+        # fall back to the legacy payload for pre-artifact producers.
+        encoded = to_wire_audio(final_res, request.output_options)
         response = TextToSpeechResponse(
             id=request_id,
             created=created_time,

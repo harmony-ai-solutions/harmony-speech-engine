@@ -26,6 +26,7 @@ from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions
 __all__ = [
     "EncodedAudio",
     "apply_output_options",
+    "encode_artifact",
     "normalize_format",
     "validate_output_options",
 ]
@@ -97,4 +98,33 @@ def apply_output_options(b64_wav: str, opts: AudioOutputOptions | None) -> Encod
         data=base64.b64encode(encoded).decode("ascii"),
         format=fmt,
         sample_rate=effective_sr,
+    )
+
+
+def encode_artifact(artifact, opts: AudioOutputOptions | None) -> EncodedAudio:
+    """Encode an :class:`AudioArtifact` into the requested wire format.
+
+    This is the artifact-aware counterpart of :func:`apply_output_options`: it
+    skips the base64 WAV decode entirely, because the waveform is already in
+    memory. The default (no options / WAV without resampling) path produces the
+    same PCM-16 WAV bytes the executor used to emit, so responses stay
+    byte-identical to the pre-Phase-2 wire.
+    """
+    fmt = normalize_format(opts.format) if opts is not None else "wav"
+    target_sr = opts.sample_rate if opts is not None else None
+
+    if opts is not None:
+        error = validate_output_options(opts)
+        if error is not None:
+            raise ValueError(error)
+
+    waveform = artifact.numpy
+    source_sr = int(artifact.sample_rate)
+
+    encoded = audio_codec.encode_audio(waveform, source_sr, fmt, target_sr=target_sr)
+    effective_sr = int(target_sr) if target_sr is not None else source_sr
+    return EncodedAudio(
+        data=base64.b64encode(encoded).decode("ascii"),
+        format=fmt,
+        sample_rate=None if (fmt == "wav" and target_sr is None) else effective_sr,
     )

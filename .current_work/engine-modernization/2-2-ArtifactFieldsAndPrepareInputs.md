@@ -72,9 +72,40 @@ Existing e2e suites must pass unchanged: for **external** requests nothing obser
 
 ## Checklist
 
-- [ ] Precedence getters implemented on request inputs
-- [ ] All `prepare_*` functions artifact-based; per-hop re-decodes eliminated
-- [ ] Boundary decode-once at admission
-- [ ] Decode-count unit tests prove single decode per request
-- [ ] E2e parity green
-- [ ] `summary.md` Implementation Status updated
+- [x] Precedence getters implemented on request inputs
+- [x] All `prepare_*` functions artifact-based; per-hop re-decodes eliminated
+- [x] Boundary decode-once at admission
+- [x] Decode-count unit tests prove single decode per request
+- [x] E2e parity green
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- `common/inputs.py` owns the decode helpers and precedence getters
+  (`get_audio_artifact`, `get_speaker_artifact`, `get_vad_artifact`,
+  `get_mel_artifact`). `RequestInput` exposes thin methods over the same
+  functions; prepare code uses the module-level form so test doubles that
+  auto-create attributes still work.
+- `prepare_inputs` now passes **`EngineRequest`** entries to the prepare
+  functions (they carry the artifact store). Bare request inputs are still
+  accepted, so direct callers/tests keep working.
+- Native-rate decodes are cached on the request; a step asking for another
+  sample rate gets a transient `AudioArtifact.resampled(sr)` view (never cached,
+  so memory stays flat). Admissions/embeddings/VAD/mel are decoded once.
+- Admission decode happens in `HarmonySpeechEngine.add_request`
+  (`prefill_audio_artifacts`) and, for the HTTP path, in
+  `wire.from_wire_audio`; it is idempotent. Undecodable `input_audio` payloads
+  (the HarmonySpeech vocoder's JSON envelope) are left for their step to reject
+  with the pre-existing typed error, so error behaviour is unchanged.
+- `prepare_harmonyspeech_encoder_inputs` returns the decoded `AudioArtifact`
+  (preprocessing moved to the handler) so the Whisper→encoder hop shares one
+  decode.
+- `prepare_openvoice_tone_converter_encoder_inputs` consumes the
+  `VadArtifact` + shared `AudioArtifact`; the tempfile export/import is gone.
+  It keeps OpenVoice's int16 quantization for embedding parity and fixes a
+  latent `segments[k+1].start` attribute access on a plain dict.
+- `prepare_synthesis_inputs` (modeling layer) no longer decodes wire text; it
+  accepts the decoded embedding array from the `SpeakerArtifact`.
+- `_decode_audio_field` / `_load_conditionals_payload` remain importable from
+  `task_handler.inputs` as aliases over the common helpers (test compatibility).
+

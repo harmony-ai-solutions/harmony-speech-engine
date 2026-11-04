@@ -8,6 +8,19 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 2 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phases 0 (correctness & security), 1 (wire contract) and 2 (artifact bus) are complete; Phases 3–6 are queued per `summary.md`.
+
+- New typed artifact bus (`common/artifacts.py`): `AudioArtifact`, `MelArtifact`, `SpeakerArtifact`, `VadArtifact`; `EngineRequest.artifacts` store with deterministic release on finish; explicit `artifact.to(device)` moves (handlers assert the device tag).
+- Precedence getters decode each inbound field exactly once and cache it; all `prepare_*` functions return artifacts; admission decode in `add_request` / `wire.from_wire_audio`.
+- All eight internal hops converted: Whisper→encoder (VAD+audio artifacts), encoder→synth/TC (embedding tensor), synth→tone converter (waveform), Chatterbox embed→TTS/VC (Conditionals by reference), VoiceFixer restorer→vocoder and HarmonySpeech synth→vocoder (mel tensor + breaks), final outputs via `audio_artifact`.
+- Serialization now exists only in `endpoints/openai/wire.py` (+ the codec module); a pytest invariant enforces it. `encode_artifact` keeps default WAV responses byte-identical.
+- Benchmarked on CPU with real weights: VoiceFixer mel hop 25.4 ms → 0.005 ms per second of audio; OpenVoice V2 clone decodes once instead of three times; VoiceFixer/HarmonySpeech outputs byte-identical across runs (MeloTTS is sampling-stochastic). See `docs/benchmarks/artifact-bus.md`.
+- Real-model e2e ran green for HarmonySpeech, OpenVoice V1/V2, VoiceFixer, Chatterbox/Turbo, KittenTTS, Whisper STT and Silero/Whisper VAD. Fixed a regression where Chatterbox `single_speaker_tts` ignored the model's bundled default voice.
+
+Next up when work resumes: Phase 3 — declarative `PipelineSpec` routing (routing helpers `_present`/`_missing` are the seam).
+
 ### Engine Modernization — Phase 1 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phase 0 (correctness & security) and Phase 1 (wire contract) are complete; Phases 2–6 are queued per `summary.md`.

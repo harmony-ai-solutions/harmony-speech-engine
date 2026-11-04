@@ -215,13 +215,17 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         return request_outputs, forwarded_requests
 
     async def add_request_async(
-        self, request_id: str, request_data: RequestInput, arrival_time: float | None = None
+        self,
+        request_id: str,
+        request_data: RequestInput,
+        arrival_time: float | None = None,
+        artifacts: dict | None = None,
     ) -> None:
 
         if arrival_time is None:
             arrival_time = time.time()
 
-        return self.add_request(request_id, request_data=request_data, arrival_time=arrival_time)
+        return self.add_request(request_id, request_data=request_data, arrival_time=arrival_time, artifacts=artifacts)
 
     async def check_health_async(self) -> dict:
         """Probe every model executor and return the structured health payload."""
@@ -436,7 +440,11 @@ class AsyncHarmonySpeech:
             logger.info("Engine loop interrupted. Exiting gracefully.")
 
     async def add_request(
-        self, request_id: str, request_data: RequestInput, arrival_time: float | None = None
+        self,
+        request_id: str,
+        request_data: RequestInput,
+        arrival_time: float | None = None,
+        artifacts: dict | None = None,
     ) -> AsyncStream:
         if self.log_requests:
             # Log TTS request
@@ -462,17 +470,23 @@ class AsyncHarmonySpeech:
         if arrival_time is None:
             arrival_time = time.time()
 
-        stream = self._request_tracker.add_request(request_id, request_data=request_data, arrival_time=arrival_time)
+        stream = self._request_tracker.add_request(
+            request_id, request_data=request_data, arrival_time=arrival_time, artifacts=artifacts
+        )
 
         return stream
 
-    async def generate(self, request_id: str, request_data: RequestInput) -> AsyncIterator[RequestOutput]:
+    async def generate(
+        self, request_id: str, request_data: RequestInput, artifacts: dict | None = None
+    ) -> AsyncIterator[RequestOutput]:
         """
         Generate outputs for a request.
 
         Args:
             request_id: ID of the request
             request_data: Input Object holding the request data
+            artifacts: Optional pre-decoded artifacts (the serving boundary
+                decodes audio fields once via ``wire.from_wire_audio``)
         Yields:
             The output `RequestOutput` objects from the HarmonySpeechEngine for the
             request.
@@ -482,7 +496,9 @@ class AsyncHarmonySpeech:
         arrival_time = time.monotonic()
 
         try:
-            stream = await self.add_request(request_id=request_id, request_data=request_data, arrival_time=arrival_time)
+            stream = await self.add_request(
+                request_id=request_id, request_data=request_data, arrival_time=arrival_time, artifacts=artifacts
+            )
 
             async for request_output in stream:
                 yield request_output

@@ -7,7 +7,7 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import VoiceConversionRequestInput
 from harmonyspeech.common.outputs import RequestOutput, VoiceConversionRequestOutput
 from harmonyspeech.common.utils import random_uuid
-from harmonyspeech.endpoints.openai.output_encoding import apply_output_options, validate_output_options
+from harmonyspeech.endpoints.openai.output_encoding import validate_output_options
 from harmonyspeech.endpoints.openai.protocol import (
     ErrorResponse,
     ModelCard,
@@ -15,6 +15,7 @@ from harmonyspeech.endpoints.openai.protocol import (
     VoiceConversionResponse,
 )
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling Embedding Requests here
@@ -52,9 +53,12 @@ class OpenAIServingVoiceConversion(OpenAIServing):
 
         request_id = f"vc-{random_uuid()}"
 
+        request_data = VoiceConversionRequestInput.from_openai(request_id=request_id, request=request)
+        artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=VoiceConversionRequestInput.from_openai(request_id=request_id, request=request),
+            request_data=request_data,
+            artifacts=artifacts,
         )
 
         try:
@@ -88,7 +92,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, VoiceConversionRequestOutput)
 
-        encoded = apply_output_options(final_res.output, request.output_options)
+        encoded = to_wire_audio(final_res, request.output_options)
         response = VoiceConversionResponse(
             id=request_id,
             created=created_time,

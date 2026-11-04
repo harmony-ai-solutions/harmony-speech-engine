@@ -63,7 +63,34 @@ def to_wire_audio(result_output, output_options) -> str:
 
 ## Checklist
 
-- [ ] `wire.py` helpers exist; all serving modules use them
-- [ ] Engine core free of audio base64 (invariant test)
-- [ ] Compat matrix verified (JSON path byte-identical; HSEAdapter envelope unchanged)
-- [ ] `summary.md` Implementation Status updated
+- [x] `wire.py` helpers exist; all serving modules use them
+- [x] Engine core free of audio base64 (invariant test)
+- [x] Compat matrix verified (JSON path byte-identical; HSEAdapter envelope unchanged)
+- [x] `summary.md` Implementation Status updated
+
+## Compatibility matrix (verified 2026-11-04)
+
+| Case | Result |
+|---|---|
+| JSON base64 in → base64 WAV out, no options | **byte-identical** — `encode_artifact` produces the same PCM-16 WAV bytes the executor wrote (`test_to_wire_audio_from_artifact_matches_legacy_payload`); real-model e2e defaults pass unchanged |
+| Multipart in → format-converted out | green (`tests/e2e/wire_contract`, 38 passed / 3 model-only skips) |
+| Output format/sample-rate options | green; `encode_artifact` reports the same `sample_rate` echo as `apply_output_options` |
+| Embedding endpoints | response format unchanged: `to_wire_embedding` reproduces the legacy payload per backend (raw float32 / `torch.save` tensor / 0-1-safe conditionals) — byte-equality unit tests |
+| `cmd/worker` HSEAdapter envelope | unchanged: response models (`data`, `sample_rate`, `text`, `language`, `timestamps`, `speech_activity`) and field names/types are untouched; only internal containers changed |
+| Engine core wire encoding | none: `test_engine_core_contains_no_wire_encoding` scans `harmonyspeech/` and allows only `common/audio_codec.py`, `common/inputs.py`, `common/outputs.py`, `endpoints/` |
+
+## Implementation notes (2026-11-04)
+
+- `harmonyspeech/endpoints/openai/wire.py` provides `from_wire_audio`,
+  `to_wire_audio`, `to_wire_embedding`; every serving module calls
+  `from_wire_audio` at admission, and the audio/embedding responses go through
+  the outbound helpers.
+- `output_encoding.encode_artifact` is the artifact-side counterpart of
+  `apply_output_options` (no base64 WAV decode; one encode honoring
+  `output_format`/`sample_rate`).
+- `serving_voice_embed` is the only place a `SpeakerArtifact` is serialized for
+  a client; the engine core never serializes embeddings.
+- The multipart envelope still performs its documented in-process base64
+  round-trip for exact JSON parity; it is now immediately decoded into artifacts
+  at admission, so no pipeline step ever touches it.
+

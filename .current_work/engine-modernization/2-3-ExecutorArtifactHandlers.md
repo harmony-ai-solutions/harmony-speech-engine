@@ -73,9 +73,53 @@ Preserve the exact mel/breaks pairing semantics (re-read `:212-220`, `:528-598` 
 
 ## Checklist
 
-- [ ] All 8 hops from the table converted; base64 intermediates gone from internal flow
-- [ ] Output classes carry optional artifacts; external endpoints unchanged
-- [ ] `check_forward_processing` forwards artifacts (no re-encode)
-- [ ] Device asserts + explicit moves in handlers
-- [ ] Hop unit tests + e2e parity green
-- [ ] `summary.md` Implementation Status updated
+- [x] All 8 hops from the table converted; base64 intermediates gone from internal flow
+- [x] Output classes carry optional artifacts; external endpoints unchanged
+- [x] `check_forward_processing` forwards artifacts (no re-encode)
+- [x] Device asserts + explicit moves in handlers
+- [x] Hop unit tests + e2e parity green
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+Hop-by-hop result:
+
+| Hop | Implementation |
+|---|---|
+| Whisper VAD → encoder | `SpeechTranscriptionRequestOutput.vad_artifact` (`VadArtifact`) + the shared `AudioArtifact`; the encoder consumes both without re-decoding |
+| Encoder → synth/TC | `SpeechEmbeddingRequestOutput.embedding_artifact` (`SpeakerArtifact.embedding`); HarmonySpeech backend keeps raw-float32 samples in the tensor, OpenVoice keeps a torch tensor |
+| Synth → tone converter | `SpeechSynthesisRequestOutput.audio_artifact` (OpenVoice/Melo waveform); forwarded under `input_audio` |
+| Chatterbox embed → TTS | `SpeakerArtifact.conditionals` object by reference; handler moves it with `conditionals.to(device)` |
+| Chatterbox embed → VC | same, handler uses `conditionals.gen` for `ref_dict` |
+| VoiceFixer restorer → vocoder | `MelArtifact` (`[1, bins, frames]`, channel 0 only — numerically identical to the old channel-0 path); no `json.dumps`/wire encoding |
+| HarmonySpeech synth → vocoder | `MelArtifact.breaks` alongside the mel; the vocoder re-inserts silence exactly as before |
+| Final outputs → client | output classes carry `audio_artifact`; the serving layer encodes it (`wire.to_wire_audio`) |
+
+Behavioural notes / deviations:
+
+- `ensure_librosa_readable_bytes()` was removed from the pipeline. Chatterbox's
+  upstream APIs need a file-like object, so handlers re-wrap the already-decoded
+  artifact as in-memory WAV (`_wav_buffer`, encode-only). The helper itself
+  remains in `common/audio_codec.py` as a boundary utility.
+- **Default-voice fix:** Chatterbox ships `conds.pt`, so a `single_speaker_tts`
+  request with no reference is legitimate. All three TTS handlers now fall back
+  to a deep copy of the model's baseline conditionals instead of raising; the
+  raise only remains when neither a request voice nor a model default exists
+  (the Phase 0-2 unit test still covers that). This restores the real-model e2e
+  test `test_chatterbox_tts_no_cloning`.
+- OpenVoice segment extraction keeps the int16 quantization for embedding
+  parity, but slices the in-memory artifact instead of exporting/re-decoding a
+  tempfile. It also fixes a latent `segments[k+1].start` attribute access (plain
+  dicts) that would have crashed multi-segment clips.
+- Direct-stage e2e helpers (`tests/e2e/tts/test_harmonyspeech.py`) now assert the
+  artifact contract (`mel_artifact`/`audio_artifact`) and forward artifacts into
+  the vocoder; the engine-level `SynthesizeAudioRequest`/`VocodeAudioRequest`
+  stage API has no external endpoint, so this is an internal contract change.
+- `check_forward_processing` snapshots the request's artifact dict before the
+  scheduler releases the finished request, then re-submits with
+  `add_request(..., artifacts=...)`. Routing treats a cached artifact as a
+  present field (`_present`/`_missing`), so no legacy string sentinel is needed;
+  `input_vad_data` keeps its plain-JSON text as the routing signal until Phase 3.
+- Handlers assert the artifact's device tag and move explicitly via
+  `_bind_to_device`; a missing tag fails loudly.
+

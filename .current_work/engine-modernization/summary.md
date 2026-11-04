@@ -45,12 +45,12 @@ Track the completion of each phase as implementation progresses:
   - [x] Output format & sample-rate honoring — [1-2-OutputFormatSampleRate.md](1-2-OutputFormatSampleRate.md)
   - [x] Binary input envelope (multipart) — [1-3-BinaryInputEnvelope.md](1-3-BinaryInputEnvelope.md)
   - [x] Wire-contract tests & docs — [1-4-WireContractTestsDocs.md](1-4-WireContractTestsDocs.md)
-- [ ] **Phase 2: Artifact bus**
-  - [ ] Artifact type system — [2-1-ArtifactTypeSystem.md](2-1-ArtifactTypeSystem.md)
-  - [ ] Artifact fields & prepare_inputs — [2-2-ArtifactFieldsAndPrepareInputs.md](2-2-ArtifactFieldsAndPrepareInputs.md)
-  - [ ] Executor artifact handlers — [2-3-ExecutorArtifactHandlers.md](2-3-ExecutorArtifactHandlers.md)
-  - [ ] Boundary serialization & compatibility — [2-4-BoundarySerializationCompat.md](2-4-BoundarySerializationCompat.md)
-  - [ ] Verification & benchmark — [2-5-ArtifactBusVerification.md](2-5-ArtifactBusVerification.md)
+- [x] **Phase 2: Artifact bus** — **COMPLETE 2026-11-04** (unit 346 / integration 23 / wire-contract e2e 38 passed + 3 skipped; real-model CPU e2e and benchmarks green for HarmonySpeech, OpenVoice V1/V2, VoiceFixer, Chatterbox/Turbo, KittenTTS, Whisper STT/VAD; pre-Phase-2 hash-fixture comparison outstanding).
+  - [x] Artifact type system — [2-1-ArtifactTypeSystem.md](2-1-ArtifactTypeSystem.md)
+  - [x] Artifact fields & prepare_inputs — [2-2-ArtifactFieldsAndPrepareInputs.md](2-2-ArtifactFieldsAndPrepareInputs.md)
+  - [x] Executor artifact handlers — [2-3-ExecutorArtifactHandlers.md](2-3-ExecutorArtifactHandlers.md)
+  - [x] Boundary serialization & compatibility — [2-4-BoundarySerializationCompat.md](2-4-BoundarySerializationCompat.md)
+  - [x] Verification & benchmark — [2-5-ArtifactBusVerification.md](2-5-ArtifactBusVerification.md)
 - [ ] **Phase 3: Declarative PipelineSpec routing**
   - [ ] PipelineSpec model & registry — [3-1-PipelineSpecModel.md](3-1-PipelineSpecModel.md)
   - [ ] Family migration — [3-2-FamilyMigration.md](3-2-FamilyMigration.md)

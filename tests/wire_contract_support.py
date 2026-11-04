@@ -96,7 +96,7 @@ class FakeEngine:
             return None
         return audio_codec.decode_audio(base64.b64decode(payload), target_sr=target_sr)
 
-    async def generate(self, request_id, request_data):
+    async def generate(self, request_id, request_data, artifacts=None):
         self.requests.append(request_data)
         yield self._make_output(request_id, request_data)
 

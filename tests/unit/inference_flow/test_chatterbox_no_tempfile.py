@@ -103,8 +103,13 @@ def _make_embed_request():
 class TestChatterboxNoTempfile:
     def test_execute_chatterbox_tts_no_open_call(self, model_runner_with_tts_model):
         """_execute_chatterbox_tts() must not call builtins.open() for file I/O."""
+        from harmonyspeech.common.artifacts import AudioArtifact, SpeakerArtifact
+
         runner = model_runner_with_tts_model
-        inputs = [("Hello world", None, 0.5, 0.5, 0.8, 1.0, 0)]
+        speaker = SpeakerArtifact(
+            reference_audio=AudioArtifact.from_numpy(torch.zeros(1600).numpy(), 16000), backend="chatterbox"
+        )
+        inputs = [("Hello world", speaker, 0.5, 0.5, 0.8, 1.0, 0)]
         requests = [_make_tts_request()]
 
         with (
@@ -122,9 +127,10 @@ class TestChatterboxNoTempfile:
 
     def test_execute_chatterbox_embedding_no_open_call(self, model_runner_with_embedding_model):
         """_execute_chatterbox_embedding() must not call builtins.open() or tempfile."""
+        from harmonyspeech.common.artifacts import AudioArtifact
+
         runner = model_runner_with_embedding_model
-        fake_audio = b"\x00" * 1000
-        inputs = [fake_audio]
+        inputs = [AudioArtifact.from_numpy(torch.zeros(1600).numpy(), 16000)]
         requests = [_make_embed_request()]
 
         with (
@@ -142,9 +148,10 @@ class TestChatterboxNoTempfile:
 
     def test_bytesio_used_not_tempfile(self, model_runner_with_embedding_model):
         """_execute_chatterbox_embedding() uses io.BytesIO for in-memory processing."""
+        from harmonyspeech.common.artifacts import AudioArtifact
+
         runner = model_runner_with_embedding_model
-        fake_audio = b"\x00" * 1000
-        inputs = [fake_audio]
+        inputs = [AudioArtifact.from_numpy(torch.zeros(1600).numpy(), 16000)]
         requests = [_make_embed_request()]
 
         original_bytesio = io.BytesIO

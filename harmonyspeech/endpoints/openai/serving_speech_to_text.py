@@ -15,6 +15,7 @@ from harmonyspeech.endpoints.openai.protocol import (
     SpeechTranscribeRequest,
 )
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.wire import from_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling STT Requests here
@@ -42,9 +43,12 @@ class OpenAIServingSpeechToText(OpenAIServing):
 
         request_id = f"stt-{random_uuid()}"
 
+        request_data = SpeechTranscribeRequestInput.from_openai(request_id=request_id, request=request)
+        artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=SpeechTranscribeRequestInput.from_openai(request_id=request_id, request=request),
+            request_data=request_data,
+            artifacts=artifacts,
         )
 
         try:

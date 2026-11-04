@@ -12,11 +12,14 @@ Covers the three defects fixed in Phase 0-3:
 import base64
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.tts import Conditionals
 
+from harmonyspeech.common import audio_codec
+from harmonyspeech.common.artifacts import AudioArtifact, SpeakerArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput, TextToSpeechRequestInput
 from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput, TextToSpeechRequestOutput
@@ -31,7 +34,7 @@ AUDIO_B = tiny_wav_bytes(16000, 0.20)
 
 
 class PairingModel:
-    """Chatterbox stand-in recording (text, reference-audio) per generate call."""
+    """Chatterbox stand-in recording (text, reference-waveform) per generate call."""
 
     sr = 24000
 
@@ -42,7 +45,7 @@ class PairingModel:
         self.prepared_audio = []
 
     def prepare_conditionals(self, audio_buf, **kwargs):
-        audio = audio_buf.read()
+        audio, _ = audio_codec.decode_audio(audio_buf.read())
         self.prepared_audio.append(audio)
         self.conds = Conditionals(
             t3=T3Cond(speaker_emb=torch.zeros(1, 4)),
@@ -97,7 +100,14 @@ def _embed_request(request_id: str, audio: bytes) -> EngineRequest:
 
 
 def _tts_params(request: EngineRequest) -> tuple:
-    return (request.request_data.input_text, None, 0.5, 0.5, 0.8, 1.2, 1.0, 0.05)
+    audio = base64.b64decode(request.request_data.input_audio)
+    waveform, sample_rate = audio_codec.decode_audio(audio)
+    speaker = SpeakerArtifact(reference_audio=AudioArtifact.from_numpy(waveform, sample_rate), backend="chatterbox")
+    return (request.request_data.input_text, speaker, 0.5, 0.5, 0.8, 1.2, 1.0, 0.05)
+
+
+def _expected(audio: bytes) -> np.ndarray:
+    return audio_codec.decode_audio(audio)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +130,9 @@ def test_pairs_each_request_with_its_own_audio():
     assert all(r.result_data.finish_reason == "stop" for r in results)
     # The text from the prepared input and the audio from the request must
     # belong to the same iteration/request.
-    assert runner.model.calls == [("text-A", AUDIO_A), ("text-B", AUDIO_B)]
+    assert [call[0] for call in runner.model.calls] == ["text-A", "text-B"]
+    np.testing.assert_allclose(runner.model.calls[0][1], _expected(AUDIO_A))
+    np.testing.assert_allclose(runner.model.calls[1][1], _expected(AUDIO_B))
 
 
 @pytest.mark.unit
@@ -135,7 +147,9 @@ def test_pairs_each_request_with_its_own_audio_in_shuffled_order():
     results = runner._execute_chatterbox_tts(inputs, requests)
 
     assert [r.request_id for r in results] == ["pair-2", "pair-1"]
-    assert runner.model.calls == [("text-B", AUDIO_B), ("text-A", AUDIO_A)]
+    assert [call[0] for call in runner.model.calls] == ["text-B", "text-A"]
+    np.testing.assert_allclose(runner.model.calls[0][1], _expected(AUDIO_B))
+    np.testing.assert_allclose(runner.model.calls[1][1], _expected(AUDIO_A))
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +171,9 @@ def test_mixed_embedding_and_tts_batch_dispatches_both_types():
     assert isinstance(by_id["mixed-embed"], SpeechEmbeddingRequestOutput)
     assert isinstance(by_id["mixed-tts"], TextToSpeechRequestOutput)
     assert all(output.finish_reason == "stop" for output in by_id.values())
-    # The embedding result decodes back into a conditionals payload.
-    assert by_id["mixed-embed"].output
+    # The embedding result carries the conditionals by reference (no pickle hop).
+    assert by_id["mixed-embed"].embedding_artifact is not None
+    assert by_id["mixed-embed"].embedding_artifact.conditionals is not None
 
 
 @pytest.mark.unit

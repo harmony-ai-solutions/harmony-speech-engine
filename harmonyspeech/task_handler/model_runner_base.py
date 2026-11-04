@@ -15,9 +15,21 @@ Phase 0 invariants (engine modernization plan)
 * **Batch pairing.** Every worker helper receives its ``EngineRequest`` as an
   explicit argument (no closure over the loop variable) and every handler
   asserts that inputs and requests are aligned.
+
+Phase 2 invariants (artifact bus)
+---------------------------------
+* Handlers consume and produce typed artifacts
+  (:mod:`harmonyspeech.common.artifacts`) — no text/JSON-float intermediates
+  between pipeline steps. Output objects carry optional artifact slots that the
+  serving layer serializes; ``output`` stays empty for artifact-carrying results.
+* Every cross-device move is explicit (``artifact.to(self.device)``) and the
+  source device is asserted first (:func:`_bind_to_device`), so a missing device
+  tag fails loudly instead of silently copying in the wrong place.
+* Chatterbox conditionals travel as object references
+  (``SpeakerArtifact.conditionals``); the consuming handler moves them onto its
+  own device. No pickle round trip on internal hops.
 """
 
-import base64
 import copy
 import io
 import json
@@ -25,13 +37,12 @@ import time
 from dataclasses import asdict
 
 import numpy as np
-import soundfile as sf
 import torch
 from faster_whisper import BatchedInferencePipeline
 from loguru import logger
 from silero_vad import get_speech_timestamps
 
-from harmonyspeech.common.audio_codec import ensure_librosa_readable_bytes
+from harmonyspeech.common.artifacts import AudioArtifact, MelArtifact, SpeakerArtifact, VadArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import (
@@ -46,65 +57,16 @@ from harmonyspeech.common.outputs import (
     VoiceConversionRequestOutput,
 )
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
+
+# Re-exported for tests and callers that used the Phase 0 helper names; the
+# implementations live in ``common.serialization`` (weights_only=True loaders).
+from harmonyspeech.common.serialization import conditionals_to_payload as _conditionals_to_payload  # noqa: F401
+from harmonyspeech.common.serialization import load_embedding_tensor as _load_embedding_tensor  # noqa: F401
 from harmonyspeech.modeling.loader import get_model, get_model_config, get_model_flavour
+from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
+from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.inputs import prepare_inputs
-
-# Python primitives that are safe to carry inside a ``weights_only=True``
-# torch.save payload (no arbitrary classes, so no __reduce__ gadgets).
-_PICKLE_PRIMITIVES = (str, int, float, bool, bytes, type(None))
-
-_EMBEDDING_PAYLOAD_HELP = (
-    "only torch-saved tensors (weights_only=True compatible) are supported; "
-    "supply the payload produced by the encoder / embedding step"
-)
-
-
-def _load_embedding_tensor(payload, field_name: str = "embedding") -> torch.Tensor:
-    """Load a client-supplied embedding blob without executing pickle code.
-
-    ``weights_only=True`` restricts the unpickler to tensors and primitives, so
-    a crafted ``__reduce__`` gadget fails to load instead of running inside the
-    server process.
-
-    Raises:
-        ValueError: if the payload is not a single torch tensor produced by
-            ``torch.save``.
-    """
-    try:
-        loaded = torch.load(payload, map_location="cpu", weights_only=True)
-    except Exception as e:
-        raise ValueError(f"Unsupported {field_name} payload: {_EMBEDDING_PAYLOAD_HELP}. Details: {e}") from e
-    if not torch.is_tensor(loaded):
-        raise ValueError(
-            f"Unsupported {field_name} payload: expected a single tensor, got {type(loaded).__name__}. "
-            f"{_EMBEDDING_PAYLOAD_HELP}."
-        )
-    return loaded
-
-
-def _conditionals_to_payload(conditionals) -> dict:
-    """Convert a Chatterbox ``Conditionals`` object into a pickle-safe dict.
-
-    Schema (mirrors ``chatterbox.tts.Conditionals.save()``)::
-
-        {"t3":  {<T3Cond field>: tensor | primitive},   # speaker_emb, clap_emb, ...
-         "gen": {<S3Gen ref field>: tensor | primitive}}  # prompt_token, prompt_feat, ...
-
-    Only tensors and Python primitives are kept, so the payload round-trips
-    through ``torch.save`` / ``Conditionals.load`` with ``weights_only=True``.
-    """
-    t3_state = {
-        key: value
-        for key, value in vars(conditionals.t3).items()
-        if torch.is_tensor(value) or isinstance(value, _PICKLE_PRIMITIVES)
-    }
-    gen_state = {
-        key: value
-        for key, value in dict(conditionals.gen).items()
-        if torch.is_tensor(value) or isinstance(value, _PICKLE_PRIMITIVES)
-    }
-    return {"t3": t3_state, "gen": gen_state}
 
 
 def _require_aligned(inputs, requests_to_batch, handler_name: str) -> None:
@@ -113,6 +75,54 @@ def _require_aligned(inputs, requests_to_batch, handler_name: str) -> None:
         raise AssertionError(
             f"{handler_name}: {len(inputs)} inputs vs {len(requests_to_batch)} requests"
         )
+
+
+def _bind_to_device(artifact, device):
+    """Assert an artifact carries its source device, then move it explicitly.
+
+    This is the single place handlers cross the device boundary, which makes a
+    second (accidental) transfer or an untagged artifact fail loudly instead of
+    silently degrading throughput.
+    """
+    if artifact is None:
+        return None
+    current = getattr(artifact, "device", None)
+    if current is None:
+        raise AssertionError(f"{type(artifact).__name__} is missing its device tag")
+    return artifact.to(device)
+
+
+def _wav_buffer(waveform_artifact) -> io.BytesIO:
+    """Re-wrap a decoded waveform as in-memory WAV bytes for file-like APIs.
+
+    Chatterbox's upstream ``prepare_conditionals`` / ``set_target_voice`` take a
+    file-like object. The artifact is already decoded, so this is an encode-only
+    step (no wire encoding, no client-container decode, no tempfile) — it
+    replaces the Phase 1 ``ensure_librosa_readable_bytes`` path. The move to CPU
+    is explicit (WAV encoding needs host samples).
+    """
+    return io.BytesIO(_bind_to_device(waveform_artifact, "cpu").to_wav_bytes())
+
+
+def _chatterbox_conditionals(speaker: SpeakerArtifact | None, device) -> object | None:
+    """Return device-local Chatterbox conditionals, moving them explicitly."""
+    if speaker is None:
+        return None
+    conditionals = getattr(speaker, "conditionals", None)
+    if conditionals is None:
+        return None
+    move = getattr(conditionals, "to", None)
+    if callable(move):
+        return move(device)
+    return conditionals
+
+
+def _audio_artifact_from_tensor(wav: torch.Tensor, sample_rate: int) -> AudioArtifact:
+    """Wrap a model-generated waveform tensor as an :class:`AudioArtifact`."""
+    tensor = wav.detach().to("cpu", dtype=torch.float32)
+    if tensor.ndim == 1:
+        tensor = tensor.unsqueeze(0)
+    return AudioArtifact(waveform=tensor, sample_rate=sample_rate)
 
 
 class ModelRunnerBase:
@@ -211,7 +221,7 @@ class ModelRunnerBase:
     def _execute_partition(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Prepare inputs for one type-homogeneous batch and dispatch it."""
         # Wrap prepare_inputs so that input-validation failures (e.g. wrong
-        # request type, bad base64, unsupported option) are converted to
+        # request type, bad payload encoding, unsupported option) are converted to
         # per-request error results instead of raising an unhandled exception
         # that kills the async engine's background loop.
         try:
@@ -323,22 +333,29 @@ class ModelRunnerBase:
         # FIXME: This is not properly batched
         _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_encoder")
 
-        def embed_utterance(utterances, initial_request):
-            utterances_tensor = torch.from_numpy(utterances).to(self.device)
-            kwargs = {"utterances": utterances_tensor}
-            partial_embeds = self.model(**kwargs).detach().cpu().numpy()
+        def embed_utterance(audio_artifact, initial_request):
+            # Numpy preprocessing runs on the artifact's waveform (CPU-side); the
+            # move is explicit, never implicit.
+            source = _bind_to_device(audio_artifact, "cpu")
+            preprocessed = preprocess_wav(source.numpy, source_sr=source.sample_rate)
+            input_frames = get_input_frames(preprocessed)
+            utterances_tensor = torch.from_numpy(input_frames).to(self.device)
+            partial_embeds = self.model(utterances=utterances_tensor).detach().cpu().numpy()
             # Compute the utterance embedding from the partial embeddings
             raw_embed = np.mean(partial_embeds, axis=0)
             embed = raw_embed / np.linalg.norm(raw_embed, 2)
-            embed = base64.b64encode(embed).decode("UTF-8")
-            return embed
+            return SpeakerArtifact(
+                embedding=torch.from_numpy(np.ascontiguousarray(embed, dtype=np.float32)),
+                backend="harmonyspeech",
+            )
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = embed_utterance(x, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+                embedding = embed_utterance(x, initial_request)
+                result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
+                result.result_data.embedding_artifact = embedding
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -372,23 +389,22 @@ class ModelRunnerBase:
             breaks = [subspec.shape[1] for subspec in specs]
             full_spectogram = np.concatenate(specs, axis=1)
 
-            # Build response - TODO: This whole encoding process can be optimized later I think
-            breaks_json = json.dumps(breaks)
-            full_spectogram_json = full_spectogram.copy(order="C")  # Make C-Contigous to allow encoding
-            full_spectogram_json = json.dumps(full_spectogram_json.tolist())
-
-            response = {
-                "mel": base64.b64encode(full_spectogram_json.encode("utf-8")).decode("utf-8"),
-                "breaks": base64.b64encode(breaks_json.encode("utf-8")).decode("utf-8"),
-            }
-            return json.dumps(response)
+            # Typed mel artifact (with the vocoder's breaks) replaces the
+            # wire JSON envelope; nothing is serialized on this hop.
+            return MelArtifact.from_numpy(
+                full_spectogram,
+                sample_rate=16000,
+                hop_length=200,
+                breaks=breaks,
+            )
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+                mel_artifact = synthesize_text(x, initial_request)
+                result = self._build_result(initial_request, "", SpeechSynthesisRequestOutput)
+                result.result_data.mel_artifact = mel_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -399,7 +415,10 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_vocoder")
 
         def vocode_mel(input_params, initial_request):
-            mel, breaks = input_params
+            mel_artifact, breaks = input_params
+            # Explicit move; the artifact carries its source device.
+            mel_tensor = _bind_to_device(mel_artifact, self.device).mel.squeeze(0)
+            mel = mel_tensor / 4.0  # Fixme: make this configurable
             kwargs = {"c": mel.T}
             wav = self.model.inference(**kwargs).detach().cpu().numpy()
             wav = wav.squeeze(1)
@@ -416,19 +435,15 @@ class ModelRunnerBase:
             # Normalize
             wav = wav / np.abs(wav).max() * 0.97
 
-            # Encode as WAV and return base64
-            with io.BytesIO() as handle:
-                sf.write(handle, wav, samplerate=16000, format="wav")
-                wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
-            return encoded_wav
+            return AudioArtifact.from_numpy(wav, 16000)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = vocode_mel(x, initial_request)
-                result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
+                audio_artifact = vocode_mel(x, initial_request)
+                result = self._build_result(initial_request, "", VocodeRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -445,14 +460,10 @@ class ModelRunnerBase:
         # FIXME: This is not properly batched
         _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter_encoder")
 
-        def run_converter_encoder(input_params, initial_request):
-            vad_audio_segments = input_params
-
+        def run_converter_encoder(vad_audio_segments, initial_request):
             gs = []
-            for audio_data in vad_audio_segments:
-                y = torch.FloatTensor(audio_data)
-                y = y.to(self.device)
-                y = y.unsqueeze(0)
+            for segment in vad_audio_segments:
+                y = _bind_to_device(segment, self.device).waveform
                 y = spectrogram_torch(
                     y,
                     hf_config.data.filter_length,
@@ -466,19 +477,16 @@ class ModelRunnerBase:
                     gs.append(g.detach())
             gs = torch.stack(gs).mean(0)
 
-            # Save Embedding
-            with io.BytesIO() as handle:
-                torch.save(gs.cpu(), handle)
-                embedding_string = handle.getvalue()
-            encoded_embedding = base64.b64encode(embedding_string).decode("UTF-8")
-            return encoded_embedding
+            # Typed embedding artifact (no torch.save/text-encoding on the hop).
+            return SpeakerArtifact(embedding=gs.cpu(), backend="openvoice")
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_converter_encoder(x, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+                embedding = run_converter_encoder(x, initial_request)
+                result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
+                result.result_data.embedding_artifact = embedding
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -496,19 +504,19 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter")
 
         def run_converter_encoder(input_params, initial_request):
-            audio_ref, input_embedding_ref, source_embedding_ref = input_params
+            audio_artifact, target_speaker, source_speaker = input_params
 
-            # Prepare conversion. Both blobs are client-controlled on
-            # /v1/voice/convert and on voice-cloning TTS requests, so they are
-            # loaded with weights_only=True: a hostile pickle fails closed here
-            # instead of executing code.
-            target_embedding = _load_embedding_tensor(
-                input_embedding_ref, "input_embedding/target_embedding"
-            ).to(self.device)
-            src_embedding = _load_embedding_tensor(source_embedding_ref, "source_embedding").to(self.device)
-            audio = torch.tensor(audio_ref).float()
-            y = torch.FloatTensor(audio).to(self.device)
-            y = y.unsqueeze(0)
+            # Both embedding blobs decoded through the safe loaders at admission
+            # (``weights_only=True``), so a hostile pickle fails closed before
+            # reaching this handler. Device moves are explicit here.
+            if target_speaker is None or target_speaker.embedding is None:
+                raise ValueError("input_embedding/target_embedding: missing embedding tensor")
+            if source_speaker is None or source_speaker.embedding is None:
+                raise ValueError("source_embedding: missing embedding tensor")
+            target_embedding = _bind_to_device(target_speaker, self.device).embedding
+            src_embedding = _bind_to_device(source_speaker, self.device).embedding
+
+            y = _bind_to_device(audio_artifact, self.device).waveform.float()
             spec = spectrogram_torch(
                 y,
                 hf_config.data.filter_length,
@@ -525,19 +533,15 @@ class ModelRunnerBase:
                 )
                 output_audio = output_audio[0][0, 0].data.cpu().float().numpy()
 
-                # Encode as WAV and return base64
-                with io.BytesIO() as handle:
-                    sf.write(handle, output_audio, samplerate=hf_config.data.sampling_rate, format="wav")
-                    wav_string = handle.getvalue()
-                encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
-                return encoded_wav
+            return AudioArtifact.from_numpy(output_audio, hf_config.data.sampling_rate)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_converter_encoder(x, initial_request)
-                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+                audio_artifact = run_converter_encoder(x, initial_request)
+                result = self._build_result(initial_request, "", VoiceConversionRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -546,8 +550,10 @@ class ModelRunnerBase:
     def _execute_faster_whisper(self, inputs, requests_to_batch):
         _require_aligned(inputs, requests_to_batch, "_execute_faster_whisper")
 
-        def run_batched_transcribe(input_params, initial_request):
-            audio_ref = input_params
+        def run_batched_transcribe(audio_artifact, initial_request):
+            # faster-whisper takes a mono numpy array; the artifact already holds
+            # the boundary-decoded 16 kHz waveform.
+            audio_ref = _bind_to_device(audio_artifact, "cpu").numpy
             batched_model = BatchedInferencePipeline(model=self.model)
             segments, info = batched_model.transcribe(audio_ref, batch_size=16)
             segment_data = []
@@ -557,14 +563,15 @@ class ModelRunnerBase:
                 segment_data.append(asdict(segment))
 
             response = {"text": text, "segments": segment_data, "info": asdict(info)}
-            return json.dumps(response)
+            return json.dumps(response), VadArtifact.from_payload(response)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_batched_transcribe(x, initial_request)
+                inference_result, vad_artifact = run_batched_transcribe(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
+                result.result_data.vad_artifact = vad_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -612,19 +619,15 @@ class ModelRunnerBase:
                 audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
             audio = np.array(audio_segments).astype(np.float32)
 
-            # Encode as WAV and return base64
-            with io.BytesIO() as handle:
-                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format="wav")
-                wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
-            return encoded_wav
+            return AudioArtifact.from_numpy(audio, hf_config.data.sampling_rate)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+                audio_artifact = synthesize_text(x, initial_request)
+                result = self._build_result(initial_request, "", SpeechSynthesisRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -686,19 +689,15 @@ class ModelRunnerBase:
                 audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
             audio = np.array(audio_segments).astype(np.float32)
 
-            # Encode as WAV and return base64
-            with io.BytesIO() as handle:
-                sf.write(handle, audio, samplerate=hf_config.data.sampling_rate, format="wav")
-                wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
-            return encoded_wav
+            return AudioArtifact.from_numpy(audio, hf_config.data.sampling_rate)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
+                audio_artifact = synthesize_text(x, initial_request)
+                result = self._build_result(initial_request, "", SpeechSynthesisRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -708,32 +707,38 @@ class ModelRunnerBase:
         """Execute VoiceFixerRestorer model to enhance audio quality."""
         _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_restorer")
 
-        def restore_audio(audio_tensor, initial_request):
-            # Ensure tensor has batch dimension: [channels, samples] -> [batch, channels, samples]
+        def restore_audio(audio_artifact, initial_request):
+            # [1, samples] -> [batch, channels, samples]
+            audio_tensor = _bind_to_device(audio_artifact, self.device).waveform
             if audio_tensor.dim() == 2:
-                audio_tensor = audio_tensor.unsqueeze(0)
-
-            # Move tensor to device
-            audio_tensor = audio_tensor.to(self.device)
+                audio_tensor = audio_tensor.unsqueeze(1)
 
             # Run the VoiceFixerRestorer model
             with torch.no_grad():
                 enhanced_mel = self.model(audio_tensor)
 
-            # Convert enhanced mel spectrogram to JSON format for forwarding
-            enhanced_mel_np = enhanced_mel.detach().cpu().numpy()
-            mel_json = json.dumps(enhanced_mel_np.tolist())
-
-            # Encode as base64 for transport
-            encoded_mel = base64.b64encode(mel_json.encode("utf-8")).decode("utf-8")
-            return encoded_mel
+            # VoiceFixer emits [batch, channels, frames, bins]; the vocoder only
+            # consumes channel 0, so store the canonical [1, bins, frames].
+            mel = enhanced_mel.detach().cpu().float()
+            if mel.dim() == 4:
+                mel = mel[:, 0].transpose(-1, -2)
+            elif mel.dim() == 3:
+                mel = mel.transpose(-1, -2)
+            else:
+                raise ValueError(f"VoiceFixerRestorer returned an unexpected mel shape {tuple(mel.shape)}")
+            return MelArtifact(
+                mel=mel.contiguous(),
+                sample_rate=44100,
+                hop_length=441,
+            )
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = restore_audio(x, initial_request)
-                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+                mel_artifact = restore_audio(x, initial_request)
+                result = self._build_result(initial_request, "", AudioConversionRequestOutput)
+                result.result_data.mel_artifact = mel_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -743,9 +748,10 @@ class ModelRunnerBase:
         """Execute VoiceFixerVocoder model to convert mel spectrogram to audio."""
         _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_vocoder")
 
-        def vocode_mel(mel_tensor, initial_request):
-            # Move tensor to device
-            mel_tensor = mel_tensor.to(self.device)
+        def vocode_mel(mel_artifact, initial_request):
+            # VoiceFixer's forward expects [batch, 1, frames, bins].
+            mel = _bind_to_device(mel_artifact, self.device).mel
+            mel_tensor = mel.transpose(-1, -2).unsqueeze(1)
 
             # Run the VoiceFixerVocoder model
             with torch.no_grad():
@@ -760,19 +766,15 @@ class ModelRunnerBase:
             if np.abs(audio_np).max() > 0:
                 audio_np = audio_np / np.abs(audio_np).max() * 0.97
 
-            # Encode as WAV and return base64
-            with io.BytesIO() as handle:
-                sf.write(handle, audio_np, samplerate=44100, format="wav")
-                wav_string = handle.getvalue()
-            encoded_wav = base64.b64encode(wav_string).decode("UTF-8")
-            return encoded_wav
+            return AudioArtifact.from_numpy(audio_np, 44100)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = vocode_mel(x, initial_request)
-                result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
+                audio_artifact = vocode_mel(x, initial_request)
+                result = self._build_result(initial_request, "", AudioConversionRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -783,7 +785,10 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_silero_vad")
 
         def run_vad(input_params, initial_request):
-            audio_tensor, vad_params = input_params
+            audio_artifact, vad_params = input_params
+
+            # Silero runs on CPU tensors; the move is explicit.
+            audio_tensor = _bind_to_device(audio_artifact, "cpu").waveform.squeeze(0)
 
             # Extract parameters from the input object
             threshold = vad_params["threshold"]
@@ -810,14 +815,15 @@ class ModelRunnerBase:
             else:
                 response = {"speech_activity": len(timestamps) > 0}
 
-            return json.dumps(response)
+            return json.dumps(response), VadArtifact(segments=timestamps if get_timestamps else [])
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_vad(x, initial_request)
+                inference_result, vad_artifact = run_vad(x, initial_request)
                 result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
+                result.result_data.vad_artifact = vad_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -838,20 +844,15 @@ class ModelRunnerBase:
             if audio_array.ndim > 1:
                 audio_array = audio_array.flatten()
 
-            # Encode to WAV in memory and return as base64 string
-            with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sample_rate, format="WAV")
-                wav_bytes = wav_buffer.getvalue()
-
-            encoded_audio = base64.b64encode(wav_bytes).decode("utf-8")
-            return encoded_audio
+            return AudioArtifact.from_numpy(audio_array, self.model.sample_rate)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x, initial_request)
-                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+                audio_artifact = synthesize_text(x, initial_request)
+                result = self._build_result(initial_request, "", TextToSpeechRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -874,19 +875,25 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_tts")
 
         def synthesize(input_params, initial_request):
-            text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
-            request_audio = getattr(initial_request.request_data, "input_audio", None)
+            text, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
 
+            conditionals = _chatterbox_conditionals(speaker, self.device)
             if conditionals is not None:
-                # Pre-computed Conditionals provided — move to device and assign
-                self.model.conds = conditionals.to(self.device)
-            elif request_audio:
-                # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
-                audio_buf = io.BytesIO(audio_bytes)
-                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+                # Pre-computed conditionals passed by reference from the embed step
+                self.model.conds = conditionals
+            elif speaker is not None and speaker.reference_audio is not None:
+                # Clone from the already-decoded reference artifact (no wire encoding/tempfile)
+                self.model.prepare_conditionals(
+                    _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
+                )
             else:
-                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                # No per-request conditioning: use the voice loaded with the model
+                # (Chatterbox bundles `conds.pt`). A deep copy keeps the baseline
+                # immutable — upstream `generate` mutates `conds.t3.emotion_adv`.
+                baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
+                if baseline is None and getattr(self.model, "conds", None) is None:
+                    raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                self.model.conds = copy.deepcopy(baseline)
 
             wav = self.model.generate(
                 text,
@@ -898,19 +905,15 @@ class ModelRunnerBase:
                 min_p=min_p,
             )
 
-            # Encode tensor to WAV base64
-            audio_array = wav.squeeze(0).detach().cpu().numpy()
-            with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
-                wav_bytes = wav_buffer.getvalue()
-            return base64.b64encode(wav_bytes).decode("utf-8")
+            return _audio_artifact_from_tensor(wav, self.model.sr)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x, initial_request)
-                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+                audio_artifact = synthesize(x, initial_request)
+                result = self._build_result(initial_request, "", TextToSpeechRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             finally:
@@ -923,19 +926,20 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_turbo_tts")
 
         def synthesize(input_params, initial_request):
-            text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
-            request_audio = getattr(initial_request.request_data, "input_audio", None)
+            text, speaker, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
 
+            conditionals = _chatterbox_conditionals(speaker, self.device)
             if conditionals is not None:
-                # Pre-computed Conditionals provided — move to device and assign
-                self.model.conds = conditionals.to(self.device)
-            elif request_audio:
-                # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
-                audio_buf = io.BytesIO(audio_bytes)
-                self.model.prepare_conditionals(audio_buf, norm_loudness=norm_loudness)
+                self.model.conds = conditionals
+            elif speaker is not None and speaker.reference_audio is not None:
+                self.model.prepare_conditionals(
+                    _wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness
+                )
             else:
-                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
+                if baseline is None and getattr(self.model, "conds", None) is None:
+                    raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                self.model.conds = copy.deepcopy(baseline)
 
             wav = self.model.generate(
                 text,
@@ -946,19 +950,15 @@ class ModelRunnerBase:
                 norm_loudness=norm_loudness,
             )
 
-            # Encode tensor to WAV base64
-            audio_array = wav.squeeze(0).detach().cpu().numpy()
-            with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
-                wav_bytes = wav_buffer.getvalue()
-            return base64.b64encode(wav_bytes).decode("utf-8")
+            return _audio_artifact_from_tensor(wav, self.model.sr)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x, initial_request)
-                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+                audio_artifact = synthesize(x, initial_request)
+                result = self._build_result(initial_request, "", TextToSpeechRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             finally:
@@ -971,19 +971,22 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_multilingual_tts")
 
         def synthesize(input_params, initial_request):
-            text, language_id, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
+            text, language_id, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
                 input_params
             )
-            request_audio = getattr(initial_request.request_data, "input_audio", None)
 
+            conditionals = _chatterbox_conditionals(speaker, self.device)
             if conditionals is not None:
-                self.model.conds = conditionals.to(self.device)
-            elif request_audio:
-                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
-                audio_buf = io.BytesIO(audio_bytes)
-                self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+                self.model.conds = conditionals
+            elif speaker is not None and speaker.reference_audio is not None:
+                self.model.prepare_conditionals(
+                    _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
+                )
             else:
-                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
+                if baseline is None and getattr(self.model, "conds", None) is None:
+                    raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+                self.model.conds = copy.deepcopy(baseline)
 
             wav = self.model.generate(
                 text,
@@ -996,19 +999,15 @@ class ModelRunnerBase:
                 min_p=min_p,
             )
 
-            # Encode tensor to WAV base64
-            audio_array = wav.squeeze(0).detach().cpu().numpy()
-            with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
-                wav_bytes = wav_buffer.getvalue()
-            return base64.b64encode(wav_bytes).decode("utf-8")
+            return _audio_artifact_from_tensor(wav, self.model.sr)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x, initial_request)
-                result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
+                audio_artifact = synthesize(x, initial_request)
+                result = self._build_result(initial_request, "", TextToSpeechRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             finally:
@@ -1020,26 +1019,24 @@ class ModelRunnerBase:
         """Execute ChatterboxEmbedding to compute voice Conditionals from audio.
 
         Architecture note (REQ-PERF-02):
-        The output is a base64-encoded serialized Conditionals object (via torch.save ->
-        BytesIO -> base64). This design supports a future embedding cache layer:
+        The result is a :class:`SpeakerArtifact` carrying the live ``Conditionals``
+        object, forwarded to the TTS/VC step by reference. External embed clients
+        still receive the 0-1-safe wire payload — that serialization happens
+        only in the serving layer (``wire.to_wire_embedding``), never here.
 
-            Cache key:   hash(audio_bytes)  or  user-provided voice_id
-            Cache value: base64 Conditionals string (returned by this method)
-            Cache hit:   skip this executor entirely; pass Conditionals directly to TTS
+        A future embedding cache layer can intercept between this step and the
+        TTS re-submission in ``check_forward_processing``; the cache value would
+        be the ``Conditionals`` object / ``SpeakerArtifact``.
 
-        The cache intercept point is in check_forward_processing() in harmonyspeech_engine.py,
-        between the embed step completion and the TTS re-submission. No code changes required
-        to this method to enable caching -- only the engine's forward-processing block needs
-        a cache lookup before re-submitting the forwarding_request.
-
-        Payload format: ``{"t3": {<T3Cond fields>}, "gen": {<S3Gen ref fields>}}`` — a plain
-        dict of tensors/primitives (see ``_conditionals_to_payload``), so it can be reloaded
-        with ``weights_only=True`` on the consumer side.
+        Payload format (wire only): ``{"t3": {<T3Cond fields>}, "gen": {<S3Gen ref
+        fields>}}`` — a plain dict of tensors/primitives
+        (``common.serialization.conditionals_to_payload``), reloaded with
+        ``weights_only=True`` on the consumer side.
         """
         _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_embedding")
 
-        def compute_embedding(audio_bytes, initial_request):
-            audio_buf = io.BytesIO(audio_bytes)
+        def compute_embedding(audio_artifact, initial_request):
+            audio_buf = _wav_buffer(_bind_to_device(audio_artifact, "cpu"))
             try:
                 self.model.prepare_conditionals(audio_buf)
             except AssertionError as e:
@@ -1047,20 +1044,15 @@ class ModelRunnerBase:
                 # Re-raise as ValueError so the engine can return a 400 Bad Request instead of crashing.
                 raise ValueError(str(e)) from e
             conditionals = self.model.conds
-
-            # Serialize Conditionals to BytesIO using torch.save. Only tensors
-            # and primitives are written, never upstream classes.
-            buf = io.BytesIO()
-            torch.save(_conditionals_to_payload(conditionals), buf)
-            buf.seek(0)
-            return base64.b64encode(buf.getvalue()).decode("utf-8")
+            return SpeakerArtifact(conditionals=conditionals, backend="chatterbox")
 
         outputs = []
-        for i, audio_bytes in enumerate(inputs):
+        for i, audio_artifact in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = compute_embedding(audio_bytes, initial_request)
-                result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
+                embedding = compute_embedding(audio_artifact, initial_request)
+                result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
+                result.result_data.embedding_artifact = embedding
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             finally:
@@ -1073,34 +1065,29 @@ class ModelRunnerBase:
         _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_vc")
 
         def convert(input_params, initial_request):
-            source_bytes, target_conditionals, target_audio_bytes = input_params
+            source_artifact, target_speaker, target_audio_artifact = input_params
 
-            if target_conditionals is not None:
+            conditionals = _chatterbox_conditionals(target_speaker, self.device)
+            if conditionals is not None:
                 # Pre-computed Conditionals — extract .gen dict and assign to model.ref_dict
-                self.model.ref_dict = target_conditionals.to(self.device).gen
-            elif target_audio_bytes:
-                # Use target audio bytes to set target voice
-                target_buf = io.BytesIO(target_audio_bytes)
-                self.model.set_target_voice(target_buf)
+                self.model.ref_dict = conditionals.gen
+            elif target_audio_artifact is not None:
+                # Use the already-decoded target audio artifact to set the target voice
+                self.model.set_target_voice(_wav_buffer(_bind_to_device(target_audio_artifact, "cpu")))
             else:
                 raise ValueError("voice conversion requires target_audio or target_embedding")
 
-            source_buf = io.BytesIO(source_bytes)
-            wav = self.model.generate(audio=source_buf)
+            wav = self.model.generate(audio=_wav_buffer(_bind_to_device(source_artifact, "cpu")))
 
-            # Encode tensor to WAV base64
-            audio_array = wav.squeeze(0).detach().cpu().numpy()
-            with io.BytesIO() as wav_buffer:
-                sf.write(wav_buffer, audio_array, self.model.sr, format="WAV")
-                wav_bytes = wav_buffer.getvalue()
-            return base64.b64encode(wav_bytes).decode("utf-8")
+            return _audio_artifact_from_tensor(wav, self.model.sr)
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = convert(x, initial_request)
-                result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
+                audio_artifact = convert(x, initial_request)
+                result = self._build_result(initial_request, "", VoiceConversionRequestOutput)
+                result.result_data.audio_artifact = audio_artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             finally:

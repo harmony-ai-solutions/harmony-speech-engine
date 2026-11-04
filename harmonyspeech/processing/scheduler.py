@@ -124,6 +124,11 @@ class Scheduler:
                 request.status = new_status
                 if request.is_finished():
                     request.metrics.finished_time = time.time()
+                    # Deterministic artifact release (Phase 2-1): forwarded
+                    # requests already carry a copy of the dict they need.
+                    clear_artifacts = getattr(request, "clear_artifacts", None)
+                    if callable(clear_artifacts):
+                        clear_artifacts()
                     # Remove from queue since it is finished now
                     state_queue.remove(request)
 

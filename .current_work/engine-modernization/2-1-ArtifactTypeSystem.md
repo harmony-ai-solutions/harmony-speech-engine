@@ -87,8 +87,35 @@ Round-trips: numpy→artifact→device move→numpy; duration property; `MelArti
 
 ## Checklist
 
-- [ ] `artifacts.py` with Audio/Mel/Speaker/Vad artifacts, explicit `to(device)`
-- [ ] Waveform representation decision made (torch.Tensor) and documented
-- [ ] `EngineRequest.artifacts` store + deterministic release on finish
-- [ ] Type unit tests passing
-- [ ] `summary.md` Implementation Status updated
+- [x] `artifacts.py` with Audio/Mel/Speaker/Vad artifacts, explicit `to(device)`
+- [x] Waveform representation decision made (torch.Tensor) and documented
+- [x] `EngineRequest.artifacts` store + deterministic release on finish
+- [x] Type unit tests passing
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- `harmonyspeech/common/artifacts.py` holds `AudioArtifact`, `MelArtifact`,
+  `SpeakerArtifact`, `VadArtifact`. The module docstring records the
+  torch.Tensor decision: `[1, samples]` float32, with `from_numpy` sharing the
+  numpy buffer and `.numpy` returning a mono view.
+- Extensions beyond the sketch (all additive, needed by the hop conversions):
+  - `SpeakerArtifact.reference_audio: AudioArtifact | None` — Chatterbox clones
+    from a reference clip; the handler needs the decoded waveform, and a typed
+    slot keeps the tuple unambiguous.
+  - `SpeakerArtifact.backend` also accepts `"harmonyspeech"` (raw-float32
+    embedding wire format) so the embed endpoint can serialize by backend.
+  - `MelArtifact.breaks: list[int] | None` — the HarmonySpeech vocoder's
+    per-chunk frame counts travel with the mel, so the pairing cannot be lost.
+  - `VadArtifact.info` / `.text` — whisper transcription extras already in the
+    JSON payload; avoids re-parsing/forwarding the whole blob.
+- `SpeakerArtifact.to()` moves the embedding and reference audio only;
+  `conditionals` stays a by-reference object that the consuming handler moves
+  explicitly (required by 2-3's edge case).
+- Device comparison treats `cuda` and `cuda:0` as the same device and normalizes
+  the stored `device` to the tensor's actual device.
+- `EngineRequest.clear_artifacts()` drops the store (no destructive tensor
+  zeroing): a forwarded request owns a *copy* of the dict taken before the old
+  request is released, so clearing never destroys data the next step needs.
+  `Scheduler.update_request_status` calls it in every `FINISHED_*` state.
+

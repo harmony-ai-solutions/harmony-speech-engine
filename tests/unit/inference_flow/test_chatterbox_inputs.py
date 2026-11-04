@@ -258,15 +258,17 @@ def test_multilingual_rejects_top_k():
 
 
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
-def test_embedding_inputs_returns_bytes():
-    """prepare_chatterbox_embedding_inputs returns boundary-normalised audio bytes."""
+def test_embedding_inputs_returns_artifact():
+    """prepare_chatterbox_embedding_inputs returns the boundary-decoded AudioArtifact."""
     raw_audio = tiny_wav_bytes()
     encoded = base64.b64encode(raw_audio).decode()
     req = _make_embedding_request(input_audio=encoded)
     results = prepare_chatterbox_embedding_inputs([req])
     assert len(results) == 1
-    # A native container (WAV) is passed through untouched.
-    assert results[0] == raw_audio
+    from harmonyspeech.common import audio_codec
+
+    assert results[0].sample_rate == audio_codec.decode_audio(raw_audio)[1]
+    assert results[0].numpy.shape == audio_codec.decode_audio(raw_audio)[0].shape
 
 
 # ============================================================
@@ -294,7 +296,9 @@ def test_vc_conflict_neither():
 
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_vc_with_target_audio_returns_correct_tuple():
-    """prepare_chatterbox_vc_inputs returns (source_bytes, None, target_bytes) when target_audio provided."""
+    """prepare_chatterbox_vc_inputs returns (source_artifact, None, target_artifact)."""
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     source = tiny_wav_bytes(16000, 0.10)
     target = tiny_wav_bytes(16000, 0.20)
     req = _make_vc_request(
@@ -304,7 +308,10 @@ def test_vc_with_target_audio_returns_correct_tuple():
     )
     results = prepare_chatterbox_vc_inputs([req])
     assert len(results) == 1
-    source_bytes, target_conditionals, target_audio_bytes = results[0]
-    assert source_bytes == source
+    source_artifact, target_conditionals, target_audio_artifact = results[0]
+    assert isinstance(source_artifact, AudioArtifact)
+    assert isinstance(target_audio_artifact, AudioArtifact)
     assert target_conditionals is None
-    assert target_audio_bytes == target
+    # Distinct payloads stay distinct (pairing).
+    assert source_artifact.num_samples > 0
+    assert target_audio_artifact.num_samples > source_artifact.num_samples

@@ -19,6 +19,7 @@ from harmonyspeech.endpoints.openai.protocol import (
     ModelCard,
 )
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.wire import from_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling VAD Requests here
@@ -46,9 +47,12 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
 
         request_id = f"vad-{random_uuid()}"
 
+        request_data = DetectVoiceActivityRequestInput.from_openai(request_id=request_id, request=request)
+        artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=DetectVoiceActivityRequestInput.from_openai(request_id=request_id, request=request),
+            request_data=request_data,
+            artifacts=artifacts,
         )
 
         try:

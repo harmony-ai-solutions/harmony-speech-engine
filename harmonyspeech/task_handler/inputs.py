@@ -1,21 +1,27 @@
-import base64
-import io
-import json
-import os
+"""Input preparation: turn request inputs into typed pipeline artifacts.
+
+Phase 2 (artifact bus): every audio-carrying ``prepare_*`` function returns
+typed artifacts (:mod:`harmonyspeech.common.artifacts`) instead of numpy arrays,
+WAV bytes or wire-encoded strings. The precedence getters in
+:mod:`harmonyspeech.common.inputs` guarantee the wire-encoded request field is decoded
+**once** and cached on the request; subsequent hops reuse the artifact.
+
+The routing table below is unchanged from Phase 0/1 (``prepare_inputs`` keeps its
+``(model_config, requests_to_batch)`` signature and per-request order).
+
+Chatterbox note: the upstream ``prepare_conditionals``/``set_target_voice``
+APIs require a file-like object. The handler re-wraps the already-decoded
+artifact as WAV bytes in memory (encode-only — no wire encoding, no client-format
+decode). This replaces Phase 1's ``ensure_librosa_readable_bytes`` path, which
+therefore no longer appears in the pipeline (the helper itself stays in
+``common/audio_codec.py`` as a boundary utility).
+"""
+
 from concurrent.futures import ThreadPoolExecutor
-from tempfile import NamedTemporaryFile
 
 import numpy as np
-import torch
-from chatterbox.tts import Conditionals
-from loguru import logger
-from pydub import AudioSegment
 
-from harmonyspeech.common.audio_codec import (
-    AudioDecodeError,
-    decode_audio,
-    ensure_librosa_readable_bytes,
-)
+from harmonyspeech.common.artifacts import AudioArtifact, MelArtifact, SpeakerArtifact
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import (
     AudioConversionRequestInput,
@@ -26,74 +32,40 @@ from harmonyspeech.common.inputs import (
     TextToSpeechRequestInput,
     VocodeRequestInput,
     VoiceConversionRequestInput,
+    artifact_store,
+    as_request_input,
+    decode_b64_json_field,
+    decode_embedding_bytes,
+    decode_json_field,
+    decode_mel_field,
+    get_audio_artifact,
+    get_speaker_artifact,
+    get_vad_artifact,
+)
+from harmonyspeech.common.inputs import (
+    decode_audio_field as _decode_audio_field,
+)
+from harmonyspeech.common.inputs import (
+    decode_conditionals_field as _load_conditionals_payload,
 )
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.loader import get_model_config, get_model_flavour, get_model_speaker
-from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
-from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepare_synthesis_inputs
 from harmonyspeech.modeling.models.melo.inputs import normalize_text_inputs as melo_normalize_inputs
 from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs as ov1_normalize_inputs
 
-_CONDITIONALS_PAYLOAD_HELP = (
-    "expected a base64-encoded Chatterbox conditionals blob produced by the embedding step "
-    "(a plain dict of tensors, loadable with weights_only=True)"
-)
+#: HarmonySpeech vocoder frame hop (the vocoder re-inserts silence every 200 frames).
+_HARMONYSPEECH_VOCODER_HOP = 200
+#: HarmonySpeech vocoder output sample rate.
+_HARMONYSPEECH_VOCODER_SR = 16000
+#: VoiceFixer operates at 44.1 kHz with a 441-sample hop.
+_VOICEFIXER_SR = 44100
+_VOICEFIXER_HOP = 441
 
+__all__ = ["prepare_inputs"]
 
-def _load_conditionals_payload(payload: str, field_name: str):
-    """Deserialize a Chatterbox conditionals blob without executing pickle code.
-
-    The payload is the base64 form of ``torch.save({"t3": {...}, "gen": {...}})``
-    written by the embedding step. ``Conditionals.load`` itself uses
-    ``torch.load(..., weights_only=True)``, so custom classes and
-    ``__reduce__`` gadgets are rejected instead of executed. Any failure is
-    surfaced as a typed ``ValueError`` naming the offending field, which the
-    engine turns into a 400-style error result.
-    """
-    try:
-        embedding_bytes = base64.b64decode(payload)
-        return Conditionals.load(io.BytesIO(embedding_bytes), map_location="cpu")
-    except Exception as e:
-        raise ValueError(f"Unsupported {field_name} payload: {_CONDITIONALS_PAYLOAD_HELP}. Details: {e}") from e
-
-
-def _decode_audio_field(payload: str | None, field_name: str, target_sr: int | None = None) -> tuple[np.ndarray, int]:
-    """Decode a base64 audio request field through the boundary codec.
-
-    Any base64 or codec failure becomes a ``ValueError`` naming the request
-    field, which the engine turns into a 400-style per-request error result
-    instead of crashing the pipeline.
-    """
-    if not payload:
-        raise ValueError(f"{field_name}: missing audio payload")
-    try:
-        raw = base64.b64decode(payload)
-    except Exception as exc:
-        raise ValueError(f"{field_name}: invalid base64 audio payload: {exc}") from exc
-    try:
-        return decode_audio(raw, target_sr=target_sr)
-    except AudioDecodeError as exc:
-        raise ValueError(f"{field_name}: {exc}") from exc
-
-
-def _normalize_audio_bytes(payload: str | None, field_name: str) -> bytes:
-    """Return WAV bytes for components that decode their own (file-like) input.
-
-    Containers libsndfile understands are handed over untouched; AAC/MP4/etc.
-    are decoded once here and re-wrapped as WAV so the same input formats work
-    for every model family, including Chatterbox.
-    """
-    if not payload:
-        raise ValueError(f"{field_name}: missing audio payload")
-    try:
-        raw = base64.b64decode(payload)
-    except Exception as exc:
-        raise ValueError(f"{field_name}: invalid base64 audio payload: {exc}") from exc
-    try:
-        return ensure_librosa_readable_bytes(raw)
-    except AudioDecodeError as exc:
-        raise ValueError(f"{field_name}: {exc}") from exc
+# Re-exported for tests / direct callers that used the Phase 1 private names.
+__all__ += ["_decode_audio_field", "_load_conditionals_payload"]
 
 
 def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
@@ -101,7 +73,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
     Prepares the request data depending on the model type this runner is executing.
     Throws a NotImplementedError if the model type is unknown
     :param model_config:
-    :param requests_to_batch:
+    :param requests_to_batch: EngineRequest objects (carry the artifact store)
     :return:
     """
     inputs = []
@@ -110,7 +82,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, SpeechEmbeddingRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SpeechEmbeddingRequestInput"
@@ -121,7 +93,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, SynthesisRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
@@ -130,7 +102,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
     elif model_config.model_type == "HarmonySpeechVocoder":
         for r in requests_to_batch:
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(r.request_data, VocodeRequestInput):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or VocodeAudioRequestInput"
@@ -141,7 +113,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, VoiceConversionRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or VoiceConversionRequestInput"
@@ -154,7 +126,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
                 or isinstance(r.request_data, TextToSpeechRequestInput)
                 or isinstance(r.request_data, VoiceConversionRequestInput)
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or VoiceConversionRequestInput or SpeechEmbeddingRequestInput"
@@ -168,7 +140,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
                 or isinstance(r.request_data, SpeechTranscribeRequestInput)
                 or isinstance(r.request_data, DetectVoiceActivityRequestInput)
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput orDetectVoiceActivityRequestInput"
@@ -179,7 +151,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, SynthesisRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
@@ -190,7 +162,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, SynthesisRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
@@ -199,14 +171,14 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
     elif model_config.model_type == "VoiceFixerRestorer":
         for r in requests_to_batch:
             if isinstance(r.request_data, AudioConversionRequestInput):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(f"request ID {r.request_id} is not of type AudioConversionRequestInput")
         return prepare_voicefixer_restorer_inputs(inputs)
     elif model_config.model_type == "VoiceFixerVocoder":
         for r in requests_to_batch:
             if isinstance(r.request_data, AudioConversionRequestInput):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(f"request ID {r.request_id} is not of type AudioConversionRequestInput")
         return prepare_voicefixer_vocoder_inputs(inputs)
@@ -218,7 +190,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
                 or isinstance(r.request_data, SpeechTranscribeRequestInput)
                 or isinstance(r.request_data, DetectVoiceActivityRequestInput)
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SpeechTranscribeRequestInput or SpeechEmbeddingRequestInput orDetectVoiceActivityRequestInput"
@@ -229,7 +201,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
             if isinstance(r.request_data, TextToSpeechRequestInput) or isinstance(
                 r.request_data, SynthesisRequestInput
             ):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type TextToSpeechRequestInput or SynthesisRequestInput"
@@ -241,9 +213,9 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
         for r in requests_to_batch:
             if isinstance(r.request_data, SpeechEmbeddingRequestInput):
                 # Embedding request routed to TTS model (no dedicated ChatterboxEmbedding)
-                embed_inputs.append(r.request_data)
+                embed_inputs.append(r)
             elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                tts_inputs.append(r.request_data)
+                tts_inputs.append(r)
             else:
                 raise ValueError(
                     f"ChatterboxTTS prepare_inputs: request ID {r.request_id} is not TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
@@ -256,9 +228,9 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
         embed_inputs = []
         for r in requests_to_batch:
             if isinstance(r.request_data, SpeechEmbeddingRequestInput):
-                embed_inputs.append(r.request_data)
+                embed_inputs.append(r)
             elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                tts_inputs.append(r.request_data)
+                tts_inputs.append(r)
             else:
                 raise ValueError(
                     f"ChatterboxTurboTTS prepare_inputs: request ID {r.request_id} is not TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
@@ -271,9 +243,9 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
         embed_inputs = []
         for r in requests_to_batch:
             if isinstance(r.request_data, SpeechEmbeddingRequestInput):
-                embed_inputs.append(r.request_data)
+                embed_inputs.append(r)
             elif isinstance(r.request_data, (TextToSpeechRequestInput, SynthesisRequestInput)):
-                tts_inputs.append(r.request_data)
+                tts_inputs.append(r)
             else:
                 raise ValueError(
                     f"ChatterboxMultilingualTTS prepare_inputs: request ID {r.request_id} is not TextToSpeechRequestInput, SynthesisRequestInput, or SpeechEmbeddingRequestInput"
@@ -284,7 +256,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
     elif model_config.model_type == "ChatterboxVC":
         for r in requests_to_batch:
             if isinstance(r.request_data, VoiceConversionRequestInput):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(f"request ID {r.request_id} is not of type VoiceConversionRequestInput")
         return prepare_chatterbox_vc_inputs(inputs)
@@ -296,7 +268,7 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
         # request types carry.
         for r in requests_to_batch:
             if isinstance(r.request_data, (SpeechEmbeddingRequestInput, TextToSpeechRequestInput)):
-                inputs.append(r.request_data)
+                inputs.append(r)
             else:
                 raise ValueError(
                     f"request ID {r.request_id} is not of type SpeechEmbeddingRequestInput or TextToSpeechRequestInput"
@@ -307,84 +279,72 @@ def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequ
 
 
 def prepare_harmonyspeech_encoder_inputs(
-    requests_to_batch: list[TextToSpeechRequestInput | SpeechEmbeddingRequestInput],
+    requests_to_batch: list[EngineRequest],
 ):
-    # We're expecting audio in waveform format in the requests
-    def prepare(request):
-        # Decode the boundary audio once (any supported container/codec)
-        audio, source_sr = _decode_audio_field(request.input_audio, "input_audio")
-        preprocessed_audio = preprocess_wav(audio, source_sr=source_sr)
-        input_frames = get_input_frames(preprocessed_audio)
-        # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
-        return input_frames
+    """Return one :class:`AudioArtifact` per request (native rate).
+
+    The preprocessing (``preprocess_wav`` + ``get_input_frames``) moved into the
+    handler so the *decoded audio* is the shared artifact: the Whisper VAD step
+    produced it once and the encoder no longer re-decodes the same field.
+    """
+
+    def prepare(entry):
+        request = as_request_input(entry)
+        return get_audio_artifact(request, entry, "input_audio")
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
 def prepare_voicefixer_restorer_inputs(requests_to_batch: list[AudioConversionRequestInput]):
-    """
-    Prepare inputs for VoiceFixerRestorer model.
-    Expects audio data in base64 format and converts to tensor format.
-    """
+    """Return one 44.1 kHz :class:`AudioArtifact` per request."""
 
-    def prepare(request):
-        # Decode the boundary audio once at VoiceFixer's expected sample rate (44100 Hz)
-        audio_data, _ = _decode_audio_field(request.source_audio, "source_audio", target_sr=44100)
-
-        # Convert to tensor format expected by VoiceFixerRestorer
-        # The model expects [batch, channels, samples] format
-        # Add channel dimension if mono audio, then add batch dimension
-        if audio_data.ndim == 1:
-            # [samples] -> [channels, samples] -> [batch, channels, samples]
-            audio_tensor = torch.FloatTensor(audio_data).unsqueeze(0).unsqueeze(0)
-        else:
-            # [channels, samples] -> [batch, channels, samples]
-            audio_tensor = torch.FloatTensor(audio_data).unsqueeze(0)
-
-        return audio_tensor
+    def prepare(entry):
+        request = as_request_input(entry)
+        return get_audio_artifact(request, entry, "source_audio", target_sr=_VOICEFIXER_SR)
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
 def prepare_voicefixer_vocoder_inputs(requests_to_batch: list[AudioConversionRequestInput]):
-    """
-    Prepare inputs for VoiceFixerVocoder model.
-    Expects mel spectrogram data in base64 format and converts to tensor format.
-    """
+    """Return one :class:`MelArtifact` per request (restorer product or legacy JSON)."""
 
-    def prepare(request):
-        # Decode mel spectrogram from base64
-        mel_data = base64.b64decode(request.input_mel_spectrogram)
-        mel_json = json.loads(mel_data.decode("utf-8"))
+    def prepare(entry):
+        request = as_request_input(entry)
+        store = artifact_store(entry)
+        existing = store.get("input_mel_spectrogram") if store is not None else None
+        if isinstance(existing, MelArtifact):
+            return existing
 
-        # Convert to numpy array and then to tensor
-        mel_array = np.array(mel_json, dtype=np.float32)
-
-        # Convert to tensor format expected by VoiceFixerVocoder
-        # The model expects [batch, mel_bins, time] format
-        if mel_array.ndim == 2:
-            mel_tensor = torch.FloatTensor(mel_array).unsqueeze(0)  # Add batch dimension
-        else:
-            mel_tensor = torch.FloatTensor(mel_array)
-
-        return mel_tensor
+        payload = getattr(request, "input_mel_spectrogram", None)
+        if not payload:
+            raise ValueError("input_mel_spectrogram: missing mel payload")
+        array = decode_mel_field(payload, "input_mel_spectrogram")
+        if array.ndim == 4:
+            # Legacy restorer output: [batch, channels, frames, bins]; the vocoder
+            # only consumes channel 0, so store the canonical [1, bins, frames].
+            array = array[0, 0].T[None, ...]
+        elif array.ndim == 2:
+            array = array[None, ...]
+        elif array.ndim != 3:
+            raise ValueError(f"input_mel_spectrogram: unexpected mel shape {array.shape}")
+        artifact = MelArtifact.from_numpy(array, sample_rate=_VOICEFIXER_SR, hop_length=_VOICEFIXER_HOP)
+        if store is not None:
+            store["input_mel_spectrogram"] = artifact
+        return artifact
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_harmonyspeech_synthesizer_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
-    # We're recieving a text, a voice embedding and voice modifiers
-    def prepare(request):
-        input_text, input_embedding = prepare_synthesis_inputs(request.input_text, request.input_embedding)
+def prepare_harmonyspeech_synthesizer_inputs(requests_to_batch: list[EngineRequest]):
+    # We're receiving a text, a voice embedding and voice modifiers
+    def prepare(entry):
+        request = as_request_input(entry)
+        speaker = get_speaker_artifact(request, entry, "input_embedding", backend="harmonyspeech")
+        embedding_array = speaker.embedding.detach().cpu().numpy()
+        input_text, input_embedding = prepare_synthesis_inputs(request.input_text, embedding_array)
 
         # Base Input modifiers for HS Forward Tacotron
         speed_function = 1.0
@@ -402,158 +362,146 @@ def prepare_harmonyspeech_synthesizer_inputs(requests_to_batch: list[TextToSpeec
         return input_text, input_embedding, speed_function, pitch_function, energy_function
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_harmonyspeech_vocoder_inputs(requests_to_batch: list[TextToSpeechRequestInput | VocodeRequestInput]):
-    # We're expecting a synthesized mel spectogram and breaks
-    def prepare(request):
-        # TODO: Adapt this after optimizing synthesis step encoding
-        synthesis_input = json.loads(request.input_audio)
-        syn_mel = synthesis_input["mel"] if "mel" in synthesis_input else None
-        syn_breaks = synthesis_input["breaks"] if "breaks" in synthesis_input else None
+def prepare_harmonyspeech_vocoder_inputs(requests_to_batch: list[EngineRequest]):
+    """Return ``(MelArtifact, breaks)`` per request.
 
-        # Decode input from base64
-        try:
-            # Theoretically, vocoder works without breaks
-            if syn_breaks is not None:
-                syn_breaks = base64.b64decode(syn_breaks.encode("utf-8"))
-                syn_breaks = json.loads(syn_breaks)
+    Artifact path: the synthesizer forwarded its :class:`MelArtifact` (carrying
+    ``breaks``) under ``input_audio``. Legacy path: ``input_audio`` is a JSON
+    envelope ``{"mel": b64(JSON(list)), "breaks": b64(JSON(list))}``.
+    """
 
-            syn_mel = base64.b64decode(syn_mel.encode("utf-8"))
-            syn_mel = json.loads(syn_mel)
-            syn_mel = np.array(syn_mel, dtype=np.float32)
-        except Exception as e:
-            logger.error(str(e))
+    def prepare(entry):
+        request = as_request_input(entry)
+        store = artifact_store(entry)
+        existing = store.get("input_audio") if store is not None else None
+        if isinstance(existing, MelArtifact):
+            return existing, existing.breaks
 
-        # Normalize mel for decoding
-        input_mel = syn_mel / 4.0  # Fixme: make this configurable
-        return input_mel, syn_breaks
+        payload = getattr(request, "input_audio", None)
+        if not payload:
+            raise ValueError("input_audio: missing mel payload")
+        envelope = decode_json_field(payload, "input_audio")
+        if not isinstance(envelope, dict):
+            raise ValueError("input_audio: expected a JSON mel envelope with 'mel' and optional 'breaks'")
+
+        syn_breaks = envelope.get("breaks")
+        if syn_breaks is not None:
+            syn_breaks = (
+                decode_b64_json_field(syn_breaks, "input_audio.breaks")
+                if isinstance(syn_breaks, str)
+                else syn_breaks
+            )
+            if not isinstance(syn_breaks, list):
+                raise ValueError("input_audio.breaks: expected a list of frame counts")
+
+        syn_mel = envelope.get("mel")
+        if not syn_mel:
+            raise ValueError("input_audio.mel: missing mel payload")
+        mel_array = decode_mel_field(syn_mel, "input_audio.mel")
+        if mel_array.ndim == 2:
+            mel_array = mel_array[None, ...]
+        elif mel_array.ndim != 3:
+            raise ValueError(f"input_audio.mel: unexpected mel shape {mel_array.shape}")
+        artifact = MelArtifact.from_numpy(
+            mel_array,
+            sample_rate=_HARMONYSPEECH_VOCODER_SR,
+            hop_length=_HARMONYSPEECH_VOCODER_HOP,
+            breaks=syn_breaks,
+        )
+        if store is not None:
+            store["input_audio"] = artifact
+        return artifact, artifact.breaks
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
 def prepare_openvoice_tone_converter_encoder_inputs(
-    model_config: ModelConfig, requests_to_batch: list[SpeechEmbeddingRequestInput | TextToSpeechRequestInput]
+    model_config: ModelConfig, requests_to_batch: list[EngineRequest]
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
     # Load config
     hf_config = get_model_config(model_config.model, model_config.model_type, model_config.revision, flavour)
+    target_sr = int(hf_config.data.sampling_rate)
 
-    # Based on VAD Data we're processing the Audio file provided
-    # TODO: This expects Whisper VAD input, needs rework to be compatible with Silero VAD
-    def prepare(request):
-        # Decode the boundary audio once (base64 + any supported container)
-        audio_data, _ = _decode_audio_field(
-            request.input_audio, "input_audio", target_sr=hf_config.data.sampling_rate
-        )
-        input_vad_data = json.loads(request.input_vad_data)
-        segments = input_vad_data["segments"] if "segments" in input_vad_data else []
-        info = input_vad_data["info"] if "info" in input_vad_data else None
+    # Based on VAD Data we're processing the audio file provided
+    def prepare(entry):
+        request = as_request_input(entry)
+        audio_artifact = get_audio_artifact(request, entry, "input_audio", target_sr=target_sr)
+        vad = get_vad_artifact(request, entry, "input_vad_data")
+        segments = vad.segments
 
-        # convert from float to uint16
-        # https://stackoverflow.com/questions/58810035/converting-audio-files-between-pydub-and-librosa
-        audio_data = np.array(audio_data * (1 << 15), dtype=np.int16)
-        audio = AudioSegment(
-            audio_data.tobytes(),
-            frame_rate=hf_config.data.sampling_rate,
-            sample_width=audio_data.dtype.itemsize,
-            channels=1,
-        )
-        max_len = len(audio)
+        waveform = audio_artifact.numpy
+        max_len = waveform.size
+        total_ms = int(max_len * 1000 / target_sr)
 
-        # Iterate over VAD segments to build a list of audio segments exactly matching VAD parts
-        # see OpenVoice - se_extractor.py:split_audio_whisper
-        vad_audio_segments = []
-        s_ind = 0
+        # OpenVoice's reference implementation quantises the source to int16
+        # before segmenting (se_extractor.split_audio_whisper). Keep that
+        # quantisation for embedding parity, but slice the in-memory artifact
+        # instead of exporting to a tempfile and decoding it again.
+        quantized = np.array(waveform * (1 << 15), dtype=np.int16)
+
+        segment_artifacts: list[AudioArtifact] = []
         start_time = None
-
         for k, segment in enumerate(segments):
-            # process with the time
             if k == 0:
-                start_time = max(0, segment["start"])
-            end_time = segment["end"]
+                start_time = max(0.0, float(segment["start"]))
+            end_time = float(segment["end"])
+            text = str(segment.get("text", "")).replace("...", "")
 
-            # clean text
-            text = segment["text"].replace("...", "")
-
-            # left 0.08s for each audio
-            audio_seg = audio[int(start_time * 1000) : min(max_len, int(end_time * 1000) + 80)]
+            start_ms = int(start_time * 1000)
+            end_ms = min(total_ms, int(end_time * 1000) + 80)
+            start_frame = int(start_ms * target_sr / 1000)
+            end_frame = int(end_ms * target_sr / 1000)
+            segment_samples = quantized[start_frame:end_frame].astype(np.float32) / float(1 << 15)
+            duration_s = segment_samples.size / float(target_sr)
 
             # filter out the segment if shorter than 1.5s and longer than 20s
-            save = 1.5 < audio_seg.duration_seconds < 20.0 and 2 <= len(text) < 200
-            if save:
-                # https://github.com/PyFilesystem/pyfilesystem2/issues/402#issuecomment-638750112
-                # https://stackoverflow.com/questions/71765778/how-to-process-files-in-fastapi-from-multiple-clients-without-saving-the-files-t
-                tmp_file = NamedTemporaryFile(delete=False, suffix=".ove")
-                try:
-                    audio_seg.export(tmp_file, format="wav")
-                    with open(tmp_file.name, "rb") as exported:
-                        audio_seg_bytes, _ = decode_audio(
-                            exported.read(), target_sr=hf_config.data.sampling_rate
-                        )
-                    vad_audio_segments.append(audio_seg_bytes)
-                except Exception as e:
-                    logger.error(str(e))
-                finally:
-                    tmp_file.close()
-                    os.unlink(tmp_file.name)
+            if 1.5 < duration_s < 20.0 and 2 <= len(text) < 200:
+                segment_artifacts.append(AudioArtifact.from_numpy(segment_samples, target_sr))
 
             if k < len(segments) - 1:
-                start_time = max(0, segments[k + 1].start - 0.08)
+                start_time = max(0.0, float(segments[k + 1]["start"]) - 0.08)
 
-            s_ind = s_ind + 1
-
-        # Audio segments returned here will be used for inference
-        # see reference implementation in OpenVoice - ToneColorConverter:extract_se
-        return vad_audio_segments
+        return segment_artifacts
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
 def prepare_openvoice_tone_converter_inputs(
     model_config: ModelConfig,
-    requests_to_batch: list[SpeechEmbeddingRequestInput | TextToSpeechRequestInput | VoiceConversionRequestInput],
+    requests_to_batch: list[EngineRequest],
 ):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
     # Load config
     hf_config = get_model_config(model_config.model, model_config.model_type, model_config.revision, flavour)
+    target_sr = int(hf_config.data.sampling_rate)
 
     # We're expecting audio in waveform format in the requests
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         # Handle both TextToSpeechRequestInput (for voice cloning) and VoiceConversionRequestInput
         # For VoiceConversionRequestInput: source_audio, target_embedding
         # For TextToSpeechRequestInput: input_audio, input_embedding
         if hasattr(request, "source_audio"):
-            # VoiceConversionRequestInput
             audio_field = "source_audio"
-            audio_data = request.source_audio
-            embedding_data = request.target_embedding
+            embedding_field = "target_embedding"
         else:
-            # TextToSpeechRequestInput
             audio_field = "input_audio"
-            audio_data = request.input_audio
-            embedding_data = request.input_embedding
+            embedding_field = "input_embedding"
 
-        # Make sure Audio and Embedding are decoded from Base64
-        audio_ref, _ = _decode_audio_field(audio_data, audio_field, target_sr=hf_config.data.sampling_rate)
-        input_embedding = base64.b64decode(embedding_data.encode("utf-8"))
-        input_embedding_ref = io.BytesIO(input_embedding)
+        audio_artifact = get_audio_artifact(request, entry, audio_field, target_sr=target_sr)
+        target_speaker = get_speaker_artifact(request, entry, embedding_field, backend="openvoice")
 
         # For voice conversion, use target embedding directly
         # For voice cloning via TTS, get source embedding from repo
         if hasattr(request, "language_id") and hasattr(request, "voice_id"):
-            # TextToSpeechRequestInput - get source embedding from repo
             source_speaker_embedding_file = get_model_speaker(
                 model_config.model,
                 model_config.model_type,
@@ -561,45 +509,39 @@ def prepare_openvoice_tone_converter_inputs(
                 request.language_id,
                 request.voice_id,
             )
-            source_embedding_ref = io.BytesIO(source_speaker_embedding_file)
+            source_speaker = SpeakerArtifact(
+                embedding=decode_embedding_bytes(source_speaker_embedding_file, "source_embedding"),
+                backend="openvoice",
+            )
         else:
-            # VoiceConversionRequestInput - use target embedding as source
-            # Create a fresh BytesIO since input_embedding_ref may have been read
-            source_embedding_ref = io.BytesIO(input_embedding)
+            source_speaker = target_speaker
 
-        return audio_ref, input_embedding_ref, source_embedding_ref
+        return audio_artifact, target_speaker, source_speaker
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
 def prepare_faster_whisper_inputs(
-    requests_to_batch: list[TextToSpeechRequestInput | SpeechTranscribeRequestInput | DetectVoiceActivityRequestInput],
+    requests_to_batch: list[EngineRequest],
 ):
-    def prepare(request):
-        # Decode the boundary audio once (any supported container) at 16 kHz
-        audio_ref, _ = _decode_audio_field(request.input_audio, "input_audio", target_sr=16000)
-        # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
-        return audio_ref
+    def prepare(entry):
+        request = as_request_input(entry)
+        return get_audio_artifact(request, entry, "input_audio", target_sr=16000)
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_openvoice_synthesizer_inputs(
-    model_config: ModelConfig, requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]
-):
+def prepare_openvoice_synthesizer_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
     # Load config
     hf_config = get_model_config(model_config.model, model_config.model_type, model_config.revision, flavour)
 
-    # We're recieving a text, a voice embedding and voice modifiers
-    def prepare(request):
+    # We're receiving a text, a voice embedding and voice modifiers
+    def prepare(entry):
+        request = as_request_input(entry)
         input_text = request.input_text
         speaker_id = hf_config.speakers[request.voice_id]
 
@@ -613,21 +555,18 @@ def prepare_openvoice_synthesizer_inputs(
         return text_normalized, speaker_id, speed_modifier
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_melotts_synthesizer_inputs(
-    model_config: ModelConfig, requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]
-):
+def prepare_melotts_synthesizer_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
     # Get model flavour if applicable
     flavour = get_model_flavour(model_config)
     # Load config
     hf_config = get_model_config(model_config.model, model_config.model_type, model_config.revision, flavour)
 
-    # We're recieving a text, a voice embedding and voice modifiers
-    def prepare(request):
+    # We're receiving a text, a voice embedding and voice modifiers
+    def prepare(entry):
+        request = as_request_input(entry)
         input_text = request.input_text
         speaker_id = hf_config.data.spk2id[request.voice_id]
 
@@ -641,25 +580,18 @@ def prepare_melotts_synthesizer_inputs(
         return inference_items, speaker_id, speed_modifier
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_silero_vad_inputs(requests_to_batch: list[DetectVoiceActivityRequestInput]):
+def prepare_silero_vad_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for Silero VAD model.
-    Expects audio data in base64 format and converts to tensor format.
-    Includes VAD parameters as part of the input object.
+    Returns ``(AudioArtifact at 16 kHz, vad_params)`` per request.
     """
 
-    def prepare(request):
-        # Decode the boundary audio once (any supported container) at 16 kHz
-        # (Silero's expected sample rate)
-        audio_ref, _ = _decode_audio_field(request.input_audio, "input_audio", target_sr=16000)
-
-        # Convert to tensor format expected by Silero VAD
-        audio_tensor = torch.FloatTensor(audio_ref)
+    def prepare(entry):
+        request = as_request_input(entry)
+        audio_artifact = get_audio_artifact(request, entry, "input_audio", target_sr=16000)
 
         # Extract VAD parameters from request
         vad_params = {
@@ -671,22 +603,21 @@ def prepare_silero_vad_inputs(requests_to_batch: list[DetectVoiceActivityRequest
             "get_timestamps": getattr(request, "get_timestamps", False),
         }
 
-        return (audio_tensor, vad_params)
+        return audio_artifact, vad_params
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_kittentts_synthesizer_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
+def prepare_kittentts_synthesizer_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for KittenTTSSynthesizer model.
     Extracts text, voice name, and speed from the request.
     No preprocessing or BERT tokenization needed — KittenTTS handles this internally.
     """
 
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         input_text = request.input_text
 
         # Voice selection: use voice_id from request or fall back to default
@@ -701,25 +632,56 @@ def prepare_kittentts_synthesizer_inputs(requests_to_batch: list[TextToSpeechReq
         return input_text, voice, speed_modifier
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_chatterbox_tts_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
+def _chatterbox_speaker(entry, field: str = "input_embedding"):
+    """Return the speaker conditioning artifact for a Chatterbox request, or ``None``.
+
+    Precedence: pre-computed conditionals/embedding artifact -> reference audio
+    artifact -> legacy wire-encoded embedding field. Both artifact forms are produced
+    by this module for incoming requests and by the embedding step's forwarding
+    (``SpeakerArtifact.conditionals``) for the multi-step path.
+    """
+    request = as_request_input(entry)
+    store = artifact_store(entry)
+    existing = store.get(field) if store is not None else None
+    if isinstance(existing, SpeakerArtifact):
+        return existing
+
+    embedding = getattr(request, field, None)
+    if embedding is not None:
+        return get_speaker_artifact(request, entry, field, backend="chatterbox")
+
+    audio = getattr(request, "input_audio", None)
+    audio_artifact = store.get("input_audio") if store is not None else None
+    if audio is not None or isinstance(audio_artifact, AudioArtifact):
+        return SpeakerArtifact(
+            reference_audio=get_audio_artifact(request, entry, "input_audio"),
+            backend="chatterbox",
+        )
+    return None
+
+
+def prepare_chatterbox_tts_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for ChatterboxTTS model.
 
     Returns list of tuples:
-        (input_text, conditionals_or_None, exaggeration, cfg_weight, temperature,
+        (input_text, speaker_artifact_or_None, exaggeration, cfg_weight, temperature,
          repetition_penalty, top_p, min_p)
+
+    ``speaker_artifact`` carries either ``conditionals`` (pre-computed embedding)
+    or ``reference_audio`` (clone from audio) — the handler turns the latter into
+    conditionals with ``model.prepare_conditionals``.
 
     Raises ValueError for:
     - Non-None top_k or norm_loudness (Turbo-only params)
     - Both input_audio AND input_embedding provided (conflict)
     """
 
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         opts = request.generation_options
 
         # Validate unsupported params — ChatterboxTTS rejects Turbo-only fields
@@ -733,10 +695,7 @@ def prepare_chatterbox_tts_inputs(requests_to_batch: list[TextToSpeechRequestInp
         if getattr(request, "input_audio", None) is not None and getattr(request, "input_embedding", None) is not None:
             raise ValueError("Provide either input_audio or input_embedding, not both.")
 
-        # Deserialize pre-computed Conditionals if provided
-        conditionals = None
-        if getattr(request, "input_embedding", None) is not None:
-            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
+        speaker = _chatterbox_speaker(entry)
 
         # Apply model-specific defaults for ChatterboxTTS
         exaggeration = opts.exaggeration if opts is not None and opts.exaggeration is not None else 0.5
@@ -748,26 +707,27 @@ def prepare_chatterbox_tts_inputs(requests_to_batch: list[TextToSpeechRequestInp
         top_p = opts.top_p if opts is not None and opts.top_p is not None else 1.0
         min_p = opts.min_p if opts is not None and opts.min_p is not None else 0.05
 
-        return request.input_text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p
+        return request.input_text, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
     return inputs
 
 
-def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput]):
+def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for ChatterboxTurboTTS model.
 
     Returns list of tuples:
-        (input_text, conditionals_or_None, temperature, repetition_penalty, top_p, top_k, norm_loudness)
+        (input_text, speaker_artifact_or_None, temperature, repetition_penalty, top_p, top_k, norm_loudness)
 
     Raises ValueError for:
     - Non-None exaggeration, cfg_weight, or min_p (base-TTS-only params)
     - Both input_audio AND input_embedding provided (conflict)
     """
 
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         opts = request.generation_options
 
         # Validate unsupported params — ChatterboxTurboTTS rejects base-TTS-only fields
@@ -783,10 +743,7 @@ def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequ
         if getattr(request, "input_audio", None) is not None and getattr(request, "input_embedding", None) is not None:
             raise ValueError("Provide either input_audio or input_embedding, not both.")
 
-        # Deserialize pre-computed Conditionals if provided
-        conditionals = None
-        if getattr(request, "input_embedding", None) is not None:
-            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
+        speaker = _chatterbox_speaker(entry)
 
         # Apply Turbo-specific defaults
         temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
@@ -797,7 +754,7 @@ def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequ
         top_k = opts.top_k if opts is not None and opts.top_k is not None else 1000
         norm_loudness = opts.norm_loudness if opts is not None and opts.norm_loudness is not None else True
 
-        return request.input_text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness
+        return request.input_text, speaker, temperature, repetition_penalty, top_p, top_k, norm_loudness
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
@@ -805,7 +762,7 @@ def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequ
 
 
 def prepare_chatterbox_multilingual_tts_inputs(
-    requests_to_batch: list[TextToSpeechRequestInput | SynthesisRequestInput],
+    requests_to_batch: list[EngineRequest],
 ):
     """
     Prepare inputs for ChatterboxMultilingualTTS model.
@@ -814,7 +771,7 @@ def prepare_chatterbox_multilingual_tts_inputs(
     This function only defaults language_id to 'en' when absent/None.
 
     Returns list of tuples:
-        (input_text, language_id, conditionals_or_None, exaggeration, cfg_weight, temperature,
+        (input_text, language_id, speaker_artifact_or_None, exaggeration, cfg_weight, temperature,
          repetition_penalty, top_p, min_p)
 
     Raises ValueError for:
@@ -822,7 +779,8 @@ def prepare_chatterbox_multilingual_tts_inputs(
     - Both input_audio AND input_embedding provided (conflict)
     """
 
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         opts = request.generation_options
 
         # Validate unsupported params — ChatterboxMultilingualTTS rejects Turbo-only fields
@@ -836,10 +794,7 @@ def prepare_chatterbox_multilingual_tts_inputs(
         if getattr(request, "input_audio", None) is not None and getattr(request, "input_embedding", None) is not None:
             raise ValueError("Provide either input_audio or input_embedding, not both.")
 
-        # Deserialize pre-computed Conditionals if provided
-        conditionals = None
-        if getattr(request, "input_embedding", None) is not None:
-            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
+        speaker = _chatterbox_speaker(entry)
 
         # Default language_id to 'en' if not provided
         language_id = request.language_id if request.language_id is not None else "en"
@@ -857,7 +812,7 @@ def prepare_chatterbox_multilingual_tts_inputs(
         return (
             request.input_text,
             language_id,
-            conditionals,
+            speaker,
             exaggeration,
             cfg_weight,
             temperature,
@@ -871,38 +826,37 @@ def prepare_chatterbox_multilingual_tts_inputs(
     return inputs
 
 
-def prepare_chatterbox_embedding_inputs(requests_to_batch: list[SpeechEmbeddingRequestInput]):
+def prepare_chatterbox_embedding_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for ChatterboxEmbedding model.
 
-    Returns list of audio bytes. The bytes are already base64-decoded and
-    normalised at the engine boundary: containers libsndfile can read are
-    passed through untouched, while AAC/MP4/etc. are decoded once and
-    re-wrapped as WAV so Chatterbox reference audio accepts every format the
-    engine advertises.
+    Returns list of :class:`AudioArtifact` (native rate). The handler re-wraps the
+    waveform as in-memory WAV bytes for the upstream ``prepare_conditionals``
+    call — the client payload itself is decoded exactly once, at admission.
     """
 
-    def prepare(request):
-        return _normalize_audio_bytes(request.input_audio, "input_audio")
+    def prepare(entry):
+        request = as_request_input(entry)
+        return get_audio_artifact(request, entry, "input_audio")
 
     with ThreadPoolExecutor() as executor:
-        inputs = list(executor.map(prepare, requests_to_batch))
-    return inputs
+        return list(executor.map(prepare, requests_to_batch))
 
 
-def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestInput]):
+def prepare_chatterbox_vc_inputs(requests_to_batch: list[EngineRequest]):
     """
     Prepare inputs for ChatterboxVC model.
 
     Returns list of tuples:
-        (source_audio_bytes, target_conditionals_or_None, target_audio_bytes_or_None)
+        (source_audio_artifact, target_speaker_artifact_or_None, target_audio_artifact_or_None)
 
     Raises ValueError for:
     - Both target_audio AND target_embedding provided
     - Neither target_audio NOR target_embedding provided
     """
 
-    def prepare(request):
+    def prepare(entry):
+        request = as_request_input(entry)
         # Validate: must provide exactly one of target_audio or target_embedding
         target_audio = getattr(request, "target_audio", None)
         target_embedding = getattr(request, "target_embedding", None)
@@ -912,21 +866,19 @@ def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestI
         if target_audio is None and target_embedding is None:
             raise ValueError("ChatterboxVC requires either target_audio or target_embedding.")
 
-        # Decode source audio through the boundary codec (any accepted format)
-        source_bytes = _normalize_audio_bytes(request.source_audio, "source_audio")
+        source_artifact = get_audio_artifact(request, entry, "source_audio")
 
         # Process target
-        target_conditionals = None
-        target_audio_bytes = None
+        target_speaker = None
+        target_audio_artifact = None
 
         if target_embedding is not None:
-            # Deserialize pre-computed Conditionals (safe: weights_only=True)
-            target_conditionals = _load_conditionals_payload(target_embedding, "target_embedding")
+            # Pre-computed Conditionals (safe: weights_only=True)
+            target_speaker = get_speaker_artifact(request, entry, "target_embedding", backend="chatterbox")
         else:
-            # Decode target audio through the boundary codec as well
-            target_audio_bytes = _normalize_audio_bytes(target_audio, "target_audio")
+            target_audio_artifact = get_audio_artifact(request, entry, "target_audio")
 
-        return source_bytes, target_conditionals, target_audio_bytes
+        return source_artifact, target_speaker, target_audio_artifact
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))

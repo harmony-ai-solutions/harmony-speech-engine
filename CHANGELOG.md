@@ -16,10 +16,15 @@
     *   Client-supplied voice embeddings are no longer interpreted with arbitrary code execution enabled; unsupported payloads are rejected with a clear error response instead of being executed.
     *   Model checkpoints are loaded in the same restricted mode. A documented opt-in is available for trusted checkpoints that genuinely require the unrestricted format.
 
+### Performance
+
+*   **In-process audio pipeline**: intermediate audio, mel spectrograms, speaker embeddings and Chatterbox conditioning now stay in memory as typed objects between pipeline steps instead of being re-encoded as base64/JSON/WAV at every hop. On the worst hop (VoiceFixer restorer → vocoder) this removes roughly 25 ms of serialization and ~1 MiB of allocations per second of audio; the OpenVoice clone path now decodes the reference audio once instead of three times. API responses are unchanged.
+
 ### Fixes
 
 *   **Voice isolation between requests**: Speech conditioning is restored after every request, so a request can no longer be synthesized with the previous caller's voice.
 *   **Missing conditioning is rejected**: Voice-cloning requests without reference audio or a precomputed embedding now fail with a clear error instead of reusing earlier state.
+*   **Chatterbox default voice**: Text-to-speech requests without a reference now use the voice bundled with the model instead of failing.
 *   **Correct batch pairing**: Mixed embedding and speech requests in one batch are executed by the right handler, and each result is always paired with its own request data.
 *   **No hanging requests**: Requests for a model toolchain that is missing a configured member, or that exceeds its timeout, resolve with an error instead of waiting indefinitely.
 *   **Per-request timeouts**: A slow request no longer stops the background processing loop; only the affected request errors out.

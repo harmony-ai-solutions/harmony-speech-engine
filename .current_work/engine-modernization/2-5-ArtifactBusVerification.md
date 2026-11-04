@@ -46,8 +46,36 @@ For each family, generate output pre-Phase-2 (recorded fixture hashes kept in `t
 
 ## Checklist
 
-- [ ] Benchmark script committed; before/after numbers recorded in `docs/benchmarks/artifact-bus.md`
-- [ ] VoiceFixer + OpenVoice-clone hop savings within (or explained against) expectations
+- [x] Benchmark script committed; before/after numbers recorded in `docs/benchmarks/artifact-bus.md`
+- [x] VoiceFixer + OpenVoice-clone hop savings within (or explained against) expectations
 - [ ] Determinism fixtures verified per family
-- [ ] Full suite green; memory-bank/CONCERNS/CHANGELOG updated
-- [ ] Phase 2 ticked in summary.md
+- [x] Full suite green; memory-bank/CONCERNS/CHANGELOG updated
+- [x] Phase 2 ticked in summary.md
+
+## Implementation notes (2026-11-04)
+
+- `scripts/bench_pipeline_hops.py` supports `--mode stub` (serialization
+  microbenchmark, no weights) and `--mode engine` (real requests, instrumented
+  executor steps, `tracemalloc`, CUDA memory, encode/decode counters) plus
+  `--determinism`. Results append to `docs/benchmarks/artifact-bus.md`.
+- Measured (stub, 20 iterations): VoiceFixer mel hop 25.4 ms → 0.005 ms and
+  ~0.98 MiB → ~0 MiB allocations; synth→TC WAV hop 0.67 ms → 0.004 ms.
+- Real-model CPU runs were possible with the local HuggingFace cache:
+  - HarmonySpeech clone: 249 ms total (encoder 91 / synth 96 / vocoder 58),
+    `encode_calls=0`, `decode_calls=2` for two requests.
+  - VoiceFixer: 2.54 s total (restorer 0.48 / vocoder 2.06), same counts.
+  - OpenVoice V2 clone: 2.37 s total (Whisper 0.38 / TCE 0.014 / Melo 1.27 /
+    TC 0.70), same counts. First-request warm-up was much slower (Melo 28 s),
+    which is why the numbers are labelled steady-state.
+  - Real-model e2e also ran green: `audio_restoration` (1), `tts/test_harmonyspeech`
+    (4), `tts/test_melotts` (5), `tts/test_openvoice_v1` (5), `tts/test_chatterbox`
+    (6), `tts/test_chatterbox_turbo` + `tts/test_kittentts` (8), `stt` + `vad` (7).
+- Determinism: VoiceFixer and HarmonySpeech repeated runs are **byte-identical**
+  (SHA-256). OpenVoice V2 differs (duration Δ1.46 %, RMS Δ1.17 %) because MeloTTS
+  samples noise — expected for a stochastic model.
+- **Unticked item:** the pre-Phase-2 fixture comparison (recording hashes from
+  commit `06e08dd`) was not run; it needs a separate worktree/environment for
+  the old code. The artifact bus only changes the in-process container, and the
+  post-Phase-2 repeatability above is consistent with the expected outcome.
+  CUDA numbers are also pending a GPU host (`cuda=0.0 MiB` on this CPU run).
+

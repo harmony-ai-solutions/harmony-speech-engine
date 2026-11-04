@@ -12,7 +12,7 @@ Covers:
 import base64
 import io
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -28,7 +28,6 @@ from harmonyspeech.common.inputs import (
 )
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.hf_downloader import ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, load_or_download_model
-from tests.audio_fixtures import tiny_wav_bytes
 from harmonyspeech.task_handler.inputs import (
     _load_conditionals_payload,
     prepare_chatterbox_tts_inputs,
@@ -39,6 +38,7 @@ from harmonyspeech.task_handler.model_runner_base import (
     _conditionals_to_payload,
     _load_embedding_tensor,
 )
+from tests.audio_fixtures import tiny_wav_bytes
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -128,9 +128,10 @@ def _make_conditionals() -> Conditionals:
 
 @pytest.mark.unit
 def test_hostile_embedding_payload_rejected_by_tone_converter(tmp_path):
-    """A pickle gadget in input_embedding must not run; the request errors instead."""
+    """A pickle gadget in a speaker embedding field must not run; it fails closed."""
+    from harmonyspeech.common.inputs import get_speaker_artifact
+
     marker = tmp_path / "tone_converter_pwned.txt"
-    runner = _make_tone_converter_runner()
 
     request = TextToSpeechRequestInput(
         request_id="tc-hostile",
@@ -141,26 +142,12 @@ def test_hostile_embedding_payload_rejected_by_tone_converter(tmp_path):
         input_audio=_b64(b"audio"),
         input_embedding=_b64(_hostile_pickle(marker)),
     )
+    engine_request = _engine_request(request)
 
-    inputs = [
-        (
-            np.zeros(1000, dtype=np.float32),
-            io.BytesIO(_hostile_pickle(marker)),
-            io.BytesIO(_tensor_bytes()),
-        )
-    ]
-
-    with (
-        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
-        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_OV_CONFIG),
-    ):
-        results = runner._execute_openvoice_tone_converter(inputs, [_engine_request(request)])
+    with pytest.raises(ValueError, match="Unsupported input_embedding payload"):
+        get_speaker_artifact(request, engine_request, "input_embedding", backend="openvoice")
 
     assert not marker.exists(), "hostile pickle payload was executed!"
-    assert len(results) == 1
-    error_output = results[0].result_data
-    assert error_output.finish_reason == "error"
-    assert "Unsupported input_embedding/target_embedding payload" in error_output.error
 
 
 @pytest.mark.unit
@@ -264,7 +251,10 @@ def test_conditionals_payload_roundtrips_with_weights_only():
 
 @pytest.mark.unit
 def test_embedding_handler_payload_reloads_via_conditionals_loader():
-    """End-to-end serialization seam: embedding handler output -> TTS consumer."""
+    """End-to-end serialization seam: embedding handler artifact -> wire -> loader."""
+    from harmonyspeech.common.artifacts import AudioArtifact
+    from harmonyspeech.endpoints.openai.wire import to_wire_embedding
+
     runner = ModelRunnerBase.__new__(ModelRunnerBase)
     runner.device = "cpu"
     runner._baseline_state = None
@@ -282,13 +272,18 @@ def test_embedding_handler_payload_reloads_via_conditionals_loader():
         input_audio=_b64(b"reference audio"),
     )
 
-    results = runner._execute_chatterbox_embedding([b"reference audio"], [_engine_request(request)])
+    inputs = [AudioArtifact.from_numpy(np.zeros(16000, dtype=np.float32), 16000)]
+    results = runner._execute_chatterbox_embedding(inputs, [_engine_request(request)])
 
     assert len(results) == 1
     output = results[0].result_data
     assert output.finish_reason == "stop"
+    # Internal hop: the conditionals object itself is attached (no serialization).
+    assert output.embedding_artifact is not None
+    assert output.embedding_artifact.conditionals is conditionals
 
-    reloaded = _load_conditionals_payload(output.output, "input_embedding")
+    # Wire boundary: the artifact serializes to the legacy 0-1-safe payload.
+    reloaded = _load_conditionals_payload(to_wire_embedding(output), "input_embedding")
     assert reloaded.t3.speaker_emb.shape == (1, 10)
     # Per-request state is restored to the baseline (None) after the handler.
     assert model.conds is None

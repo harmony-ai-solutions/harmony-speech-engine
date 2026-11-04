@@ -9,6 +9,7 @@ from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOu
 from harmonyspeech.common.utils import random_uuid
 from harmonyspeech.endpoints.openai.protocol import EmbedSpeakerRequest, EmbedSpeakerResponse, ErrorResponse, ModelCard
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_embedding
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling Embedding Requests here
@@ -51,9 +52,12 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
         request_id = f"emb-{random_uuid()}"
 
+        request_data = SpeechEmbeddingRequestInput.from_openai(request_id=request_id, request=request)
+        artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
-            request_data=SpeechEmbeddingRequestInput.from_openai(request_id=request_id, request=request),
+            request_data=request_data,
+            artifacts=artifacts,
         )
 
         try:
@@ -87,6 +91,10 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
             return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, SpeechEmbeddingRequestOutput)
 
-        response = EmbedSpeakerResponse(id=request_id, created=created_time, model=model_name, data=final_res.output)
+        # Serialize the speaker artifact at the boundary in the pre-Phase-2
+        # format (raw float32 / torch.save tensor / 0-1-safe conditionals).
+        response = EmbedSpeakerResponse(
+            id=request_id, created=created_time, model=model_name, data=to_wire_embedding(final_res)
+        )
 
         return response

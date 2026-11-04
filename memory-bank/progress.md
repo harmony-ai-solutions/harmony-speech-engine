@@ -6,6 +6,20 @@
 **Overall Completion**: ~75%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 2 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 2 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **2-1 Artifact type system** — `harmonyspeech/common/artifacts.py` (`AudioArtifact`, `MelArtifact`, `SpeakerArtifact`, `VadArtifact`), torch.Tensor waveforms (`[1, samples]` float32, `from_numpy`/`.numpy`), explicit `to(device)`, `EngineRequest.artifacts` + deterministic `clear_artifacts()` release on finish.
+- ✅ **2-2 Artifact fields & prepare_inputs** — precedence getters decode each inbound field once and cache it; every `prepare_*` returns artifacts; admission decode-once (`add_request` / `wire.from_wire_audio`); transient resampled views instead of per-rate caches.
+- ✅ **2-3 Executor artifact handlers** — all 8 hops converted (VAD→encoder, encoder→synth/TC, synth→TC, Chatterbox embed→TTS/VC, VoiceFixer restorer→vocoder, HarmonySpeech synth→vocoder, final outputs); output classes gained optional artifact slots; forwarding copies artifacts, not strings; device asserts + explicit moves; Chatterbox conditionals by reference. Removed `ensure_librosa_readable_bytes` from the pipeline; fixed Chatterbox's bundled default voice path.
+- ✅ **2-4 Boundary serialization & compatibility** — `endpoints/openai/wire.py` (`from_wire_audio`/`to_wire_audio`/`to_wire_embedding`), all six serving modules migrated, engine core free of wire encoding (pytest grep invariant), default WAV responses byte-identical, embed response format unchanged.
+- ✅ **2-5 Verification & benchmark** — `scripts/bench_pipeline_hops.py` + `docs/benchmarks/artifact-bus.md`; stub microbenchmark (VoiceFixer mel hop 25.4 ms → 0.005 ms/s of audio) and real-weight CPU runs; determinism: VoiceFixer/HarmonySpeech byte-identical, MeloTTS stochastic (Δduration 1.46 %).
+
+**Verification**: 346 unit + 23 integration green; wire-contract e2e 38 passed / 3 model-only skips. Real-model e2e ran green on CPU for HarmonySpeech, OpenVoice V1/V2, VoiceFixer, Chatterbox/Turbo, KittenTTS, Whisper STT, Silero/Whisper VAD. Outstanding: pre-Phase-2 hash-fixture comparison and CUDA numbers.
+
+**Next**: Phase 3 — declarative `PipelineSpec` routing.
+
 ## Engine Modernization — Phase 1 (COMPLETE, 2026-11-04)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 1 of a 6-phase modernization; `summary.md` tracks all phases)

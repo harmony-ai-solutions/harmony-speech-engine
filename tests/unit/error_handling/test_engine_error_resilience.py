@@ -21,8 +21,11 @@ Issue 2 — "Background loop has errored already"
 import base64
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
+from harmonyspeech.common import audio_codec
+from harmonyspeech.common.artifacts import AudioArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import (
     SpeechEmbeddingRequestInput,
@@ -77,9 +80,11 @@ def test_prepare_inputs_chatterbox_embedding_accepts_tts_request():
     # Must not raise ValueError
     inputs = prepare_inputs(config, [engine_req])
     assert len(inputs) == 1
-    # prepare_chatterbox_embedding_inputs returns boundary-normalised audio bytes
-    # (a native container such as WAV is passed through untouched).
-    assert inputs[0] == audio
+    # prepare_chatterbox_embedding_inputs returns the boundary-decoded artifact.
+    assert isinstance(inputs[0], AudioArtifact)
+    expected, expected_sr = audio_codec.decode_audio(audio)
+    assert inputs[0].sample_rate == expected_sr
+    np.testing.assert_allclose(inputs[0].numpy, expected, rtol=0, atol=0)
 
 
 @pytest.mark.unit
@@ -99,7 +104,8 @@ def test_prepare_inputs_chatterbox_embedding_accepts_embed_request():
 
     inputs = prepare_inputs(config, [engine_req])
     assert len(inputs) == 1
-    assert inputs[0] == audio
+    assert isinstance(inputs[0], AudioArtifact)
+    np.testing.assert_allclose(inputs[0].numpy, audio_codec.decode_audio(audio)[0], rtol=0, atol=0)
 
 
 @pytest.mark.unit

@@ -2,7 +2,6 @@
 
 import base64
 
-import numpy as np
 import pytest
 import torch
 
@@ -104,28 +103,35 @@ def test_voicefixer_prepare_names_source_field():
 
 
 def test_faster_whisper_prepare_resamples_to_16k(test_data_dir):
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     inputs = prepare_faster_whisper_inputs([_transcribe(_b64(_bytes(test_data_dir, "codec_tone.mp3")))])
-    waveform = inputs[0]
-    assert isinstance(waveform, np.ndarray)
-    assert waveform.dtype == np.float32
-    assert abs(waveform.size / 16000 - 1.0) < 0.05
+    artifact = inputs[0]
+    assert isinstance(artifact, AudioArtifact)
+    assert artifact.sample_rate == 16000
+    assert abs(artifact.duration_s - 1.0) < 0.05
 
 
-def test_silero_vad_prepare_returns_tensor_and_params(test_data_dir):
+def test_silero_vad_prepare_returns_artifact_and_params(test_data_dir):
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     request = DetectVoiceActivityRequestInput(
         request_id="vad-1",
         requested_model="vad",
         model="vad",
         input_audio=_b64(_bytes(test_data_dir, "codec_tone.wav")),
     )
-    (tensor, params), = prepare_silero_vad_inputs([request])
-    assert isinstance(tensor, torch.Tensor)
-    assert tensor.dtype == torch.float32
-    assert abs(tensor.numel() / 16000 - 1.0) < 0.05
+    (artifact, params), = prepare_silero_vad_inputs([request])
+    assert isinstance(artifact, AudioArtifact)
+    assert artifact.sample_rate == 16000
+    assert artifact.waveform.dtype == torch.float32
+    assert abs(artifact.duration_s - 1.0) < 0.05
     assert params["threshold"] == 0.5
 
 
-def test_voicefixer_prepare_returns_batched_tensor(test_data_dir):
+def test_voicefixer_prepare_returns_artifact(test_data_dir):
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     request = AudioConversionRequestInput(
         request_id="ac-1",
         requested_model="ac",
@@ -133,12 +139,16 @@ def test_voicefixer_prepare_returns_batched_tensor(test_data_dir):
         source_audio=_b64(_bytes(test_data_dir, "codec_tone.ogg")),
     )
     inputs = prepare_voicefixer_restorer_inputs([request])
-    assert inputs[0].shape[0] == 1  # batch
-    assert inputs[0].shape[1] == 1  # channels
-    assert abs(inputs[0].shape[2] / 44100 - 1.0) < 0.05
+    artifact = inputs[0]
+    assert isinstance(artifact, AudioArtifact)
+    assert artifact.sample_rate == 44100
+    assert artifact.waveform.shape[0] == 1  # mono batch axis
+    assert abs(artifact.duration_s - 1.0) < 0.05
 
 
-def test_encoder_prepare_returns_mel_frames(test_data_dir):
+def test_encoder_prepare_returns_audio_artifact(test_data_dir):
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     request = TextToSpeechRequestInput(
         request_id="tts-1",
         requested_model="hs",
@@ -149,7 +159,8 @@ def test_encoder_prepare_returns_mel_frames(test_data_dir):
     )
     inputs = prepare_harmonyspeech_encoder_inputs([request])
     assert len(inputs) == 1
-    assert inputs[0].ndim == 3  # [partials, frames, mel_channels]
+    assert isinstance(inputs[0], AudioArtifact)
+    assert inputs[0].num_samples > 0
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +173,10 @@ def test_chatterbox_embedding_passes_known_container_through(test_data_dir):
     request = SpeechEmbeddingRequestInput(
         request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(wav)
     )
-    (audio_bytes,) = prepare_chatterbox_embedding_inputs([request])
-    assert audio_bytes == wav  # untouched: no re-encode for a native container
+    (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
+    # Decoded exactly once at admission; re-encoding as WAV keeps the samples.
+    assert audio_artifact.to_wav_bytes()[:4] == b"RIFF"
+    assert audio_artifact.num_samples > 0
 
 
 def test_chatterbox_embedding_accepts_mp3(test_data_dir):
@@ -171,16 +184,15 @@ def test_chatterbox_embedding_accepts_mp3(test_data_dir):
     request = SpeechEmbeddingRequestInput(
         request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(mp3)
     )
-    (audio_bytes,) = prepare_chatterbox_embedding_inputs([request])
-    # Either passed through untouched (libsndfile reads MP3) or transcoded to WAV;
-    # both are readable by the upstream librosa-based loader.
+    (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
+    # The decoded artifact is re-wrapped as a WAV buffer for the upstream loader.
     import io
 
     import soundfile as sf
 
-    with sf.SoundFile(io.BytesIO(audio_bytes)) as handle:
-        assert handle.samplerate > 0
-        assert len(handle) > 0
+    with sf.SoundFile(io.BytesIO(audio_artifact.to_wav_bytes())) as handle:
+        assert handle.samplerate == audio_artifact.sample_rate
+        assert len(handle) == audio_artifact.num_samples
 
 
 @FFMPEG_ONLY
@@ -189,11 +201,14 @@ def test_chatterbox_embedding_accepts_aac(test_data_dir):
     request = SpeechEmbeddingRequestInput(
         request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(aac)
     )
-    (audio_bytes,) = prepare_chatterbox_embedding_inputs([request])
-    assert audio_bytes[:4] == b"RIFF"
+    (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
+    assert audio_artifact.to_wav_bytes()[:4] == b"RIFF"
+    assert audio_artifact.num_samples > 0
 
 
 def test_chatterbox_vc_target_audio_accepts_mp3(test_data_dir):
+    from harmonyspeech.common.artifacts import AudioArtifact
+
     mp3 = _bytes(test_data_dir, "codec_tone.mp3")
     request = VoiceConversionRequestInput(
         request_id="vc-1",
@@ -205,13 +220,9 @@ def test_chatterbox_vc_target_audio_accepts_mp3(test_data_dir):
         generation_options=None,
         output_options=None,
     )
-    source_bytes, conditionals, target_bytes = prepare_chatterbox_vc_inputs([request])[0]
-    assert source_bytes == target_bytes  # passthrough: libsndfile reads MP3 natively
+    source_artifact, conditionals, target_artifact = prepare_chatterbox_vc_inputs([request])[0]
+    assert isinstance(source_artifact, AudioArtifact)
+    assert isinstance(target_artifact, AudioArtifact)
     assert conditionals is None
-
-    import io
-
-    import soundfile as sf
-
-    with sf.SoundFile(io.BytesIO(source_bytes)) as handle:
-        assert handle.samplerate > 0
+    assert source_artifact.sample_rate > 0
+    assert source_artifact.num_samples == target_artifact.num_samples

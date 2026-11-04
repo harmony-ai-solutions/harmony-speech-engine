@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from harmonyspeech.common.artifacts import MelArtifact
 from harmonyspeech.common.inputs import SynthesisRequestInput, VocodeRequestInput
 from harmonyspeech.common.outputs import SpeechSynthesisRequestOutput, VocodeRequestOutput
 from harmonyspeech.endpoints.openai.protocol import (
@@ -31,7 +32,7 @@ async def _get_embedding(serving_embed, embed_req, mock_raw_request):
 
 
 async def _get_synthesis(engine, synth_req):
-    """Helper to run synthesis stage directly through engine."""
+    """Helper to run synthesis stage directly through engine (artifact contract)."""
     request_id = f"synth-{id(synth_req)}"
     result_generator = engine.generate(
         request_id=request_id, request_data=SynthesisRequestInput.from_openai(request_id, synth_req)
@@ -47,17 +48,23 @@ async def _get_synthesis(engine, synth_req):
     if not isinstance(final_res, SpeechSynthesisRequestOutput):
         raise TypeError(f"Expected SpeechSynthesisRequestOutput, got {type(final_res).__name__}")
 
-    if final_res.output is None or len(final_res.output) == 0:
-        raise ValueError("Synthesis output is empty")
+    # Phase 2: the mel travels as a typed artifact; nothing is serialized on the hop.
+    if final_res.mel_artifact is None:
+        raise ValueError("Synthesis mel_artifact is empty")
+    if final_res.output:
+        raise ValueError("Synthesis must not base64-encode its internal output")
 
-    return final_res.output
+    return final_res.mel_artifact
 
 
-async def _get_vocode(engine, vocode_req):
-    """Helper to run vocode stage directly through engine."""
+async def _get_vocode(engine, vocode_req, mel_artifact: MelArtifact):
+    """Helper to run vocode stage directly through engine, forwarding the artifact."""
     request_id = f"vocode-{id(vocode_req)}"
+    request_data = VocodeRequestInput.from_openai(request_id, vocode_req)
     result_generator = engine.generate(
-        request_id=request_id, request_data=VocodeRequestInput.from_openai(request_id, vocode_req)
+        request_id=request_id,
+        request_data=request_data,
+        artifacts={"input_audio": mel_artifact},
     )
 
     final_res = None
@@ -70,10 +77,12 @@ async def _get_vocode(engine, vocode_req):
     if not isinstance(final_res, VocodeRequestOutput):
         raise TypeError(f"Expected VocodeRequestOutput, got {type(final_res).__name__}")
 
-    if final_res.output is None or len(final_res.output) == 0:
-        raise ValueError("Vocode output is empty")
+    if final_res.audio_artifact is None:
+        raise ValueError("Vocode audio_artifact is empty")
+    if final_res.output:
+        raise ValueError("Vocode must not base64-encode its internal output")
 
-    return final_res.output
+    return final_res.audio_artifact
 
 
 @pytest.mark.e2e
@@ -141,10 +150,11 @@ def test_harmonyspeech_synthesize_stage(harmonyspeech_engine, mock_raw_request):
     # Then synthesize using the embedding
     synth_req = SynthesizeAudioRequest(model="hs1-synthesizer", input=TEXT_INPUT, input_embedding=embedding)
 
-    synth_output = asyncio.run(_get_synthesis(engine, synth_req))
+    mel_artifact = asyncio.run(_get_synthesis(engine, synth_req))
 
-    assert synth_output is not None, "Synthesis output is None"
-    assert len(synth_output) > 0, "Synthesis output is empty"
+    assert mel_artifact is not None, "Synthesis mel_artifact is None"
+    assert isinstance(mel_artifact, MelArtifact)
+    assert mel_artifact.frames > 0, "Synthesis mel has no frames"
 
 
 @pytest.mark.e2e
@@ -154,9 +164,9 @@ def test_harmonyspeech_vocode_stage(harmonyspeech_engine, mock_raw_request):
 
     This test directly invokes the vocoder stage:
     1. Get an embedding from the encoder stage
-    2. Run synthesis to get mel spectrogram
-    3. Run vocode with VocodeAudioRequest via engine.generate()
-    4. Returns base64-encoded final audio
+    2. Run synthesis to get the MelArtifact
+    3. Forward that artifact to the vocoder via engine.generate(artifacts=...)
+    4. Returns the final AudioArtifact
     """
     engine, serving_tts, serving_embed = harmonyspeech_engine
 
@@ -164,14 +174,13 @@ def test_harmonyspeech_vocode_stage(harmonyspeech_engine, mock_raw_request):
     embed_req = EmbedSpeakerRequest(model="hs1-encoder", input_audio=REFERENCE_AUDIO)
     embedding = asyncio.run(_get_embedding(serving_embed, embed_req, mock_raw_request))
 
-    # Synthesize to get mel spectrogram
+    # Synthesize to get the mel artifact
     synth_req = SynthesizeAudioRequest(model="hs1-synthesizer", input=TEXT_INPUT, input_embedding=embedding)
-    synth_output = asyncio.run(_get_synthesis(engine, synth_req))
+    mel_artifact = asyncio.run(_get_synthesis(engine, synth_req))
 
-    # Vocode the mel spectrogram
-    vocode_req = VocodeAudioRequest(model="hs1-vocoder", input_audio=synth_output)
+    # Vocode the mel artifact (Phase 2: artifact forwarded, not serialized)
+    vocode_req = VocodeAudioRequest(model="hs1-vocoder")
+    audio_artifact = asyncio.run(_get_vocode(engine, vocode_req, mel_artifact))
 
-    vocode_output = asyncio.run(_get_vocode(engine, vocode_req))
-
-    assert vocode_output is not None, "Vocode output is None"
-    assert len(vocode_output) > 0, "Vocode output is empty"
+    assert audio_artifact is not None, "Vocode audio_artifact is None"
+    assert audio_artifact.num_samples > 0, "Vocode audio is empty"

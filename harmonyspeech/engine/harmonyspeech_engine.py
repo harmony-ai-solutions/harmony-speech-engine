@@ -16,6 +16,7 @@ from harmonyspeech.common.inputs import (
     TextToSpeechRequestInput,
     VocodeRequestInput,
     VoiceConversionRequestInput,
+    prefill_audio_artifacts,
 )
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import (
@@ -37,6 +38,23 @@ from harmonyspeech.processing.pipeline_registry import (
 from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
+
+
+def _present(request, artifacts: dict | None, field: str) -> bool:
+    """True when ``field`` is supplied either as a legacy string or as an artifact.
+
+    Phase 2-3 forwards pipeline results as artifacts and deliberately leaves the
+    legacy string field ``None``; routing must therefore treat "artifact cached"
+    as "field present".
+    """
+    if getattr(request, field, None) is not None:
+        return True
+    return artifacts is not None and artifacts.get(field) is not None
+
+
+def _missing(request, artifacts: dict | None, field: str) -> bool:
+    return not _present(request, artifacts, field)
+
 
 
 class HarmonySpeechEngine:
@@ -145,11 +163,11 @@ class HarmonySpeechEngine:
         #     model_cfg.verify_with_parallel_config(self.parallel_config)
         return None
 
-    def reroute_request_harmonyspeech(self, request: RequestInput):
+    def reroute_request_harmonyspeech(self, request: RequestInput, artifacts: dict | None = None):
         if isinstance(request, SpeechEmbeddingRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is not None  #
-            and request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            and _present(request, artifacts, "input_audio")  #
+            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "HarmonySpeechEncoder":
@@ -157,8 +175,8 @@ class HarmonySpeechEngine:
                     break
         elif isinstance(request, SynthesisRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is None  # Removing Input audio after Embedding Step
-            and request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
+            and _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "HarmonySpeechSynthesizer":
@@ -166,15 +184,15 @@ class HarmonySpeechEngine:
                     break
         elif isinstance(request, VocodeRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is not None  # Output of synthesis becomes Input for vocoder
-            and request.input_embedding is not None
+            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for vocoder
+            and _present(request, artifacts, "input_embedding")
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "HarmonySpeechVocoder":
                     request.model = cfg.name
                     break
 
-    def reroute_request_openvoice_v1(self, request: RequestInput):
+    def reroute_request_openvoice_v1(self, request: RequestInput, artifacts: dict | None = None):
         """
         OpenVoice V1 uses a multi-step-embedding process for improving accuracy.
         This process involves retrieving VAD information for the provided audio if that's not provided.
@@ -192,14 +210,14 @@ class HarmonySpeechEngine:
             or (
                 isinstance(request, TextToSpeechRequestInput)
                 and request.mode == "voice_cloning"  # Only required when voice cloning
-                and request.input_audio is not None  #
-                and request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
-                and request.input_embedding is None  # Output of Embedding becomes input for synthesis
+                and _present(request, artifacts, "input_audio")  #
+                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
+                and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
             )
             or (
                 isinstance(request, SpeechEmbeddingRequestInput)
-                and request.input_audio is not None  #
-                and request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
+                and _present(request, artifacts, "input_audio")  #
+                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
             )
         ):
             for cfg in self.model_configs:
@@ -210,9 +228,9 @@ class HarmonySpeechEngine:
         elif isinstance(request, SpeechEmbeddingRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
             and request.mode == "voice_cloning"  # Only required when voice cloning
-            and request.input_audio is not None  #
-            and request.input_vad_data is not None  # VAD Data set, key condition for Embedding Action
-            and request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            and _present(request, artifacts, "input_audio")  #
+            and _present(request, artifacts, "input_vad_data")  # VAD Data set, key condition for Embedding Action
+            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "OpenVoiceV1ToneConverterEncoder":
@@ -220,9 +238,9 @@ class HarmonySpeechEngine:
                     break
         elif isinstance(request, SynthesisRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is None  # Removing Input audio after Embedding Step
+            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
             and (
-                request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
                 or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
             )
         ):
@@ -233,15 +251,15 @@ class HarmonySpeechEngine:
         elif isinstance(request, VoiceConversionRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
             and request.mode == "voice_cloning"  # Only required when voice cloning
-            and request.input_audio is not None  # Output of synthesis becomes Input for voice converter
-            and request.input_embedding is not None
+            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for voice converter
+            and _present(request, artifacts, "input_embedding")
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "OpenVoiceV1ToneConverter":
                     request.model = cfg.name
                     break
 
-    def reroute_request_openvoice_v2(self, request: RequestInput):
+    def reroute_request_openvoice_v2(self, request: RequestInput, artifacts: dict | None = None):
         """
         OpenVoice V2 uses a multi-step-embedding process for improving accuracy.
         This process involves retrieving VAD information for the provided audio if that's not provided.
@@ -259,14 +277,14 @@ class HarmonySpeechEngine:
             or (
                 isinstance(request, TextToSpeechRequestInput)
                 and request.mode == "voice_cloning"  # Only required when voice cloning
-                and request.input_audio is not None  #
-                and request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
-                and request.input_embedding is None  # Output of Embedding becomes input for synthesis
+                and _present(request, artifacts, "input_audio")  #
+                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
+                and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
             )
             or (
                 isinstance(request, SpeechEmbeddingRequestInput)
-                and request.input_audio is not None  #
-                and request.input_vad_data is None  # VAD Data not set, key condition for Transcribe Action
+                and _present(request, artifacts, "input_audio")  #
+                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
             )
         ):
             for cfg in self.model_configs:
@@ -277,9 +295,9 @@ class HarmonySpeechEngine:
         elif isinstance(request, SpeechEmbeddingRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
             and request.mode == "voice_cloning"  # Only required when voice cloning
-            and request.input_audio is not None  #
-            and request.input_vad_data is not None  # VAD Data set, key condition for Embedding Action
-            and request.input_embedding is None  # Output of Embedding becomes input for synthesis
+            and _present(request, artifacts, "input_audio")  #
+            and _present(request, artifacts, "input_vad_data")  # VAD Data set, key condition for Embedding Action
+            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "OpenVoiceV2ToneConverterEncoder":
@@ -287,9 +305,9 @@ class HarmonySpeechEngine:
                     break
         elif isinstance(request, SynthesisRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is None  # Removing Input audio after Embedding Step
+            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
             and (
-                request.input_embedding is not None  # Output of Embedding becomes input for synthesis
+                _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
                 or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
             )
         ):
@@ -300,22 +318,22 @@ class HarmonySpeechEngine:
         elif isinstance(request, VoiceConversionRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
             and request.mode == "voice_cloning"  # Only required when voice cloning
-            and request.input_audio is not None  # Output of synthesis becomes Input for voice converter
-            and request.input_embedding is not None
+            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for voice converter
+            and _present(request, artifacts, "input_embedding")
         ):
             for cfg in self.model_configs:
                 if cfg.model_type == "OpenVoiceV2ToneConverter":
                     request.model = cfg.name
                     break
 
-    def reroute_request_voicefixer(self, request: RequestInput):
+    def reroute_request_voicefixer(self, request: RequestInput, artifacts: dict | None = None):
         """
         VoiceFixer uses a two-step process for audio restoration:
         1. VoiceFixerRestorer: Audio → Enhanced Mel Spectrogram
         2. VoiceFixerVocoder: Enhanced Mel Spectrogram → Restored Audio
         """
         if isinstance(request, AudioConversionRequestInput):
-            if request.input_mel_spectrogram is None:
+            if _missing(request, artifacts, "input_mel_spectrogram"):
                 # Step 1: Route to Restorer (Audio → Mel)
                 for cfg in self.model_configs:
                     if cfg.model_type == "VoiceFixerRestorer":
@@ -328,7 +346,7 @@ class HarmonySpeechEngine:
                         request.model = cfg.name
                         break
 
-    def reroute_request_chatterbox(self, request: RequestInput):
+    def reroute_request_chatterbox(self, request: RequestInput, artifacts: dict | None = None):
         # Map sentinel name → TTS model_type
         _CHATTERBOX_TTS_TYPE_MAP = {
             "chatterbox": "ChatterboxTTS",
@@ -338,8 +356,8 @@ class HarmonySpeechEngine:
 
         if isinstance(request, SpeechEmbeddingRequestInput) or (
             isinstance(request, TextToSpeechRequestInput)
-            and request.input_audio is not None
-            and request.input_embedding is None
+            and _present(request, artifacts, "input_audio")
+            and _missing(request, artifacts, "input_embedding")
         ):
             # Prefer dedicated ChatterboxEmbedding executor if configured
             for cfg in self.model_configs:
@@ -356,7 +374,7 @@ class HarmonySpeechEngine:
                         break
         elif (
             isinstance(request, TextToSpeechRequestInput)
-            and (request.input_audio is None)  # direct path or Step 2 after embedding
+            and _missing(request, artifacts, "input_audio")  # direct path or Step 2 after embedding
         ):
             # Route to the appropriate TTS variant
             tts_type = _CHATTERBOX_TTS_TYPE_MAP.get(request.requested_model)
@@ -366,38 +384,86 @@ class HarmonySpeechEngine:
                         request.model = cfg.name
                         break
 
-    def reroute_request_chatterbox_vc(self, request: RequestInput):
+    def reroute_request_chatterbox_vc(self, request: RequestInput, artifacts: dict | None = None):
         if isinstance(request, VoiceConversionRequestInput):
             for cfg in self.model_configs:
                 if cfg.model_type == "ChatterboxVC":
                     request.model = cfg.name
                     break
 
-    def check_reroute_request_to_model(self, request: RequestInput):
+    def check_reroute_request_to_model(self, request: RequestInput, artifacts: dict | None = None):
         # Harmonyspeech TTS Processing
         if request.requested_model == "harmonyspeech":
-            self.reroute_request_harmonyspeech(request)
+            self.reroute_request_harmonyspeech(request, artifacts)
         # OpenVoice V1 TTS & VC Processing
         if request.requested_model == "openvoice_v1":
-            self.reroute_request_openvoice_v1(request)
+            self.reroute_request_openvoice_v1(request, artifacts)
         # OpenVoice V2 TTS & VC Processing
         if request.requested_model == "openvoice_v2":
-            self.reroute_request_openvoice_v2(request)
+            self.reroute_request_openvoice_v2(request, artifacts)
         # VoiceFixer Audio Conversion Processing
         if request.requested_model == "voicefixer":
-            self.reroute_request_voicefixer(request)
+            self.reroute_request_voicefixer(request, artifacts)
         # Chatterbox TTS (standard)
         if request.requested_model == "chatterbox":
-            self.reroute_request_chatterbox(request)
+            self.reroute_request_chatterbox(request, artifacts)
         # Chatterbox Turbo TTS
         if request.requested_model == "chatterbox_turbo":
-            self.reroute_request_chatterbox(request)
+            self.reroute_request_chatterbox(request, artifacts)
         # Chatterbox Multilingual TTS
         if request.requested_model == "chatterbox_multilingual":
-            self.reroute_request_chatterbox(request)
+            self.reroute_request_chatterbox(request, artifacts)
         # Chatterbox Voice Conversion
         if request.requested_model == "chatterbox_vc":
-            self.reroute_request_chatterbox_vc(request)
+            self.reroute_request_chatterbox_vc(request, artifacts)
+
+    def _find_engine_request(self, request_id: str):
+        """Return the in-flight ``EngineRequest`` for ``request_id`` (or ``None``)."""
+        scheduler = getattr(self, "scheduler", None)
+        for attr in ("waiting", "running"):
+            try:
+                queue = list(getattr(scheduler, attr, None) or [])
+            except TypeError:  # mocked scheduler in unit tests
+                continue
+            for request in queue:
+                if getattr(request, "request_id", None) == request_id:
+                    return request
+        return None
+
+    def _forwarding_artifacts(self, request_id: str) -> dict:
+        """Snapshot the current request's artifact store before it is released.
+
+        The finished request's ``clear_artifacts()`` runs in
+        ``update_request_status``; copying the dict first hands the artifact
+        references (not copies of the tensors) to the next pipeline step.
+        """
+        engine_request = self._find_engine_request(request_id)
+        artifacts = getattr(engine_request, "artifacts", None)
+        return dict(artifacts) if isinstance(artifacts, dict) else {}
+
+    def _resubmit_forward(
+        self,
+        result: ExecutorResult,
+        forwarding_request: RequestInput,
+        artifacts: dict,
+        *,
+        artifact_field: str | None = None,
+        artifact=None,
+        legacy_field: str | None = None,
+        legacy_value=None,
+        clear_fields: tuple[str, ...] = (),
+    ):
+        """Hand a request to the next pipeline step with artifacts attached."""
+        if artifact is not None and artifact_field is not None:
+            artifacts[artifact_field] = artifact
+        for field in clear_fields:
+            setattr(forwarding_request, field, None)
+            artifacts.pop(field, None)
+        if legacy_field is not None:
+            setattr(forwarding_request, legacy_field, legacy_value)
+        self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_FORWARDED)
+        self.add_request(result.request_id, forwarding_request, artifacts=artifacts or None)
+        return RequestStatus.FINISHED_FORWARDED, forwarding_request
 
     def check_forward_processing(self, result: ExecutorResult):
         new_status = RequestStatus.FINISHED_STOPPED
@@ -433,12 +499,19 @@ class HarmonySpeechEngine:
                 # Transcription results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
-                # Mark as forwarded in scheduler
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Transcription Step Finished, provide VAD Result Data for Embedding Step
-                forwarding_request.input_vad_data = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+                artifacts = self._forwarding_artifacts(result.request_id)
+                vad_artifact = getattr(result.result_data, "vad_artifact", None)
+                if vad_artifact is not None:
+                    artifacts["input_vad_data"] = vad_artifact
+                # ``input_vad_data`` is plain JSON text (not a serialized audio
+                # intermediate) and remains the routing signal until Phase 3.
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    legacy_field="input_vad_data",
+                    legacy_value=result.result_data.output,
+                )
 
         # Multi-Step TTS Processing (Harmonyspeech, OpenVoice)
         if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
@@ -452,38 +525,52 @@ class HarmonySpeechEngine:
                 # Transcription results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
-
-                # Mark as forwarded in scheduler
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Transcription Step Finished, provide VAD Result Data for Embedding Step
-                forwarding_request.input_vad_data = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+                artifacts = self._forwarding_artifacts(result.request_id)
+                vad_artifact = getattr(result.result_data, "vad_artifact", None)
+                if vad_artifact is not None:
+                    artifacts["input_vad_data"] = vad_artifact
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    legacy_field="input_vad_data",
+                    legacy_value=result.result_data.output,
+                )
             elif isinstance(result.result_data, SpeechEmbeddingRequestOutput):
                 # Embedding results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
                 # - Harmony Speech
-
-                # Mark as forwarded in scheduler
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Embedding step finished, update input data and continue with synthesis step
-                forwarding_request.input_audio = None
-                forwarding_request.input_embedding = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+                artifacts = self._forwarding_artifacts(result.request_id)
+                embedding_artifact = getattr(result.result_data, "embedding_artifact", None)
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    artifact_field="input_embedding",
+                    artifact=embedding_artifact,
+                    legacy_field="input_embedding",
+                    legacy_value=None if embedding_artifact is not None else result.result_data.output,
+                    clear_fields=("input_audio",),
+                )
             elif isinstance(result.result_data, SpeechSynthesisRequestOutput) and input_data.mode == "voice_cloning":
                 # Synthesis results used By:
                 # - OpenVoice V1
                 # - OpenVoice V2
                 # - Harmony Speech
-
-                # Mark as forwarded in scheduler
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Embedding step finished, update input data and continue with synthesis step
-                forwarding_request.input_audio = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+                artifacts = self._forwarding_artifacts(result.request_id)
+                audio_artifact = getattr(result.result_data, "audio_artifact", None)
+                mel_artifact = getattr(result.result_data, "mel_artifact", None)
+                pipeline_artifact = audio_artifact if audio_artifact is not None else mel_artifact
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    artifact_field="input_audio",
+                    artifact=pipeline_artifact,
+                    legacy_field="input_audio",
+                    legacy_value=None if pipeline_artifact is not None else result.result_data.output,
+                )
             else:  # There should be only final processing results here...
                 # Vocoding / Voice Conversion / Single Speaker TTS results used By:
                 # - OpenVoice V1
@@ -500,6 +587,7 @@ class HarmonySpeechEngine:
                     output=result.result_data.output,
                     finish_reason=result.result_data.finish_reason,
                     metrics=result.result_data.metrics if result.result_data.metrics else None,
+                    audio_artifact=getattr(result.result_data, "audio_artifact", None),
                 )
                 result.result_data = tts_result
 
@@ -512,29 +600,39 @@ class HarmonySpeechEngine:
             forwarding_request = input_data
 
             if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
-                # Embedding step finished — forward to TTS synthesize step
-                # Mark as forwarded in scheduler
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Embedding result becomes input_embedding; clear input_audio
-                forwarding_request.input_audio = None
-                forwarding_request.input_embedding = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+                # Embedding step finished — forward to TTS synthesize step. The
+                # Conditionals object travels by reference (no pickle round trip).
+                artifacts = self._forwarding_artifacts(result.request_id)
+                embedding_artifact = getattr(result.result_data, "embedding_artifact", None)
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    artifact_field="input_embedding",
+                    artifact=embedding_artifact,
+                    legacy_field="input_embedding",
+                    legacy_value=None if embedding_artifact is not None else result.result_data.output,
+                    clear_fields=("input_audio",),
+                )
 
         # Multi-Step Audio Conversion Processing (VoiceFixer)
         if isinstance(input_data, AudioConversionRequestInput) and requested_model == "voicefixer":
             forwarding_request = input_data
+            returning_model_type = getattr(returning_model_cfg, "model_type", None)
 
-            if (
-                isinstance(result.result_data, AudioConversionRequestOutput)
-                and input_data.input_mel_spectrogram is None
-            ):
-                # Restorer step finished, forward to Vocoder
-                new_status = RequestStatus.FINISHED_FORWARDED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Update request with mel spectrogram output from restorer
-                forwarding_request.input_mel_spectrogram = result.result_data.output
-                self.add_request(result.request_id, forwarding_request)
+            if isinstance(result.result_data, AudioConversionRequestOutput) and returning_model_type == "VoiceFixerRestorer":
+                # Restorer step finished, forward to Vocoder with the mel artifact
+                artifacts = self._forwarding_artifacts(result.request_id)
+                mel_artifact = getattr(result.result_data, "mel_artifact", None)
+                return self._resubmit_forward(
+                    result,
+                    forwarding_request,
+                    artifacts,
+                    artifact_field="input_mel_spectrogram",
+                    artifact=mel_artifact,
+                    legacy_field="input_mel_spectrogram",
+                    legacy_value=None if mel_artifact is not None else result.result_data.output,
+                )
             else:
                 # Vocoder step finished, mark as completed
                 new_status = RequestStatus.FINISHED_STOPPED
@@ -611,7 +709,13 @@ class HarmonySpeechEngine:
                 )
         return expired
 
-    def add_request(self, request_id: str, request_data: RequestInput, arrival_time: float | None = None) -> None:
+    def add_request(
+        self,
+        request_id: str,
+        request_data: RequestInput,
+        arrival_time: float | None = None,
+        artifacts: dict | None = None,
+    ) -> None:
         """Add a Text-to-Speech request to the engine's request pool.
 
         The request is added to the request pool and will be processed by the
@@ -623,6 +727,9 @@ class HarmonySpeechEngine:
             request_data: The incoming Request data.
             arrival_time: The arrival time of the request. If None, we use
                 the current monotonic time.
+            artifacts: Typed in-process artifacts carried over from a forwarding
+                step (Phase 2-3). When None, inbound audio/VAD fields are decoded
+                once here (Phase 2-2 admission decode).
 
         Details:
             - Set arrival_time to the current time if it is None.
@@ -635,8 +742,11 @@ class HarmonySpeechEngine:
         if arrival_time is None:
             arrival_time = time.monotonic()
 
-        # Route to correct model if necessary
-        self.check_reroute_request_to_model(request=request_data)
+        artifact_store = dict(artifacts) if artifacts else {}
+
+        # Route to correct model if necessary. Routing treats a cached artifact as
+        # a present field, so forwarded steps need no legacy string sentinel.
+        self.check_reroute_request_to_model(request=request_data, artifacts=artifact_store)
 
         model_executors = getattr(self, "model_executors", {})
         if request_data.model not in model_executors:
@@ -646,6 +756,11 @@ class HarmonySpeechEngine:
                 [RequestOutput(request_id=request_id, finish_reason="error", error=error)]
             )
             return
+
+        # Boundary decode-once: the wire-encoded audio fields are turned into typed
+        # artifacts exactly once, at admission. This is idempotent for forwarded
+        # requests (fields already cached are skipped).
+        artifact_store = prefill_audio_artifacts(request_data, artifact_store)
 
         timeout_s = getattr(self, "request_timeout_s", None)
         deadline = time.monotonic() + timeout_s if timeout_s else None
@@ -657,6 +772,7 @@ class HarmonySpeechEngine:
                 request_data=request_data,
                 arrival_time=arrival_time,
                 deadline=deadline,
+                artifacts=artifact_store,
             )
         )
 
