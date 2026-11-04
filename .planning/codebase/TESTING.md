@@ -1,386 +1,511 @@
+<!-- refreshed: 2026-11-02 -->
 # Testing Patterns
 
-_Last updated: 2026-03-11_
-
-## Overview
-
-The Harmony Speech Engine has a comprehensive three-tier test structure (unit, integration, E2E) with 80 passing tests and 80% overall coverage. All tiers are integrated into CI/CD. Tests use pytest with async support, mocking, and coverage reporting.
+**Analysis Date:** 2026-11-02
 
 ## Test Framework
 
-**Runner:** pytest
-- Version: Latest compatible with Python 3.12+
-- Configuration in `pyproject.toml`:
-  ```toml
-  [tool.pytest.ini_options]
-  testpaths = ["tests"]
-  asyncio_mode = "auto"
-  addopts = [
-      "--strict-markers",
-      "-ra",
-      "--cov=harmonyspeech",
-      "--cov-report=term-missing",
-      "--cov-report=xml",
-  ]
-  ```
+**Runner:** pytest (`pyproject.toml` → `[tool.pytest.ini_options]`)
 
-**Key Dependencies:**
-- `pytest` - Test runner
-- `pytest-asyncio` - Async test support (mode: auto)
-- `pytest-mock` - Mocking utilities
-- `pytest-cov` - Coverage reporting
-- `torch` - For device/dtype fixtures
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "-ra",
+]
+markers = [
+    "unit: marks tests as unit tests (fast, fully mocked)",
+    "integration: marks tests as integration tests (component interaction, partially mocked)",
+    "e2e: marks tests as end-to-end tests (real models, slow, CPU-only)",
+    "slow: marks tests that take > 30 seconds to run",
+]
+```
+
+**Key dependencies** (`requirements-common.txt`):
+- `pytest>=8.0.0`
+- `pytest-asyncio>=0.23.0` (mode: auto)
+- `pytest-mock>=3.12.0`
+- `pytest-cov>=5.0.0`
+- `torch` — device/dtype fixtures and tensor assertions
+- Chatterbox dependencies are installed separately: `pip install --no-deps -r requirements-chatterbox.txt` (`chatterbox-tts==0.1.6`)
+
+**Notes:**
+- Coverage is **not** in `addopts`; default runs are fast. Pass `--cov=...` explicitly when coverage is needed.
+- `--strict-markers` means an unregistered marker aborts the run. Register new markers in `pyproject.toml` before using them.
+- `asyncio_mode = "auto"` makes `async def` tests work without a marker. Some integration tests still include `@pytest.mark.asyncio`; that is harmless and accepted.
 
 ## Test Directory Structure
 
 ```
 tests/
-├── conftest.py              # Root: CLI hooks, shared fixtures
-├── test-data/               # Binary test assets (audio files, configs)
+├── conftest.py                          # CLI options (--device/--dtype), shared fixtures
+├── test-data/
+│   └── samples/                         # WAV assets used by E2E voice-cloning tests
+│       ├── wanda4.wav                   # short (<5 s)
+│       ├── wanda5.wav                   # short (<5 s)
+│       ├── wanda6.wav                   # short (<5 s)
+│       └── jerry_seinfeld_prompt.wav    # long (~32 s)
 ├── unit/
-│   ├── conftest.py          # Unit fixtures (mock_model_loader, mock_hf_downloader)
-│   ├── __init__.py
+│   ├── conftest.py                      # mock_model_loader, mock_hf_downloader
+│   ├── error_handling/
+│   │   ├── test_config_errors.py
+│   │   └── test_engine_error_resilience.py
+│   ├── inference_flow/
+│   │   ├── test_chatterbox_inputs.py
+│   │   ├── test_chatterbox_no_tempfile.py
+│   │   ├── test_chatterbox_routing.py
+│   │   └── test_loader.py
 │   ├── initialization/
+│   │   ├── test_chatterbox_imports.py
 │   │   ├── test_config.py
 │   │   └── test_engine.py
-│   ├── inference_flow/
-│   │   └── test_loader.py
-│   └── error_handling/
-│       └── test_config_errors.py
+│   └── modeling/
+│       ├── test_chatterbox_registry.py
+│       └── test_hf_downloader.py
 ├── integration/
-│   ├── conftest.py          # Integration fixtures (mock_engine_app, test_app)
-│   ├── __init__.py
+│   ├── conftest.py                      # test_app, mock_engine_app
 │   ├── test_api_endpoints.py
+│   ├── test_chatterbox_flow.py
 │   └── test_cli.py
 └── e2e/
-    ├── conftest.py          # E2E fixtures (engine fixtures, models_cache_dir)
-    ├── __init__.py
-    ├── stt/
-    │   └── test_whisper.py
+    ├── conftest.py                      # engine fixtures, model cache, helpers, auto e2e marker
+    ├── stt/test_whisper.py
     ├── tts/
+    │   ├── test_chatterbox.py
+    │   ├── test_chatterbox_multilingual.py
+    │   ├── test_chatterbox_turbo.py
+    │   ├── test_harmonyspeech.py
     │   ├── test_kittentts.py
     │   ├── test_melotts.py
-    │   ├── test_openvoice_v1.py
-    │   └── test_harmonyspeech.py
+    │   └── test_openvoice_v1.py
     ├── vad/
     │   ├── test_silero_vad.py
     │   └── test_whisper_vad.py
-    └── audio_restoration/
-        └── test_voicefixer.py
+    └── audio_restoration/test_voicefixer.py
 ```
+
+**Current size (2026-11-02):** 174 test functions — 112 unit, 23 integration, 39 E2E. (Count excludes fixtures/helpers named `test_*` in `conftest.py`.)
 
 ## Test Tiers
 
 | Tier | Speed | Mocking | Use Case |
 |------|-------|---------|----------|
-| `unit` | Fast (<1s) | Full mocking | Logic in isolation — config parsing, data transformations |
-| `integration` | Medium (1-30s) | Partial (no real models) | API endpoints, CLI, component wiring |
-| `e2e` | Slow (minutes) | None (real models) | Full inference pipelines with actual model output |
+| `unit` | Fast (<1 s) | Full mocking | Routing, config parsing, input preparation, serialization, registry |
+| `integration` | Medium (1–30 s) | Serving layer mocked, no real models | API endpoints, CLI, serving-handler lifecycles |
+| `e2e` | Slow (minutes) | None (real models) | Full inference with real weights and real audio |
 
-**Test Markers:**
-- `@pytest.mark.unit` - Unit tests
-- `@pytest.mark.integration` - Integration tests
-- `@pytest.mark.e2e` - End-to-end tests (auto-applied to `tests/e2e/`)
-- `@pytest.mark.slow` - Tests taking >30 seconds
+**Markers:**
+- `@pytest.mark.unit` — unit tests
+- `@pytest.mark.integration` — integration tests
+- `@pytest.mark.e2e` — E2E tests; auto-applied by `pytest_collection_modifyitems` in `tests/e2e/conftest.py:472-476`
+- `@pytest.mark.slow` — tests > 30 s
+
+Newer E2E files use a module-level marker list instead of decorating each test:
+
+```python
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+```
+
+(`tests/e2e/tts/test_chatterbox.py`, `test_chatterbox_turbo.py`, `test_chatterbox_multilingual.py`)
 
 ## Running Tests
 
-### Basic Commands
+### Basic commands
 
 ```bash
-# Run all tests (CPU mode, default)
+# All tests (CPU, no coverage)
 pytest
 
-# Run specific tier
+# One tier
 pytest tests/unit/
 pytest tests/integration/
 pytest tests/e2e/
 
-# Run by marker
-pytest -m unit              # Only unit tests
-pytest -m "not e2e"         # Skip E2E tests
-pytest -m e2e               # Only E2E tests
-pytest -m "not slow"        # Skip slow tests
+# By marker
+pytest -m unit
+pytest -m "not e2e"
+pytest -m e2e
+pytest -m "not slow"
 ```
 
-### Device and dtype Options
-
-The test suite supports hardware-specific testing via CLI flags:
+### Device and dtype
 
 ```bash
-# Override device (defaults to cpu)
-pytest --device=cuda        # Requires CUDA availability
-
-# Override dtype (defaults to float32)
-pytest --dtype=float16
+pytest --device=cpu --dtype=float32      # defaults
+pytest --device=cuda                     # fails fast if CUDA is unavailable
+pytest --device=cuda --dtype=float16
 ```
 
 | Flag | Default | Values | Description |
 |------|---------|--------|-------------|
-| `--device` | `cpu` | `cpu`, `cuda` | Target device for tensor operations |
+| `--device` | `cpu` | `cpu`, `cuda` | Target device; used by Chatterbox engine fixtures and future device-aware fixtures |
 | `--dtype` | `float32` | `float32`, `float16` | Default tensor dtype |
 
-> **Strict Validation:** If `--device=cuda` is passed on a machine without CUDA, the test suite exits immediately with an error. This prevents silent failures.
+`pytest_configure` in `tests/conftest.py:28-34` calls `pytest.exit(..., returncode=1)` when `--device=cuda` is requested without CUDA. Do not weaken this guard.
 
-### Run Specific Model E2E Tests
+### Coverage
 
 ```bash
-pytest -k "whisper" tests/e2e/ --device=cpu --dtype=float32
-pytest -k "kittentts" tests/e2e/ --device=cpu --dtype=float32
-pytest -k "voicefixer" tests/e2e/ --device=cpu --dtype=float32
-pytest -k "vad" tests/e2e/ --device=cpu --dtype=float32
+pytest --cov=harmonyspeech --cov-report=term-missing --cov-report=xml
+pytest --cov=harmonyspeech --cov-report=html
 ```
 
-## Root Fixtures (tests/conftest.py)
+### Targeted Chatterbox runs
 
-These fixtures are available to all tests:
+```bash
+# Unit only
+pytest tests/unit/inference_flow/test_chatterbox_routing.py
+pytest tests/unit/inference_flow/test_chatterbox_inputs.py
+pytest tests/unit/error_handling/test_engine_error_resilience.py
+
+# Integration
+pytest tests/integration/test_chatterbox_flow.py
+
+# E2E by variant (mirrors CI selectors)
+pytest -k "chatterbox and not turbo and not multilingual" tests/e2e/ --device=cpu --dtype=float32
+pytest -k "chatterbox_turbo" tests/e2e/ --device=cpu --dtype=float32
+pytest -k "chatterbox_multilingual" tests/e2e/ --device=cpu --dtype=float32
+```
+
+`--no-cov` appears in some CI commands for legacy reasons. Because coverage is no longer in `addopts`, it is a no-op unless `pytest-cov` options are supplied.
+
+## Root Fixtures (`tests/conftest.py`)
 
 | Fixture | Scope | Description |
 |---------|-------|-------------|
-| `device` | session | Target device string from `--device` flag |
-| `dtype` | session | Target dtype string from `--dtype` flag |
-| `tests_root` | session | `Path` to the `tests/` directory |
+| `device` | session | `--device` value (`"cpu"` / `"cuda"`) |
+| `dtype` | session | `--dtype` value (`"float32"` / `"float16"`) |
+| `tests_root` | session | `Path` to `tests/` |
 | `test_data_dir` | session | `Path` to `tests/test-data/` |
-| `sample_config` | function | Minimal valid model config dict |
+| `sample_config` | function | Minimal valid model config dict for parser tests |
 
-**CLI Hooks:**
-- `pytest_addoption` - Registers `--device` and `--dtype` options
-- `pytest_configure` - Validates CUDA availability early
+**CLI hooks:** `pytest_addoption` registers `--device`/`--dtype`; `pytest_configure` validates CUDA availability.
 
-## Unit Test Fixtures (tests/unit/conftest.py)
+## Unit Fixtures (`tests/unit/conftest.py`)
 
 | Fixture | Description |
 |---------|-------------|
-| `mock_model_loader` | Returns MagicMock for `harmonyspeech.modeling.loader.get_model_class` |
-| `mock_hf_downloader` | Patches HuggingFace Hub download to prevent network calls |
+| `mock_model_loader` | Patches `harmonyspeech.modeling.loader.get_model_class` with a `MagicMock` |
+| `mock_hf_downloader` | Patches `harmonyspeech.modeling.hf_downloader.download_model` to avoid network calls |
 
-## Integration Test Fixtures (tests/integration/conftest.py)
+Additional local fixtures are defined per file, e.g. `cpu_device` in `tests/unit/initialization/test_config.py`, and cache-clearing fixtures in `tests/unit/modeling/test_hf_downloader.py`:
+
+```python
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    """Clear caches before and after each test for isolation."""
+    _config_cache.clear()
+    _file_cache.clear()
+    yield
+    _config_cache.clear()
+    _file_cache.clear()
+```
+
+## Integration Fixtures (`tests/integration/conftest.py`)
 
 | Fixture | Scope | Description |
 |---------|-------|-------------|
-| `test_app` | module | FastAPI TestClient for API endpoint tests |
-| `mock_engine_app` | module | TestClient with all serving module globals mocked |
+| `test_app` | module | `TestClient` built from the real `api_server.app`; no model loading |
+| `mock_engine_app` | module | `TestClient` built with all serving-module globals patched |
 
-The `mock_engine_app` fixture patches all 7 serving module globals:
+`mock_engine_app` patches eight `harmonyspeech.endpoints.openai.api_server` globals:
 - `openai_serving_tts`, `openai_serving_stt`, `openai_serving_vc`
 - `openai_serving_embedding`, `openai_serving_vad`, `openai_serving_ac`
 - `engine`, `engine_args`
 
-## E2E Test Fixtures (tests/e2e/conftest.py)
+Each mocked serving object exposes async `create_*`, `get_model_list`, and `show_available_models`, plus `engine.check_health`. The app is built with `build_app(parser.parse_args([]))`, so CLI defaults must remain valid for an empty argument list.
 
-### Engine Fixtures
+## E2E Fixtures (`tests/e2e/conftest.py`)
 
-| Fixture | Scope | Description |
-|---------|-------|-------------|
-| `kittentts_mini_engine` | session | KittenTTS mini variant engine |
-| `kittentts_micro_engine` | session | KittenTTS micro variant engine |
-| `kittentts_nano_engine` | session | KittenTTS nano variant engine |
-| `kittentts_nano_int8_engine` | session | KittenTTS nano int8 variant engine |
-| `melotts_en_engine` | session | MeloTTS / OpenVoice V2 engine |
-| `openvoice_v1_en_engine` | session | OpenVoice V1 engine |
-| `harmonyspeech_engine` | session | HarmonySpeech v1 engine |
-| `whisper_engine` | session | FasterWhisper STT engine |
-| `vad_engine` | session | SileroVAD engine |
-| `whisper_vad_engine` | session | Whisper-based VAD engine |
-| `voicefixer_engine` | session | VoiceFixer audio restoration engine |
+### Engine fixtures
 
-### Helper Fixtures
+| Fixture | Scope | Returns | Notes |
+|---------|-------|---------|-------|
+| `kittentts_mini_engine` | session | `(engine, serving_tts)` | `KittenML/kitten-tts-mini-0.8` |
+| `kittentts_micro_engine` | session | `(engine, serving_tts)` | micro variant |
+| `kittentts_nano_engine` | session | `(engine, serving_tts)` | nano fp32 variant |
+| `kittentts_nano_int8_engine` | session | `(engine, serving_tts)` | nano int8 variant |
+| `melotts_en_engine` | module | `(engine, serving_tts, serving_embed, serving_vc)` | MeloTTS + OpenVoice V2 (4 models) |
+| `openvoice_v1_en_engine` | module | `(engine, serving_tts, serving_embed, serving_vc)` | OpenVoice V1 (4 models) |
+| `harmonyspeech_engine` | module | `(engine, serving_tts, serving_embed)` | encoder + synthesizer + vocoder |
+| `whisper_engine` | module | `(engine, serving_stt)` | `Systran/faster-whisper-tiny` |
+| `vad_engine` | module | `(engine, serving_vad)` | SileroVAD |
+| `whisper_vad_engine` | module | `(engine, serving_vad)` | FasterWhisper used for VAD |
+| `voicefixer_engine` | module | `(engine, serving_audio)` | restorer + vocoder |
+| `chatterbox_engine` | module | `(engine, serving_tts, serving_embed, serving_vc)` | `ChatterboxTTS` + `ChatterboxVC` |
+| `chatterbox_turbo_engine` | module | `(engine, serving_tts, serving_embed)` | `ChatterboxTurboTTS` + `ChatterboxEmbedding` |
+| `chatterbox_multilingual_engine` | module | `(engine, serving_tts, serving_embed)` | `ChatterboxMultilingualTTS` + `ChatterboxEmbedding` |
 
-| Fixture | Scope | Description |
-|---------|-------|-------------|
-| `models_cache_dir` | session | Temp directory for model weight caching |
-| `mock_raw_request` | session | Mock FastAPI Request for serving handler calls |
+All engine fixtures construct `ModelConfig` → `EngineConfig` → `AsyncEngineArgs` → `AsyncHarmonySpeech.from_engine_args_and_config(...)`, then instantiate the serving handler with `models_from_config(...)`. Follow this shape for a new model.
 
-### Test Data Helpers
+**Device behavior:** the three Chatterbox fixtures consume the `device` fixture (`DeviceConfig(device=device)`), so they run on CPU or CUDA. Older model fixtures hardcode `DeviceConfig(device="cpu")`; changing them to device-aware is a per-model decision, not a blanket change.
 
-| Function | Description |
-|----------|-------------|
-| `make_silent_wav_b64()` | Generate minimal silent WAV as base64 |
-| `load_sample_audio_b64()` | Load WAV from `tests/test-data/samples/` |
+### Helper fixtures and functions
 
-### Automatic E2E Marker
+| Name | Scope | Description |
+|------|-------|-------------|
+| `models_cache_dir` | session | Returns `HF_HOME` (default `~/.cache/huggingface`) and ensures `<HF_HOME>/hub` exists; does not create a temp dir |
+| `mock_raw_request` | session | `MagicMock` FastAPI request with async `is_disconnected()` returning `False` |
+| `make_silent_wav_b64(sample_rate=24000, duration_secs=1)` | function | Generates a silent mono 16-bit WAV as base64 |
+| `load_sample_audio_b64(sample_name="wanda4")` | function | Reads `tests/test-data/samples/<name>.wav` and returns base64 |
 
-The `pytest_collection_modifyitems` hook automatically marks all tests in `tests/e2e/` with `@pytest.mark.e2e`.
+E2E tests import helpers explicitly:
+
+```python
+from tests.e2e.conftest import load_sample_audio_b64
+```
+
+This requires the repository root on `sys.path` (running pytest from the repo root).
 
 ## Test Structure Patterns
 
-### Unit Test Example
+### Unit: routing without real models
 
-From `tests/unit/initialization/test_config.py`:
-
-```python
-"""Unit tests for harmonyspeech/common/config.py — DeviceConfig, ModelConfig, EngineConfig."""
-import pytest
-import torch
-from harmonyspeech.common.config import DeviceConfig, ModelConfig, EngineConfig
-
-
-def test_device_config_explicit_cpu():
-    cfg = DeviceConfig("cpu")
-    assert cfg.device_type == "cpu"
-    assert cfg.device == torch.device("cpu")
-
-
-def test_device_config_auto_falls_back_to_cpu(monkeypatch):
-    """When CUDA unavailable and is_cpu() returns True, device_type is 'cpu'."""
-    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
-    monkeypatch.setattr("harmonyspeech.common.config.is_cpu", lambda: True)
-    cfg = DeviceConfig("auto")
-    assert cfg.device_type == "cpu"
-
-
-def test_model_config_invalid_dtype_raises(cpu_device):
-    with pytest.raises(ValueError, match="Unknown dtype"):
-        ModelConfig(
-            name="t", model="m", model_type="MeloTTSSynthesizer",
-            max_batch_size=1, device_config=cpu_device, dtype="invalid_dtype",
-        )
-```
-
-### Integration Test Example
-
-From `tests/integration/test_api_endpoints.py`:
+`tests/unit/inference_flow/test_chatterbox_routing.py` builds an engine shell and `MagicMock(spec=ModelConfig)` configs. This is the standard way to test engine dispatch cheaply:
 
 ```python
-"""Integration tests for OpenAI-compatible API endpoints."""
-import pytest
+def _make_model_config(name: str, model_type: str) -> ModelConfig:
+    cfg = MagicMock(spec=ModelConfig)
+    cfg.name = name
+    cfg.model_type = model_type
+    return cfg
 
 
-@pytest.fixture(scope="module")
-def client(mock_engine_app):
-    """Provides the mocked TestClient for API endpoint tests."""
-    return mock_engine_app
-
-
-def test_health(client):
-    """Test GET /health returns 200 with health status JSON."""
-    response = client.get("/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert "text_to_speech" in data
-    assert "speech_to_text" in data
-
-
-def test_tts_request_cycle(client):
-    """Test POST /v1/audio/speech with valid body returns 200 with base64 audio."""
-    response = client.post(
-        "/v1/audio/speech",
-        json={"model": "test-tts-model", "input": "Hello world"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "audio" in data or "data" in data
+def _make_engine(*model_configs) -> HarmonySpeechEngine:
+    engine = HarmonySpeechEngine.__new__(HarmonySpeechEngine)
+    engine.model_configs = list(model_configs)
+    engine.scheduler = MagicMock()
+    return engine
 ```
+
+Rules:
+- Use `__new__` to bypass `__init__` when the constructor would load models.
+- Set only the attributes the method under test reads.
+- Use `MagicMock(spec=...)` so typos and unexpected attributes fail.
+
+### Unit: input preparation and option validation
+
+`tests/unit/inference_flow/test_chatterbox_inputs.py` covers defaults, unsupported-option rejection, conflict validation, and language codes. It uses `MagicMock` requests plus real `TextToSpeechGenerationOptions` / `GenerationOptions` objects:
+
+```python
+def test_tts_rejects_top_k():
+    opts = GenerationOptions(top_k=500)
+    req = _make_tts_request(generation_options=opts)
+    with pytest.raises(ValueError, match="top_k"):
+        prepare_chatterbox_tts_inputs([req])
+```
+
+The file also demonstrates the optional-import guard used when a test must be collectible before an implementation exists:
+
+```python
+try:
+    from harmonyspeech.task_handler.inputs import prepare_chatterbox_tts_inputs
+    PREPARE_FUNCTIONS_AVAILABLE = True
+except ImportError:
+    PREPARE_FUNCTIONS_AVAILABLE = False
+
+@pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
+```
+
+Do not add new guards for APIs that already exist.
+
+### Unit: asserting no filesystem I/O
+
+`tests/unit/inference_flow/test_chatterbox_no_tempfile.py` patches `builtins.open`, `tempfile.NamedTemporaryFile`, and `tempfile.mkstemp`, then asserts none were called. It also patches `io.BytesIO` with a tracking wrapper to prove in-memory processing:
+
+```python
+with (
+    patch("builtins.open") as mock_open,
+    patch("tempfile.NamedTemporaryFile") as mock_tmp,
+    patch("tempfile.mkstemp") as mock_mkstemp,
+):
+    try:
+        runner._execute_chatterbox_embedding(inputs, requests)
+    except Exception:
+        pass  # only file I/O behavior is under test
+    mock_open.assert_not_called()
+    mock_tmp.assert_not_called()
+    mock_mkstemp.assert_not_called()
+```
+
+Swallowing exceptions is acceptable only when the assertion target is a side effect (I/O, call count). Do not swallow exceptions when asserting output values.
+
+### Integration: serving-layer lifecycle with AsyncMock
+
+`tests/integration/test_chatterbox_flow.py` mocks the serving handlers and asserts response types/data:
+
+```python
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_chatterbox_tts_direct(mock_chatterbox_serving):
+    serving_tts, _, _ = mock_chatterbox_serving
+    request = TextToSpeechRequest(model="chatterbox", input="Hello world", mode="single_speaker_tts")
+    response = await serving_tts.create_text_to_speech(request, mock_raw_request)
+    assert response is not None
+    assert hasattr(response, "data")
+```
+
+Note: this file mocks the serving object itself, so it verifies the request/response contract, not routing. Routing is covered in unit tests.
+
+### E2E: real inference, response-type assertions
+
+Sync tests call async serving methods with `asyncio.run` and validate both type and payload:
+
+```python
+def test_chatterbox_tts_no_cloning(chatterbox_engine, mock_raw_request):
+    engine, serving_tts, _, _ = chatterbox_engine
+    request = TextToSpeechRequest(model="chatterbox", input=TEXT_INPUT, mode="single_speaker_tts")
+    response = asyncio.run(serving_tts.create_text_to_speech(request, mock_raw_request))
+    assert isinstance(response, TextToSpeechResponse), f"Got: {response}"
+    assert response.data
+    assert len(base64.b64decode(response.data)) > 0
+```
+
+Always include the actual response in the assertion message — E2E failures frequently return an `ErrorResponse` instead of audio.
+
+### E2E: regression tests for upstream failures
+
+Newer Chatterbox E2E tests document the bug they lock down in the docstring and, where relevant, assert engine recovery:
+
+```python
+def test_chatterbox_turbo_embedding_short_audio_returns_error(chatterbox_turbo_engine, mock_raw_request):
+    """Turbo embedding with audio < 5s returns 400 ErrorResponse; engine survives to serve next request."""
+    ...
+    assert isinstance(bad_response, ErrorResponse)
+    recovery_response = asyncio.run(serving_tts.create_text_to_speech(recovery_request, mock_raw_request))
+    assert isinstance(recovery_response, TextToSpeechResponse)
+```
+
+When fixing a production bug, add a test in the tier where it can fail deterministically, and include the original exception text in the docstring.
+
+## Chatterbox Test Coverage Map
+
+| File | Protects |
+|------|----------|
+| `tests/unit/initialization/test_chatterbox_imports.py` | `perth`, `pyloudnorm`, `ChatterboxTTS`, `ChatterboxVC`, `ChatterboxMultilingualTTS`, `ChatterboxTurboTTS`, 23+ language codes importable |
+| `tests/unit/modeling/test_chatterbox_registry.py` | All five Chatterbox architectures registered; `load_model_cls` returns `"native"` for TTS/VC |
+| `tests/unit/inference_flow/test_chatterbox_routing.py` | Sentinel model IDs map to variants; embedding fallback; multi-step embed→TTS forwarding; VC routing |
+| `tests/unit/inference_flow/test_chatterbox_inputs.py` | Generation-option fields/defaults; unsupported-option `ValueError`; audio/embedding conflict; language defaults; embedding/VC tuple shapes |
+| `tests/unit/inference_flow/test_chatterbox_no_tempfile.py` | No `open()`/`tempfile` in Chatterbox TTS and embedding execution; `io.BytesIO` used |
+| `tests/unit/error_handling/test_engine_error_resilience.py` | Embedding accepts `TextToSpeechRequestInput`; prepare failures become per-request errors; error results are not forwarded; `engine_step` survives `step_async` exceptions and aborts failed requests |
+| `tests/integration/test_chatterbox_flow.py` | Serving-layer TTS/embed/VC request contracts for Chatterbox model IDs |
+| `tests/e2e/tts/test_chatterbox.py` | Real `ChatterboxTTS` + `ChatterboxVC`: direct TTS, precomputed embedding, voice cloning, standalone embedding, VC with target audio/embedding |
+| `tests/e2e/tts/test_chatterbox_turbo.py` | `ChatterboxTurboTTS`: direct TTS, ≥5 s embedding requirement, precomputed embedding, short-audio error + engine recovery |
+| `tests/e2e/tts/test_chatterbox_multilingual.py` | Multilingual TTS (English), embedding without `language` attribute on request, precomputed embedding path |
 
 ## Mocking Patterns
 
-### What to Mock (Unit Tests)
-- External API calls (HuggingFace model downloads)
-- GPU/torch operations (for CPU-only testing)
-- File I/O operations
-- Network requests
+**Framework:** `unittest.mock` + `pytest.monkeypatch`, with `pytest-mock` available but rarely used.
 
-### What NOT to Mock (E2E Tests)
-- Core business logic that needs validation
-- Configuration parsing
-- Model loading (real model tests)
-- Actual inference output
+**What to mock:**
+- HuggingFace Hub calls (`harmonyspeech.modeling.hf_downloader.download_model`, `snapshot_download`)
+- Model classes and instances (`MagicMock`, `MagicMock(spec=...)`)
+- Serving module globals in `harmonyspeech.endpoints.openai.api_server`
+- File I/O when asserting in-memory behavior (`builtins.open`, `tempfile.*`)
+- `torch.cuda.is_available` and device detection helpers with `monkeypatch.setattr`
 
-### Using monkeypatch
+**What NOT to mock:**
+- Input preparation logic and option validation (unit tests exercise the real functions)
+- Routing decisions in `HarmonySpeechEngine` (only configs/model execution are mocked)
+- Configuration parsing and dtype resolution
+- E2E inference output (real models)
+
+**monkeypatch example** (`tests/unit/initialization/test_config.py`):
 
 ```python
 def test_device_config_auto_no_device_raises(monkeypatch):
-    """When neither CUDA nor CPU available, RuntimeError is raised."""
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
     monkeypatch.setattr("harmonyspeech.common.config.is_cpu", lambda: False)
     with pytest.raises(RuntimeError):
         DeviceConfig("auto")
 ```
 
+**Patch target rule:** patch where the name is looked up, not where it is defined. `mock_model_loader` patches `harmonyspeech.modeling.loader.get_model_class`; `_build_error_result` tests patch `harmonyspeech.task_handler.model_runner_base.prepare_inputs`.
+
+**Async mocks:** use `AsyncMock` for coroutine methods (`check_health`, `create_text_to_speech`, `step_async`) and plain `MagicMock` for sync attributes.
+
 ## Coverage
 
-**Requirements:** Not currently enforced, but coverage is collected.
+**Requirements:** none enforced. Coverage is collected only when requested and uploaded as an artifact in CI.
 
-**Coverage Configuration in `pyproject.toml`:**
+**Configuration** (`pyproject.toml`):
+
 ```toml
 [tool.coverage.run]
 omit = [
     "harmonyspeech/modeling/models/*",
 ]
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "def __repr__",
-    "raise AssertionError",
-    "raise NotImplementedError",
-]
 ```
 
-**View Coverage:**
-```bash
-# Terminal output (default with --cov)
-pytest --cov=harmonyspeech --cov-report=term-missing
+**Coverage exclusions:**
+- `harmonyspeech/modeling/models/*` — vendored/adapted model implementations are excluded.
+- `.coverage`, `coverage.xml`, and `htmlcov/` are gitignored; prior artifacts exist at the repo root but are not authoritative for current coverage.
 
-# HTML report
-pytest --cov=harmonyspeech --cov-report=html
-open htmlcov/index.html   # macOS
-xdg-open htmlcov/index.html  # Linux
-```
-
-**Coverage Exclusions:**
-- `harmonyspeech/modeling/models/*` - Third-party model code
-- Deprecation warnings and user warnings are filtered
+**Configuration quirk:** `filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]` is currently nested under `[tool.coverage.run]` in `pyproject.toml`, where pytest does not read it. If warning filtering is needed, move it into `[tool.pytest.ini_options]`. Do not assume warnings are suppressed.
 
 ## CI Pipeline
 
-From `.github/workflows/test.yml`:
+`.github/workflows/test.yml` runs on every push and pull request.
 
-### Jobs
-
-1. **test** - Unit & Integration Tests
-   - Runs: `pytest --device=cpu --dtype=float32 -v --tb=short -m "not e2e"`
-   - Uploads `coverage.xml` artifact
-
-2. **lint** - Code Quality
-   - Runs: `black --check --diff harmonyspeech/ tests/`
-   - Runs: `flake8 harmonyspeech/ tests/`
-
-3. **e2e-kittentts** - KittenTTS E2E Tests
-4. **e2e-melotts-openvoice-v2** - MeloTTS and OpenVoice V2 E2E Tests
-5. **e2e-openvoice-v1** - OpenVoice V1 E2E Tests
-6. **e2e-harmonyspeech** - HarmonySpeech E2E Tests
-7. **e2e-whisper** - Whisper STT E2E Tests
-8. **e2e-vad** - SileroVAD E2E Tests
-9. **e2e-voicefixer** - VoiceFixer E2E Tests
+| Job | Depends on | Command |
+|-----|------------|---------|
+| `test` | — | `pytest --device=cpu --dtype=float32 -v --tb=short -m "not e2e" --cov=harmonyspeech --cov-report=term-missing --cov-report=xml` |
+| `lint` | — | `ruff format --check --diff harmonyspeech/ tests/` then `ruff check harmonyspeech/ tests/` |
+| `e2e-kittentts` | `test` | `pytest -k "kittentts" tests/e2e/ --device=cpu --dtype=float32 -v --tb=short` |
+| `e2e-melotts-openvoice-v2` | `test` | `pytest -k "melotts or openvoice_v2" tests/e2e/ ...` |
+| `e2e-openvoice-v1` | `test` | `pytest -k "openvoice_v1" tests/e2e/ ...` |
+| `e2e-harmonyspeech` | `test` | `pytest -k "harmonyspeech" tests/e2e/ ...` |
+| `e2e-whisper` | `test` | `pytest -k "whisper" tests/e2e/ ... --no-cov` |
+| `e2e-vad` | `test` | `pytest -k "silero_vad or vad" tests/e2e/ ... --no-cov` |
+| `e2e-voicefixer` | `test` | `pytest -k "voicefixer" tests/e2e/ ... --no-cov` |
+| `e2e-chatterbox` | `test` | `pytest -k "chatterbox and not turbo and not multilingual" tests/e2e/ ... --no-cov` |
+| `e2e-chatterbox-turbo` | `test` | `pytest -k "chatterbox_turbo" tests/e2e/ ... --no-cov` |
+| `e2e-chatterbox-multilingual` | `test` | `pytest -k "chatterbox_multilingual" tests/e2e/ ... --no-cov` |
 
 All E2E jobs:
-- Require the `test` job to pass first (`needs: [test]`)
-- Run with `--device=cpu --dtype=float32`
-- Use `--no-cov` for long-running tests to reduce overhead
+- set `HF_HOME: ~/.cache/huggingface`
+- cache `~/.cache/huggingface` keyed on `requirements-common.txt`, `requirements-cpu.txt`, and (for Chatterbox jobs) `requirements-chatterbox.txt`
+- install system packages `libmecab-dev ffmpeg libsndfile1 espeak-ng`
+- install `requirements-cpu.txt`, `requirements-common.txt`, then `pip install --no-deps -r requirements-chatterbox.txt`
+- free disk space with `AdityaGarg8/remove-unwanted-software@v5`
+- run on `ubuntu-latest`, Python 3.12
+
+The unit/integration job uploads `coverage.xml` with `retention-days: 7`. The `test` job installs Chatterbox dependencies, so `tests/unit/initialization/test_chatterbox_imports.py` must pass there.
 
 ## Adding New Tests
 
-### Unit Tests
-1. Add `tests/unit/{category}/test_{module}.py`
-2. Import the module under test
-3. Mock dependencies with `mock_model_loader` or `unittest.mock.patch`
-4. Write test functions with descriptive names
+### Unit tests
+1. Place under `tests/unit/<category>/test_<module>.py` (categories: `initialization`, `inference_flow`, `error_handling`, `modeling`).
+2. Import the module under test at module level; use `MagicMock` / `MagicMock(spec=...)` for collaborators.
+3. Build engine shells with `HarmonySpeechEngine.__new__(...)` and set only required attributes.
+4. Mark with `@pytest.mark.unit`.
+5. Add `pytest.raises(ValueError, match="...")` for validation paths, asserting the option name appears in the message.
 
-### Integration Tests
-1. Add `tests/integration/test_{feature}.py`
-2. Use the `test_app` or `mock_engine_app` fixture
-3. Test API endpoints, CLI commands, or component wiring
+### Integration tests
+1. Place under `tests/integration/test_<feature>.py`.
+2. Use `mock_engine_app` for endpoint tests, or mock serving handlers for contract tests.
+3. Mark with `@pytest.mark.integration` (async methods may also carry `@pytest.mark.asyncio`).
+4. Do not load real models; patch `harmonyspeech.endpoints.openai.api_server` globals.
 
-### E2E Tests
-1. Add `tests/e2e/{task}/test_{model}.py`
-2. Use `models_cache_dir` fixture to avoid redundant model downloads
-3. Use appropriate engine fixture from `tests/e2e/conftest.py`
+### E2E tests
+1. Place under `tests/e2e/<task>/test_<model>.py`.
+2. Add or reuse an engine fixture in `tests/e2e/conftest.py`; return `(engine, serving_*)` tuples in the same order as existing fixtures.
+3. Use `models_cache_dir` in the fixture signature so HuggingFace caching is consistent.
+4. Declare `pytestmark = [pytest.mark.e2e, pytest.mark.slow]` (preferred) or decorate each test.
+5. Use `load_sample_audio_b64()` with the correct sample length:
+   - `jerry_seinfeld_prompt` (~32 s) for Turbo embedding, which enforces ≥5 s.
+   - `wanda4`/`wanda5`/`wanda6` for short-audio/negative paths and multilingual embedding.
+6. Assert `isinstance(response, <Expected>Response)` with the response in the message, then validate non-empty base64 payload.
 
-### File Naming
-- Always prefix with `test_` for pytest discovery
-- Example: `test_config.py`, `test_api_endpoints.py`, `test_whisper.py`
+### Definition of done for a model feature
+- Unit coverage: registry, imports, routing, input preparation, and no-I/O guarantees where applicable.
+- Integration coverage: serving request/response contract.
+- E2E coverage: real weights for each variant, including one negative path that proves the engine survives an inference error.
+- `ruff format --check` and `ruff check` pass on touched files.
+- New fixtures/markers documented in this file and registered in `pyproject.toml`.
 
 ---
 
-_Last updated: 2026-03-11_
+*Testing analysis: 2026-11-02*

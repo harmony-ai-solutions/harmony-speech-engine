@@ -107,6 +107,12 @@ def setup_logger():
 
     logger.add(RICH_CONSOLE.print, level=LOG_LEVEL, format=_log_formatter, colorize=True)
 
+    # Silence noisy HTTP request logs from httpx/httpcore (used by
+    # huggingface_hub).  These emit an INFO line for every HEAD/GET request,
+    # which floods the console during model loading and inference.
+    # for noisy_logger in ("httpx", "httpcore"):
+    #     logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
     logger.log_once = log_once
 
 

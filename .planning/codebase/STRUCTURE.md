@@ -1,315 +1,427 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-11-02
 
 ## Directory Layout
 
-```
+```text
 harmony-speech-engine/
-├── harmonyspeech/              # Main Python package — all application source code
-│   ├── __init__.py
-│   ├── version.py              # Package version constant
-│   ├── common/                 # Shared data types, config, utilities (no internal deps)
-│   ├── endpoints/              # API surface — HTTP entry points
-│   │   └── openai/             # OpenAI-compatible REST API implementation
-│   ├── engine/                 # Core orchestration — request lifecycle management
-│   ├── executor/               # Compute backend abstraction (CPU / GPU / Ray)
-│   ├── modeling/               # Model loading, downloading, and ML model implementations
-│   │   └── models/             # Per-model packages (one subdirectory per model family)
-│   ├── processing/             # Scheduler — request queuing and batching
-│   └── task_handler/           # Worker layer — model inference execution on device
-├── auth/                       # HTTP authentication middleware
-├── docker/                     # Docker build assets and helper scripts
-├── docs/                       # Documentation (API specs, usage guides)
-├── frontend/                   # Frontend assets (web UI)
-├── models/                     # Local model weight cache directory (not committed)
-├── tests/                      # Test suite (3-tier: unit/integration/e2e)
-│   ├── unit/                   # Unit tests (fast, fully mocked)
-│   │   ├── initialization/     # Engine initialization tests
-│   │   ├── inference_flow/     # Model loader tests
-│   │   ├── error_handling/     # Config error tests
-│   │   └── conftest.py         # Unit test fixtures
-│   ├── integration/            # Integration tests (component interaction)
-│   │   ├── test_cli.py         # CLI tests
-│   │   ├── test_api_endpoints.py # API endpoint tests
-│   │   └── conftest.py         # Integration fixtures
-│   ├── e2e/                    # End-to-end tests (real models, CPU-only, slow)
-│   │   ├── tts/                # TTS model tests
-│   │   │   ├── test_melotts.py
-│   │   │   ├── test_kittentts.py
-│   │   │   ├── test_openvoice_v1.py
-│   │   │   └── test_harmonyspeech.py
-│   │   ├── stt/                # STT/Whisper tests
-│   │   │   └── test_whisper.py
-│   │   ├── vad/                # Voice activity detection tests
-│   │   │   ├── test_silero_vad.py
-│   │   │   └── test_whisper_vad.py
-│   │   ├── audio_restoration/  # VoiceFixer tests
-│   │   │   └── test_voicefixer.py
-│   │   └── conftest.py         # E2E fixtures
-│   ├── conftest.py             # Root test configuration
-│   └── test-data/              # Test audio samples
-│       └── samples/            # WAV files (wanda4.wav, wanda5.wav, wanda6.wav)
-├── .planning/                  # GSD planning documents (not shipped)
-│   └── codebase/               # Codebase analysis documents
-├── memory-bank/                # Roo memory bank (project context, not shipped)
-├── config.yml                  # Primary runtime configuration (model_configs list)
-├── config.gpu.yml              # GPU-targeted runtime configuration variant
-├── docker-compose.yml          # CPU deployment
-├── docker-compose.nvidia.yml   # NVIDIA GPU deployment
-├── docker-compose.amd.yml      # AMD ROCm GPU deployment
-├── pyproject.toml              # Build metadata and tool configuration
-├── setup.py                    # Package setup
-├── requirements-common.txt     # Base Python dependencies
-├── requirements-cpu.txt        # CPU-only torch variant
-├── requirements-cuda.txt       # NVIDIA CUDA torch variant
-├── requirements-rocm.txt       # AMD ROCm torch variant
-└── README.md
+├── harmonyspeech/                  # Main Python package — all application source
+│   ├── __init__.py                 # Exports HarmonySpeechEngine, __version__, commit ids
+│   ├── version.py                  # Version + commit metadata
+│   ├── commit_id.py                # Generated commit hash
+│   ├── common/                     # Shared config, request/response types, metrics, logging
+│   ├── endpoints/                  # API surface
+│   │   ├── cli.py                  # `harmonyspeech run` entry point
+│   │   └── openai/                 # FastAPI app, protocol, serving modules
+│   ├── engine/                     # Request lifecycle, rerouting, async loop, metrics
+│   ├── executor/                   # CPU / GPU executor backends
+│   ├── modeling/                   # Loader, HF downloader, model implementations
+│   │   └── models/                 # One package per model family
+│   │       ├── harmonyspeech/      # HarmonySpeech V1 (encoder, synthesizer, vocoder)
+│   │       ├── openvoice/          # OpenVoice V1/V2 synthesizer + tone converter
+│   │       ├── melo/               # MeloTTS multi-language synthesizer
+│   │       ├── kittentts/          # KittenTTS ONNX synthesizer
+│   │       ├── voicefixer/         # VoiceFixer restorer + vocoder
+│   │       └── chatterbox/         # Chatterbox TTS/Turbo/Multilingual/VC wrappers
+│   ├── processing/                 # Scheduler and batching budget
+│   └── task_handler/               # Workers, model runners, input preparation
+├── auth/                           # Harmony Auth API key cache + rate limiting
+│   └── apikeys.py
+├── docker/                         # Dockerfiles per backend
+│   ├── cpu/Dockerfile
+│   ├── nvidia/Dockerfile
+│   ├── amd/Dockerfile
+│   ├── amd-wsl/Dockerfile
+│   └── entrypoint.sh
+├── docs/                           # Hand-written docs + generated OpenAPI artifacts
+│   ├── api.md
+│   ├── audio-restoration.md
+│   ├── docker.md
+│   ├── models.md
+│   ├── routing.md
+│   ├── testing.md
+│   ├── api/                        # openapi.json + Go/JS client generators
+│   └── images/
+├── frontend/                       # Unified React/Vite UI (speech-engine + harmony-link modes)
+│   ├── src/
+│   │   ├── main.jsx
+│   │   ├── HarmonySpeechEngineApp.jsx
+│   │   ├── HarmonyLinkApp.jsx
+│   │   ├── assets/ components/ config/ constants/ contexts/ hooks/
+│   │   ├── i18n/ services/ store/ styles/ utils/
+│   │   └── constants.jsx, style.css
+│   ├── Dockerfile, Dockerfile.speech-engine, Dockerfile.harmony-link
+│   └── package.json, vite.config.js, tailwind.config.js
+├── tests/                          # 3-tier test suite
+│   ├── unit/                       # Fast, fully mocked
+│   ├── integration/                # Component interaction
+│   ├── e2e/                        # Real models, CPU-only, slow
+│   ├── conftest.py
+│   └── test-data/samples/          # WAV fixtures
+├── .planning/                      # GSD planning + codebase analysis (committed)
+│   └── codebase/
+├── memory-bank/                    # Roo memory bank (committed project context)
+├── models/                         # Local model weight cache (generated, gitignored)
+├── cache/                          # HF hub / numba / xet caches (generated, gitignored)
+├── plans/                          # Empty scratch directory
+├── config.yml                      # Default (CPU) model_configs
+├── config.gpu.yml                  # GPU model_configs variant
+├── requirements-common.txt         # Base dependencies
+├── requirements-cpu.txt            # torch CPU variant
+├── requirements-cuda.txt           # torch CUDA variant
+├── requirements-rocm.txt           # torch ROCm variant
+├── requirements-chatterbox.txt     # chatterbox-tts pin (install with --no-deps)
+├── pyproject.toml                  # Build metadata, ruff/pytest/coverage config
+├── setup.py
+├── docker-compose.yml              # CPU deployment
+├── docker-compose.nvidia.yml       # NVIDIA deployment
+├── docker-compose.amd.yml          # AMD ROCm deployment
+├── AGENTS.md / opencode.json       # Agent instructions and tool config
+├── CHANGELOG.md
+├── README.md
+└── LICENSE
 ```
 
 ## Directory Purposes
 
 **`harmonyspeech/common/`:**
-- Purpose: Foundation types and utilities shared by all layers; has no imports from other harmonyspeech subpackages
-- Contains: `config.py` (ModelConfig, DeviceConfig, EngineConfig dataclasses), `inputs.py` (all RequestInput subclasses), `outputs.py` (RequestOutput, GenerationOutput), `request.py` (EngineRequest), `metrics.py`, `logger.py`, `utils.py`
-- Key files: `harmonyspeech/common/config.py`, `harmonyspeech/common/inputs.py`, `harmonyspeech/common/outputs.py`, `harmonyspeech/common/request.py`
+- Purpose: Foundation types shared by every layer; imports no other `harmonyspeech` subpackage except `common.utils`
+- Contains:
+  - `config.py` — `DeviceConfig`, `ModelConfig`, frozen `EngineConfig` with `load_config_from_yaml()`, dtype coercion
+  - `inputs.py` — `RequestInput` base + all eight subclasses and `TextToSpeechGenerationOptions`
+  - `outputs.py` — `RequestOutput` base + all output subclasses, including `finish_reason` / `error`
+  - `request.py` — `EngineRequest`, `ExecutorResult`, `RequestStatus` (incl. `FINISHED_FORWARDED`)
+  - `metrics.py` — `RequestMetrics` dataclass
+  - `logger.py` — `setup_logger()`, `UVICORN_LOG_CONFIG`
+  - `utils.py` — `make_async`, `random_uuid`, device/ROCm/WSL probes, `CudaMemoryProfiler`, `LRUCache`
+- Key files: `harmonyspeech/common/config.py`, `harmonyspeech/common/inputs.py`, `harmonyspeech/common/request.py`
 
 **`harmonyspeech/endpoints/openai/`:**
-- Purpose: FastAPI application and all HTTP route handlers; maps OpenAI-style requests to internal engine calls
-- Contains: `api_server.py` (FastAPI app, route registration, startup), `protocol.py` (all Pydantic request/response models), `args.py` (CLI/startup argument definitions), `serving_engine.py` (base serving class), `serving_text_to_speech.py`, `serving_speech_to_text.py`, `serving_voice_activity_detection.py`, `serving_voice_conversion.py`, `serving_audio_conversion.py`, `serving_voice_embed.py`
-- Key files: `harmonyspeech/endpoints/openai/api_server.py`, `harmonyspeech/endpoints/openai/protocol.py`
+- Purpose: HTTP boundary — protocol schemas, validation, serving modules, app wiring
+- Contains: `api_server.py` (routes, auth middleware, CORS, `build_app`, `run_server`), `protocol.py` (all Pydantic models), `args.py` (`make_arg_parser`), `serving_engine.py` (base class, model cards, `_check_model`), and one `serving_*.py` per capability
+- Key files: `harmonyspeech/endpoints/openai/api_server.py`, `harmonyspeech/endpoints/openai/protocol.py`, `harmonyspeech/endpoints/openai/serving_engine.py`
 
 **`harmonyspeech/engine/`:**
-- Purpose: Owns the request lifecycle — accepts requests from serving layer, drives the scheduler/executor loop, returns outputs
-- Contains: `harmonyspeech_engine.py` (synchronous engine), `async_harmonyspeech.py` (async wrapper used by API), `args_tools.py` (EngineArgs dataclass and parsing helpers), `metrics.py`
-- Key files: `harmonyspeech/engine/async_harmonyspeech.py`, `harmonyspeech/engine/harmonyspeech_engine.py`
+- Purpose: Request lifecycle ownership — rerouting, multi-step forwarding, async stream fan-out
+- Contains:
+  - `harmonyspeech_engine.py` — `HarmonySpeechEngine`, `reroute_request_*`, `check_forward_processing`, `step`, `_process_model_outputs`
+  - `async_harmonyspeech.py` — `AsyncHarmonySpeech`, `_AsyncHarmonySpeech`, `AsyncStream`, `RequestTracker`, `run_engine_loop`
+  - `args_tools.py` — `EngineArgs`, `AsyncEngineArgs`
+  - `metrics.py` — `StatLogger`, `Stats`
+- Key files: `harmonyspeech/engine/harmonyspeech_engine.py`, `harmonyspeech/engine/async_harmonyspeech.py`
 
 **`harmonyspeech/executor/`:**
-- Purpose: Abstract the compute backend; concrete subclasses route work to one or many workers
-- Contains: `executor_base.py` (abstract `ExecutorBase`), `cpu_executor.py`, `gpu_executor.py`, `ray_gpu_executor.py`
+- Purpose: Compute-backend abstraction; one executor instance per model config
+- Contains: `executor_base.py` (`ExecutorBase`, `ExecutorAsyncBase`), `cpu_executor.py`, `gpu_executor.py` (`GPUExecutor`, `GPUExecutorAsync`), `ray_gpu_executor.py` (fully commented out, unused)
 - Key files: `harmonyspeech/executor/executor_base.py`, `harmonyspeech/executor/gpu_executor.py`
 
 **`harmonyspeech/processing/`:**
-- Purpose: Request scheduling and batching — maintains per-model queues and decides which requests are ready to dispatch each cycle
-- Contains: `scheduler.py` (`HarmonySpeechScheduler`)
+- Purpose: Request admission and per-model batching
+- Contains: `scheduler.py` — `Scheduler`, `SchedulingBudget`, `SchedulerOutputs`, `SchedulerWaitingOutputs`
 - Key files: `harmonyspeech/processing/scheduler.py`
 
 **`harmonyspeech/task_handler/`:**
-- Purpose: The worker layer that actually loads and runs models; runs inside the executor's worker process/thread
-- Contains: `worker_base.py`, `cpu_worker.py`, `gpu_worker.py`, `model_runner_base.py`, `cpu_model_runner.py`, `gpu_model_runner.py`, `inputs.py` (all `prepare_*_inputs()` functions), and `inputs.py` also imports from modeling layer
-- Key files: `harmonyspeech/task_handler/inputs.py`, `harmonyspeech/task_handler/gpu_model_runner.py`
+- Purpose: Runs on the compute device; loads models and performs inference
+- Contains:
+  - `worker_base.py` — `WorkerBase` ABC
+  - `cpu_worker.py`, `gpu_worker.py` — device setup + delegation to the runner
+  - `model_runner_base.py` — **all** inference logic: `execute_model()` dispatch and every `_execute_*` method
+  - `cpu_model_runner.py`, `gpu_model_runner.py` — thin subclasses that only implement `load_model()`
+  - `inputs.py` — `prepare_inputs()` dispatch and all `prepare_*_inputs()` functions
+- Key files: `harmonyspeech/task_handler/model_runner_base.py`, `harmonyspeech/task_handler/inputs.py`
 
 **`harmonyspeech/modeling/`:**
-- Purpose: Model weight loading, HuggingFace Hub integration, and PyTorch/ONNX model class implementations
-- Contains: `loader.py` (get_model_class, get_model_config, get_model_flavour, get_model_speaker), `hf_downloader.py`, `utils.py`, `models/` subdirectory with one package per model family
-- Key files: `harmonyspeech/modeling/loader.py`
+- Purpose: Model class/config/weight resolution and model implementations
+- Contains: `loader.py` (`_MODEL_CONFIGS`, `_MODEL_WEIGHTS`, `_MODEL_SPEAKERS`, `get_model`, `get_model_config`, `get_model_weights`, `get_model_speaker`, `get_model_flavour`, CTranslate2 CUDA pre-check), `hf_downloader.py` (three-tier resolution + in-memory caches), `utils.py` (`set_random_seed`), `models/`
+- Key files: `harmonyspeech/modeling/loader.py`, `harmonyspeech/modeling/hf_downloader.py`, `harmonyspeech/modeling/models/__init__.py`
 
 **`harmonyspeech/modeling/models/`:**
-- Purpose: One subdirectory per supported model family; each contains the PyTorch nn.Module classes and model-specific utilities
+- Purpose: One package per model family. `__init__.py` holds `ModelRegistry._MODELS` mapping `model_type` → `(module, class)` or `"native"`.
 - Subdirectories:
-  - `harmonyspeech/` — Harmony Speech v1 (encoder, synthesizer, vocoder + parallel_wavegan)
-  - `openvoice/` — OpenVoice V1/V2 (ToneConverter, Synthesizer, Encoder)
-  - `melo/` — MeloTTS / OpenVoice V2 (multi-language TTS synthesizer)
-  - `kittentts/` — KittenTTS (ultra-lightweight ONNX TTS) ⭐ NEW
-  - `voicefixer/` — VoiceFixer (audio restoration and vocoder)
-- Key files: `harmonyspeech/modeling/models/harmonyspeech/harmonyspeech.py`, `harmonyspeech/modeling/models/openvoice/openvoice.py`, `harmonyspeech/modeling/models/melo/melo.py`, `harmonyspeech/modeling/models/kittentts/kittentts.py`, `harmonyspeech/modeling/models/voicefixer/voicefixer.py`
+
+| Package | Files | Model types | Backend |
+|---|---|---|---|
+| `harmonyspeech/` | `harmonyspeech.py`, `common.py`, `encoder/`, `synthesizer/` (cleaners, numbers, symbols, text), `vocoder/parallel_wavegan/` | `HarmonySpeechEncoder`, `HarmonySpeechSynthesizer`, `HarmonySpeechVocoder` | PyTorch |
+| `openvoice/` | `openvoice.py`, `modules.py`, `attentions.py`, `commons.py`, `transforms.py`, `mel_processing.py`, `utils.py`, `inputs.py`, `text/` | `OpenVoiceV1Synthesizer`, `OpenVoiceV1/V2ToneConverter(Encoder)` | PyTorch |
+| `melo/` | `melo.py`, `modules.py`, `attentions.py`, `commons.py`, `transforms.py`, `utils.py`, `split_utils.py`, `inputs.py`, `monotonic_align/`, `text/` (multilingual BERT/phonemizers) | `MeloTTSSynthesizer` | PyTorch |
+| `kittentts/` | `kittentts.py`, `onnx_model.py`, `preprocess.py` | `KittenTTSSynthesizer` | ONNX Runtime |
+| `voicefixer/` | `voicefixer.py`, `modules.py`, `utils.py` | `VoiceFixerRestorer`, `VoiceFixerVocoder` | PyTorch |
+| `chatterbox/` | `chatterbox.py`, `__init__.py` | `ChatterboxTTS`, `ChatterboxTurboTTS`, `ChatterboxMultilingualTTS`, `ChatterboxEmbedding`, `ChatterboxVC` | PyTorch + upstream `chatterbox-tts` |
+
+- Key file: `harmonyspeech/modeling/models/chatterbox/chatterbox.py` — the only Chatterbox code in-repo; it wraps the external library, applies module-level monkey-patches (CPU `torch.load`, perth watermarker fallback) and Turbo-specific dtype/attention patches.
 
 **`tests/`:**
-- Purpose: Comprehensive test suite with 3-tier architecture
+- Purpose: Three-tier test suite (unit / integration / e2e)
 - Structure:
-  - `tests/unit/` — Fast, fully mocked unit tests
-  - `tests/integration/` — Component interaction tests
-  - `tests/e2e/` — Real model tests (CPU-only, slow)
-- Run with: `pytest tests/unit/`, `pytest tests/integration/`, `pytest tests/e2e/`
-- Key fixtures: `tests/conftest.py` (root), `tests/unit/conftest.py`, `tests/integration/conftest.py`, `tests/e2e/conftest.py`
-
-**`tests/test-data/`:**
-- Purpose: Audio samples for testing
-- Contains: `samples/` directory with WAV files (wanda4.wav, wanda5.wav, wanda6.wav)
-- Generated: No (committed)
-- Committed: Yes
+  - `tests/unit/` — mocked, fast
+  - `tests/integration/` — serves two layers together with mocked engines/models
+  - `tests/e2e/` — real models, CPU-only, marked `e2e`/`slow`
+- Key fixtures: `tests/conftest.py`, `tests/{unit,integration,e2e}/conftest.py`
 
 **`auth/`:**
-- Purpose: HTTP basic authentication middleware for the FastAPI server
-- Key files: `auth/` (applied via FastAPI middleware in `api_server.py`)
+- Purpose: Harmony Auth integration — `ApiKeyCacheManager` caches per-key service stats and validates rate limits; usage events are registered from a separate thread in `api_server.py`
+- Key file: `auth/apikeys.py`
+
+**`frontend/`:**
+- Purpose: Unified React + Vite + Tailwind UI that can boot in speech-engine or harmony-link mode (`HarmonySpeechEngineApp.jsx`, `HarmonyLinkApp.jsx`, selected in `main.jsx`)
+- Contains: `src/{components,services,hooks,contexts,store,config,i18n,assets,styles,utils,constants}`, three Dockerfiles for the different deployment targets
+- Key files: `frontend/src/main.jsx`, `frontend/src/HarmonySpeechEngineApp.jsx`, `frontend/vite.config.js`
 
 **`docker/`:**
-- Purpose: Dockerfile variants and helper scripts for container builds
+- Purpose: Per-backend images (`cpu/`, `nvidia/`, `amd/`, `amd-wsl/`) and the shared `entrypoint.sh`
+- Key files: `docker/cpu/Dockerfile`, `docker/nvidia/Dockerfile`, `docker/amd/Dockerfile`, `docker/entrypoint.sh`
 
-**`models/`:**
-- Purpose: Local on-disk cache for downloaded model weights; populated at runtime by HuggingFace Hub download
-- Generated: Yes (populated at runtime)
-- Committed: No (in `.gitignore`)
+**`docs/`:**
+- Purpose: Hand-written feature documentation plus generated client artifacts
+- Contains: `api.md`, `models.md`, `routing.md`, `docker.md`, `testing.md`, `audio-restoration.md`, `api/openapi.json`, `api/generate_openapi_go.sh`, `api/generate_openapi_js.sh`, `images/`
+- Note: `docs/api/openapi.json` is generated from the running FastAPI app and must be refreshed when protocol schemas change.
 
 ## Key File Locations
 
 **Entry Points:**
-- `harmonyspeech/endpoints/cli.py`: CLI entry point for starting the server
-- `harmonyspeech/endpoints/openai/api_server.py`: FastAPI application — primary server entry point
+- `harmonyspeech/endpoints/cli.py` — `harmonyspeech run` console script (`pyproject.toml:33`)
+- `harmonyspeech/endpoints/openai/api_server.py` — FastAPI app, `build_app()`, `run_server()`, module `__main__` block
 
 **Configuration:**
-- `config.yml`: Runtime model configuration — defines all `model_configs` entries with model types, batch sizes, device assignments
-- `config.gpu.yml`: GPU-variant runtime configuration
-- `harmonyspeech/common/config.py`: Python dataclasses for all configuration types (`ModelConfig`, `DeviceConfig`, `EngineConfig`)
-- `harmonyspeech/engine/args_tools.py`: `EngineArgs` — CLI argument definitions and conversion to config objects
+- `config.yml` — default model list (CPU)
+- `config.gpu.yml` — GPU model list (Chatterbox and MeloTTS on `cuda`)
+- `harmonyspeech/common/config.py` — `DeviceConfig`, `ModelConfig`, `EngineConfig.load_config_from_yaml()`
+- `harmonyspeech/endpoints/openai/args.py` — server CLI (`--host`, `--port`, `--config-file-path`, `--api-keys`, `--admin-key`, `--middleware`, `--root-path`, SSL)
+- `harmonyspeech/engine/args_tools.py` — `EngineArgs` / `AsyncEngineArgs`
+- `requirements-chatterbox.txt` — isolated chatterbox pin; must be installed with `--no-deps`
 
 **Protocol / API Contract:**
-- `harmonyspeech/endpoints/openai/protocol.py`: All Pydantic request and response types — single source of truth for the API contract
+- `harmonyspeech/endpoints/openai/protocol.py` — every request/response Pydantic model, including Chatterbox generation fields
+- `docs/api/openapi.json` — generated schema used for client generation
 
 **Internal Request Types:**
-- `harmonyspeech/common/inputs.py`: All `RequestInput` subclasses — internal typed representations of requests
+- `harmonyspeech/common/inputs.py` — all `RequestInput` subclasses and `from_openai()` factories
+- `harmonyspeech/common/outputs.py` — all `RequestOutput` subclasses
 
-**Model Dispatch:**
-- `harmonyspeech/task_handler/inputs.py`: `prepare_inputs()` — central dispatch by `model_type` string, all model-specific input preparation
-- `harmonyspeech/modeling/loader.py`: `get_model_class()` — model class resolution by `model_type` string
+**Model Dispatch (four switch points):**
+- `harmonyspeech/endpoints/openai/serving_{text_to_speech,voice_embed,speech_to_text,voice_activity_detection,voice_conversion,audio_conversion}.py` — `_*_MODEL_TYPES` / `_*_MODEL_GROUPS`
+- `harmonyspeech/modeling/models/__init__.py` — `_MODELS`
+- `harmonyspeech/modeling/loader.py` — `_MODEL_CONFIGS`, `_MODEL_WEIGHTS`, `_MODEL_SPEAKERS`, `get_model()`
+- `harmonyspeech/task_handler/inputs.py` — `prepare_inputs()`
+- `harmonyspeech/task_handler/model_runner_base.py` — `execute_model()`
+
+**Request Routing / Pipeline:**
+- `harmonyspeech/engine/harmonyspeech_engine.py` — `check_reroute_request_to_model()` (line ~337), `reroute_request_*` (lines ~109-335), `check_forward_processing()` (line ~363)
+- `harmonyspeech/processing/scheduler.py` — `_schedule_waiting_requests()` (line ~134), `get_scheduling_budget()` (line ~191)
 
 **Core Logic:**
-- `harmonyspeech/engine/async_harmonyspeech.py`: Async engine — used by the API server
-- `harmonyspeech/processing/scheduler.py`: Request scheduler and batcher
+- `harmonyspeech/engine/async_harmonyspeech.py` — `AsyncHarmonySpeech.generate/abort`, `run_engine_loop`, `engine_step`
+- `harmonyspeech/task_handler/model_runner_base.py` — all `_execute_*` inference paths
+- `harmonyspeech/modeling/models/chatterbox/chatterbox.py` — Chatterbox wrappers and compatibility patches
+
+**Version:**
+- `harmonyspeech/version.py` — `__version__` (currently `v0.1.1-rc1`)
+- `pyproject.toml` — `project.version` (currently `0.1.1-rc2`); both must be kept in sync
 
 ## Tests Directory Deep Dive
 
-**Test Structure (3-Tier):**
-
-```
+```text
 tests/
-├── conftest.py              # Root fixtures (shared across all test tiers)
-├── unit/                    # Unit tests - FAST, fully mocked
-│   ├── conftest.py          # Unit-specific fixtures
-│   ├── initialization/      # Engine initialization tests
+├── conftest.py
+├── unit/                                  # FAST, fully mocked
+│   ├── conftest.py
+│   ├── initialization/
 │   │   ├── test_engine.py
-│   │   └── test_config.py
-│   ├── inference_flow/      # Model loader tests
-│   │   └── test_loader.py
-│   └── error_handling/      # Config error validation
-│       └── test_config_errors.py
-├── integration/             # Integration tests - COMPONENT INTERACTION
-│   ├── conftest.py          # Integration-specific fixtures
-│   ├── test_cli.py          # CLI entry point tests
-│   └── test_api_endpoints.py # API endpoint tests
-└── e2e/                     # End-to-end tests - REAL MODELS, CPU-ONLY, SLOW
-    ├── conftest.py          # E2E-specific fixtures
-    ├── tts/                 # Text-to-Speech model tests
+│   │   ├── test_config.py
+│   │   └── test_chatterbox_imports.py     # import-time monkey-patch safety
+│   ├── inference_flow/
+│   │   ├── test_loader.py
+│   │   ├── test_chatterbox_inputs.py      # prepare_chatterbox_* param validation
+│   │   ├── test_chatterbox_routing.py     # reroute_request_chatterbox decisions
+│   │   └── test_chatterbox_no_tempfile.py # embedding path avoids filesystem I/O
+│   ├── modeling/
+│   │   ├── test_hf_downloader.py
+│   │   └── test_chatterbox_registry.py    # _MODELS contains all Chatterbox types
+│   └── error_handling/
+│       ├── test_config_errors.py
+│       └── test_engine_error_resilience.py # error results, embed-dispatch fallback
+├── integration/                           # COMPONENT INTERACTION
+│   ├── conftest.py
+│   ├── test_cli.py
+│   ├── test_api_endpoints.py
+│   └── test_chatterbox_flow.py            # serving-layer Chatterbox lifecycle
+└── e2e/                                   # REAL MODELS, CPU-ONLY, SLOW
+    ├── conftest.py
+    ├── tts/
+    │   ├── test_harmonyspeech.py
     │   ├── test_melotts.py
-    │   ├── test_kittentts.py
     │   ├── test_openvoice_v1.py
-    │   └── test_harmonyspeech.py
-    ├── stt/                 # Speech-to-Text tests
-    │   └── test_whisper.py
-    ├── vad/                 # Voice Activity Detection tests
-    │   ├── test_silero_vad.py
-    │   └── test_whisper_vad.py
-    └── audio_restoration/   # Audio restoration tests
-        └── test_voicefixer.py
+    │   ├── test_kittentts.py
+    │   ├── test_chatterbox.py
+    │   ├── test_chatterbox_turbo.py
+    │   └── test_chatterbox_multilingual.py
+    ├── stt/test_whisper.py
+    ├── vad/test_silero_vad.py, test_whisper_vad.py
+    └── audio_restoration/test_voicefixer.py
 ```
 
-**Test Configuration (pyproject.toml):**
+**pyproject configuration (`pyproject.toml:46`):**
 ```toml
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = ["--strict-markers", "-ra", "--cov=harmonyspeech", ...]
-
-[tool.pytest.markers]
-unit = "marks tests as unit tests (fast, fully mocked)"
-integration = "marks tests as integration tests (component interaction, partially mocked)"
-e2e = "marks tests as end-to-end tests (real models, slow, CPU-only)"
-slow = "marks tests that take > 30 seconds to run"
+addopts = ["--strict-markers", "-ra"]      # coverage is opt-in for speed
+markers = ["unit", "integration", "e2e", "slow"]
 ```
 
-**Running Tests:**
 ```bash
-pytest tests/unit/              # Run all unit tests (fast)
-pytest tests/integration/       # Run integration tests
-pytest tests/e2e/               # Run e2e tests (slow, requires models)
-pytest tests/                   # Run all tests
-pytest -m unit                  # Run only unit tests by marker
-pytest -m e2e                   # Run only e2e tests by marker
+pytest tests/unit/                     # fast, mocked
+pytest tests/integration/              # serving + engine wiring
+pytest tests/e2e/                      # real models, slow
+pytest -m unit                         # by marker
+pytest --cov=harmonyspeech --cov-report=term-missing --cov-report=xml
 ```
+
+Coverage omits `harmonyspeech/modeling/models/*` (`pyproject.toml:62`), so vendor model code is not measured.
 
 ## Naming Conventions
 
 **Files:**
-- Snake case: `api_server.py`, `async_harmonyspeech.py`, `gpu_model_runner.py`
-- Serving modules prefixed: `serving_text_to_speech.py`, `serving_speech_to_text.py`
-- Worker/runner pairs mirror executor names: `cpu_worker.py` / `cpu_model_runner.py`, `gpu_worker.py` / `gpu_model_runner.py`
-- Model packages match model family name: `openvoice/`, `melo/`, `kittentts/`, `harmonyspeech/`, `voicefixer/`
-- Test files prefixed: `test_{module}.py`
+- Snake case throughout: `api_server.py`, `async_harmonyspeech.py`, `gpu_model_runner.py`
+- Serving modules: `serving_{capability}.py` (`serving_text_to_speech.py`, `serving_voice_activity_detection.py`, `serving_voice_embed.py`, `serving_audio_conversion.py`)
+- Worker/runner pairs mirror each other: `cpu_worker.py` ↔ `cpu_model_runner.py`, `gpu_worker.py` ↔ `gpu_model_runner.py`
+- Model package names match the family slug: `harmonyspeech/`, `openvoice/`, `melo/`, `kittentts/`, `voicefixer/`, `chatterbox/`
+- Tests: `test_{module_or_behavior}.py`; e2e grouped by capability directory
 
 **Directories:**
-- All lowercase, underscore-separated: `task_handler/`, `modeling/`, `endpoints/`
-- Model family directories match the HuggingFace repo slug where possible
+- Lowercase with underscores for infrastructure (`task_handler/`, `modeling/`, `processing/`)
+- Lowercase family names for model packages; `parallel_wavegan/` keeps upstream naming
 
 **Classes:**
-- PascalCase: `HarmonySpeechEngine`, `AsyncHarmonySpeech`, `TextToSpeechRequest`, `ModelConfig`
-- Request inputs follow `{Capability}RequestInput` pattern: `TextToSpeechRequestInput`, `SpeechEmbeddingRequestInput`
-- Response types follow OpenAI naming with `Response` suffix: `TextToSpeechResponse`, `SpeechToTextResponse`
+- PascalCase: `HarmonySpeechEngine`, `AsyncHarmonySpeech`, `RequestTracker`, `Scheduler`, `ChatterboxTurboTTSModel`
+- Request inputs: `{Capability}RequestInput`; outputs: `{Capability}RequestOutput`
+- Serving classes: `OpenAIServing{Capability}`
 
-**model_type Strings:**
-- PascalCase model type identifiers used as string keys: `"HarmonySpeechEncoder"`, `"MeloTTSSynthesizer"`, `"FasterWhisper"`, `"SileroVAD"`, `"KittenTTSSynthesizer"`
+**`model_type` strings:**
+- PascalCase identifiers used as dictionary/string keys: `"HarmonySpeechEncoder"`, `"MeloTTSSynthesizer"`, `"FasterWhisper"`, `"SileroVAD"`, `"KittenTTSSynthesizer"`, `"ChatterboxTurboTTS"`
+- Toolchain/API ids are lowercase snake case: `harmonyspeech`, `openvoice_v1`, `openvoice_v2`, `voicefixer`, `chatterbox`, `chatterbox_turbo`, `chatterbox_multilingual`, `chatterbox_vc`
+- `ModelConfig.name` values in `config.yml` mix both: concrete names (`chatterbox`, `chatterbox_turbo`, `chatterbox_vc`, `kitten-tts-mini`) and role names (`hs1-encoder`, `ov2-tone-converter`)
+
+**Test naming:**
+- Behaviour-focused: `test_chatterbox_routing.py`, `test_engine_error_resilience.py`, `test_chatterbox_no_tempfile.py`
 
 ## Where to Add New Code
 
-**New Model Support:**
-- Add model class implementation: `harmonyspeech/modeling/models/{model_family}/{model_family}.py`
-- Register model class in: `harmonyspeech/modeling/loader.py` (`get_model_class()`)
-- Add input preparation: `harmonyspeech/task_handler/inputs.py` (new `elif` branch in `prepare_inputs()` + new `prepare_{model}_inputs()` function)
-- Add model runner inference logic: `harmonyspeech/task_handler/gpu_model_runner.py` and/or `cpu_model_runner.py`
-- Add model_type entry to: `config.yml`
+**New Model Implementation (PyTorch, registry-based):**
+1. `harmonyspeech/modeling/models/{family}/{family}.py` — model class with `load_weights(checkpoint, config)`
+2. `harmonyspeech/modeling/models/__init__.py` — add `"{model_type}": ("{family}", "{ClassName}")` to `_MODELS`
+3. `harmonyspeech/modeling/loader.py` — add config/weight paths to `_MODEL_CONFIGS` and `_MODEL_WEIGHTS` (use `"native"` to bypass HF config loading); add speaker entries to `_MODEL_SPEAKERS` if applicable
+4. `harmonyspeech/task_handler/inputs.py` — new branch in `prepare_inputs()` + `prepare_{family}_inputs()`
+5. `harmonyspeech/task_handler/model_runner_base.py` — new `elif model_type == ...` in `execute_model()` + `_execute_{family}()`
+6. `config.yml` and `config.gpu.yml` — add a `model_configs` entry
+7. `tests/e2e/{capability}/test_{family}.py`
 
-**New TTS Provider (like KittenTTS):**
-1. Create `harmonyspeech/modeling/models/{provider}/` with model implementation
-2. If ONNX-based: add `onnx_model.py` wrapper
-3. Register in `harmonyspeech/modeling/loader.py`:
-   - Add `"provider_type": {"default": "native"}` to `_MODEL_CONFIGS`
-   - Add `"provider_type": {"default": "native"}` to `_MODEL_WEIGHTS`
-   - Add model instantiation logic in `get_model()` with `"native"` bailout
-4. Add input preparation in `task_handler/inputs.py`
-5. Add runner logic (ONNX or PyTorch path)
-6. Add e2e test in `tests/e2e/tts/test_{provider}.py`
+**New Native Model (ONNX / external library, like KittenTTS or Chatterbox):**
+1. `harmonyspeech/modeling/models/{family}/` with the wrapper class
+2. `_MODELS` entry mapped to `"native"`
+3. `loader.py` — `"native"` entries in `_MODEL_CONFIGS` and `_MODEL_WEIGHTS`, plus an instantiation branch inside the `model_class == "native" and hf_config == "native"` block (see `loader.py:264-337`)
+4. Input preparation + runner execution as above
+5. If the library needs compatibility shims, keep them in the family package, not in `task_handler/`
+
+**New Toolchain (multi-model pipeline, like Chatterbox or VoiceFixer):**
+1. Add sentinel handling to `check_reroute_request_to_model()` and a `reroute_request_{toolchain}()` in `harmonyspeech/engine/harmonyspeech_engine.py`
+2. Add the forwarding branch in `check_forward_processing()`; use `RequestStatus.FINISHED_FORWARDED` when re-submitting and `FINISHED_STOPPED` on the final step
+3. Register the toolchain in the relevant `_*_MODEL_GROUPS` dicts:
+   - `serving_text_to_speech.py::_TTS_MODEL_GROUPS`
+   - `serving_voice_embed.py::_EMBEDDING_MODEL_GROUPS`
+   - `serving_voice_conversion.py::_VOICE_CONVERSION_MODEL_GROUPS`
+   - `serving_audio_conversion.py::_AUDIO_CONVERSION_MODEL_GROUPS`
+4. Add or extend the `RequestInput` fields the pipeline needs in `harmonyspeech/common/inputs.py` and, if user-facing, `protocol.py`
+5. Add `model_configs` entries for every step in `config.yml` / `config.gpu.yml`
+
+**New Embedding-Capable TTS Model (embed-dispatch):**
+1. Add the `model_type` to `_EMBEDDING_MODEL_TYPES` in `harmonyspeech/endpoints/openai/serving_voice_embed.py`
+2. Add it to the relevant `_EMBEDDING_MODEL_GROUPS` list (order defines fallback priority)
+3. Accept both `SpeechEmbeddingRequestInput` and `TextToSpeechRequestInput` in `prepare_inputs()`
+4. Route `SpeechEmbeddingRequestInput` batches to an `_execute_*_embedding()` in `execute_model()`
+5. Return a serializable embedding from `SpeechEmbeddingRequestOutput.output`
 
 **New API Endpoint / Capability:**
-- Add Pydantic request/response types: `harmonyspeech/endpoints/openai/protocol.py`
-- Add `RequestInput` subclass: `harmonyspeech/common/inputs.py`
-- Create serving module: `harmonyspeech/endpoints/openai/serving_{capability}.py`
-- Register route in: `harmonyspeech/endpoints/openai/api_server.py`
+1. `harmonyspeech/endpoints/openai/protocol.py` — request + response Pydantic models
+2. `harmonyspeech/common/inputs.py` / `outputs.py` — `RequestInput` / `RequestOutput` subclass with `from_openai()`
+3. `harmonyspeech/endpoints/openai/serving_{capability}.py` — `_*_MODEL_TYPES`, `_*_MODEL_GROUPS`, `models_from_config()`, async public method, `*_full_generator()`
+4. `harmonyspeech/endpoints/openai/api_server.py` — import the serving class, add a module-level singleton, register routes in `router`, instantiate in `run_server()`, and add the capability to `/health`
+5. `harmonyspeech/engine/harmonyspeech_engine.py` — routing + forwarding support for the new request type
 
 **New Configuration Option:**
-- Add to: `harmonyspeech/common/config.py` (ModelConfig or EngineConfig)
-- Expose via CLI: `harmonyspeech/engine/args_tools.py`
+- Model-scoped: add a parameter to `ModelConfig.__init__` in `harmonyspeech/common/config.py` (and to `config.yml` entries)
+- Engine-scoped: add to `EngineConfig`
+- CLI-scoped: `harmonyspeech/endpoints/openai/args.py` and `harmonyspeech/engine/args_tools.py`
+
+**New Audio Post-Processing Filter:**
+- `post_generation_filters` and `pre_processing_filters` already exist on the protocol and on `TextToSpeechRequestInput`
+- Implement the filter as an `AudioConversion` toolchain model and add execution to the `# TODO: Post-Generation Processing` block in `check_forward_processing()` (`harmonyspeech_engine.py:504`)
 
 **Tests:**
-- Unit tests: `tests/unit/{category}/test_{feature}.py`
-- Integration tests: `tests/integration/test_{feature}.py`
-- E2E tests: `tests/e2e/{capability}/test_{model}.py`
-- Test data: `tests/test-data/samples/`
+- Unit: `tests/unit/{initialization,inference_flow,modeling,error_handling}/test_{feature}.py`
+- Integration: `tests/integration/test_{feature}.py`
+- E2E: `tests/e2e/{tts,stt,vad,audio_restoration}/test_{model}.py`
+- Fixtures/audio: `tests/test-data/samples/`
+
+**Documentation:**
+- Feature docs: `docs/{topic}.md`
+- Regenerate API schema after protocol changes: `docs/api/generate_openapi_go.sh` / `generate_openapi_js.sh` (both consume `docs/api/openapi.json`)
+- Changelog entry: `CHANGELOG.md`
 
 ## Special Directories
 
 **`.planning/`:**
-- Purpose: GSD planning and codebase analysis documents
+- Purpose: GSD planning documents and codebase analysis
 - Generated: No (written by GSD agents)
 - Committed: Yes
 
 **`memory-bank/`:**
-- Purpose: Roo AI agent memory bank — project context files
+- Purpose: Roo AI agent memory bank (`activeContext.md`, `progress.md`, etc.)
 - Generated: Yes (written by AI sessions)
-- Committed: Yes (provides persistent project context)
+- Committed: Yes
 
 **`models/`:**
-- Purpose: On-disk HuggingFace model weight cache
-- Generated: Yes (populated at first run by `hf_downloader.py`)
+- Purpose: Local HuggingFace weight cache populated at first run
+- Generated: Yes
+- Committed: No (gitignored)
+
+**`cache/`:**
+- Purpose: Runtime caches (`hub/`, `numba_cache/`, `xet/`); safe to delete
+- Generated: Yes
 - Committed: No
 
-**`.github/`:**
-- Purpose: GitHub Actions CI/CD workflows
+**`undefined/`:**
+- Purpose: Accidental artifact containing only `.cache/`; not referenced by any code
+- Generated: Yes
+- Committed: No — safe to remove
+
+**`plans/`:**
+- Purpose: Empty scratch directory
+- Committed: Present but empty
+
+**`.current_work/`:**
+- Purpose: Scratch notes and working configs (e.g. `vllm-omni-analysis.md`, `vllm-omni-integration-plan.md`, a local `config.yml`)
+- Generated: Yes (manual)
+- Committed: Currently present; treat as non-shipping scratch
+
+**`docs/api/`:**
+- Purpose: Generated OpenAPI schema plus client-code generation scripts
+- Generated: `openapi.json` yes; scripts no
 - Committed: Yes
 
-**`docs/`:**
-- Purpose: API documentation and usage guides
-- Generated: No (manually written)
-- Committed: Yes
+**`frontend/`:**
+- Purpose: Single React source tree built in two modes; has its own `AGENTS.md`, `package.json`, lockfile, and Dockerfiles
+- Generated: `node_modules/` yes (not committed); `src/` no
+- Committed: Source yes, `node_modules/` no
+
+**`.github/workflows/`:**
+- Purpose: CI/CD — `test.yml`, `docker-release-engine.yml`, `docker-release-ui.yml`
+
+**`.claude/`, `.roo/`, `.clinerules/`, `.gitnexus/`, `.idea/`, `.vscode/`:**
+- Purpose: Tooling/agent configuration and local IDE settings
+- Committed: Mixed; `.gitnexus/` and caches are local
 
 ---
 
-*Structure analysis: 2026-03-11*
+*Structure analysis: 2026-11-02*

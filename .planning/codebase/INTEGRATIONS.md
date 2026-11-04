@@ -1,181 +1,215 @@
+<!-- refreshed: 2026-11-02 -->
 # External Integrations
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-11-02
 
 ## APIs & External Services
 
 **Model Hosting / Distribution:**
-- **Hugging Face Hub** — Primary source for downloading model weights at runtime
-  - SDK/Client: `huggingface_hub` package + `hf_xet` for fast transfer
-  - Auth: `HF_TOKEN` env var (optional; needed for gated/private models)
-  - Downloader: `harmonyspeech/modeling/hf_downloader.py`
-  - Pattern: Models are resolved by HF repo ID (e.g., `harmony-ai/harmony-speech-v1`, `myshell-ai/openvoice`, `myshell-ai/MeloTTS-English-v3`, `KittenML/kitten-tts-mini-0.8`, `jlmarrugom/voice_fixer`)
-  - Cache location: `./cache/` directory (Docker volume mount)
+- **Hugging Face Hub** — sole source of model weights, downloaded at runtime
+  - SDK/Client: `huggingface_hub` (`hf_hub_download`, `snapshot_download`) + `hf_xet` fast transfer
+  - Auth: `HF_TOKEN` env var (optional; public repos work anonymously — the Chatterbox Turbo wrapper explicitly maps empty string → `None`)
+  - Downloader: `harmonyspeech/modeling/hf_downloader.py` (three-tier resolution: local dir → HF disk cache `local_files_only=True` → network), plus direct `hf_hub_download` in `harmonyspeech/modeling/models/kittentts/kittentts.py` and `snapshot_download` in `harmonyspeech/modeling/models/chatterbox/chatterbox.py`
+  - Cache: `HF_HOME` (set to `/app/harmony-speech-engine/cache` in containers, `./cache` volume in Compose); file locks under `$XDG_CACHE_HOME/harmony/locks/`
+
+**Harmony API-Key / Rate-Limit Service (optional, external HTTP):**
+- Base URL: `ENDPOINT_URL` env var; if unset/empty, key validation and rate limiting are disabled
+- Client: `requests` in `auth/apikeys.py` (`ApiKeyCacheManager`)
+- Calls:
+  - `POST {ENDPOINT_URL}/check` — body `{apiKey, service}`, header `Harmony-Api-Key: $HARMONYSPEECH_API_KEY`; returns per-key stats (`requestsLastMinute`, `requestsLastDay`, `requestsPerMinuteLimit`, `requestsPerDayLimit`)
+  - `POST {ENDPOINT_URL}/event` — body `{apiKey, service, eventType, ipAddress}`; returns `eventID`; fired from a background thread per authenticated request
+- Timeouts: 10 s; connection/timeout/HTTP/JSON errors are logged, not raised
+- In-memory cache of stats keyed by API key (60 s window logic in `check_request_allowed_by_rate_limit`)
 
 ## Data Storage
 
 **Databases:**
-- None — Harmony Speech Engine is stateless; no database integration
+- None — the engine is stateless; no database integration anywhere in `harmonyspeech/`
 
 **File Storage:**
-- Local filesystem for model cache: `./cache/` mounted as Docker volume at `/app/harmony-speech-engine/cache`
-- Models downloaded once and reused across restarts
+- Local filesystem only
+- Model cache: `./cache/` → `/app/harmony-speech-engine/cache` (`HF_HOME`)
+- Numba cache: `${HF_HOME}/numba_cache` (`NUMBA_CACHE_DIR`)
+- File locks for concurrent downloads: `$XDG_CACHE_HOME/harmony/locks/`
 
 **Caching:**
-- Filesystem cache via `cached_path` package
-- Hugging Face Hub cache via `huggingface_hub` snapshot download mechanism
+- `cached_path` + Hugging Face Hub snapshot/disk cache
+- In-process immutable caches in `harmonyspeech/modeling/hf_downloader.py` (`_config_cache`, `_file_cache`) to avoid repeated HF HEAD/ETag checks
+- In-process API-key stats cache in `auth/apikeys.py`
 
 ## Authentication & Identity
 
-**Auth Provider:**
-- Custom API Key authentication
-  - Implementation: `auth/apikeys.py`
-  - Pattern: Bearer token / API key header validation on incoming requests
-  - Config: API keys configured via `.env` file (environment variable, name not exposed in source)
+**Inbound API auth (optional):**
+- Enabled when `HARMONYSPEECH_API_KEY` is set (env) or `--api-keys` is passed (`harmonyspeech/endpoints/openai/api_server.py:304`)
+- Headers accepted: `Api-Key` (Harmony rate-limited keys) and `Authorization` (static shared key)
+- Applied only to paths starting with `/v1`; `OPTIONS` requests bypass; `/api` prefix excluded
+- `HARMONYSPEECH_ADMIN_KEY` / `--admin-key` gates admin operations; warning logged if absent
+- Rate limiting delegated to the external Harmony service (see above); `SERVICE_NAME` (default `harmony-speech-engine`) scopes limits
+- Client IP taken from `request.client.host`, with `X-Real-Ip` header honored when present
 
-**Hugging Face Authentication:**
-- Optional `HF_TOKEN` environment variable for gated/private model access
-- Used by `harmonyspeech/modeling/hf_downloader.py`
+**Hugging Face auth:**
+- `HF_TOKEN` for gated/private repositories
 
 ## Model Integrations (AI/ML Providers)
 
-All AI models run locally — no cloud AI API calls. Models are downloaded from Hugging Face and served on the local machine.
+All AI models execute locally — no cloud inference APIs are called.
 
-### TTS Providers
+### TTS / Voice Conversion Providers
 
-**Harmony Speech V1 (TTS):**
+**Chatterbox (Resemble AI) — 4 variants:**
+- Standard TTS: `https://huggingface.co/resemble-ai/chatterbox` (repo id used verbatim in `config.yml`/`config.gpu.yml`)
+- Turbo TTS: `https://huggingface.co/ResembleAI/chatterbox-turbo` (hard-coded `_CHATTERBOX_TURBO_REPO_ID` in `harmonyspeech/modeling/models/chatterbox/chatterbox.py`, fetched via `snapshot_download` with `allow_patterns=["*.safetensors","*.json","*.txt","*.pt","*.model"]`)
+- Multilingual TTS: same `resemble-ai/chatterbox` repo, 23 languages (`SUPPORTED_LANGUAGES` mirrored from `chatterbox.mtl_tts`)
+- Voice conversion: `resemble-ai/chatterbox` via `ChatterboxVC`
+- Implementation: thin wrappers in `harmonyspeech/modeling/models/chatterbox/chatterbox.py` over the `chatterbox` Python package (`chatterbox-tts==0.1.6`, installed `--no-deps`)
+- Loader branches: `harmonyspeech/modeling/loader.py:304-336`
+- Watermarking: `resemble-perth==1.0.1` implicit watermarker; `watermark: false` in YAML swaps in `perth.DummyWatermarker()` at load time
+- Embeddings: `ChatterboxEmbedding` model type reuses one of the TTS wrappers to serve `/v1/embed/speaker`
+- CPU caveats handled in code: `map_location=cpu` monkey-patch for multilingual checkpoints; float32 casts for `s3gen` mel filters and `voice_encoder` LSTM; `attn_implementation="eager"` for the multilingual T3
+
+**KittenTTS (ONNX TTS, English):**
+- Sources: `KittenML/kitten-tts-mini-0.8`, `KittenML/kitten-tts-micro-0.8`, `KittenML/kitten-tts-nano-0.8-fp32`, `KittenML/kitten-tts-nano-0.8-int8`
+- Runtime: `onnxruntime`; downloads `config.json`, the model file named by `config["model_file"]`, and voices file via `hf_hub_download`
+- Phonemizer: `misaki[en]>=0.9.4` (+ `espeakng_loader`)
+- Model type: `KittenTTSSynthesizer`; voices Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
+- Implementation: `harmonyspeech/modeling/models/kittentts/`
+
+**HarmonySpeech V1:**
 - Source: `https://huggingface.co/harmony-ai/harmony-speech-v1`
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/harmonyspeech/`
-- Components: Encoder, Synthesizer (Forward-Tacotron based), Vocoder (MultiBand-MelGAN)
-- Model types in config: `HarmonySpeechEncoder`, `HarmonySpeechSynthesizer`, `HarmonySpeechVocoder`
+- Model types: `HarmonySpeechEncoder` (SpeakerEncoder), `HarmonySpeechSynthesizer` (ForwardTacotron), `HarmonySpeechVocoder` (MelGANGenerator)
+- Implementation: `harmonyspeech/modeling/models/harmonyspeech/`
 
-**OpenVoice V1 (TTS + Voice Conversion):**
-- Source: `https://huggingface.co/myshell-ai/OpenVoice` (MyShell AI)
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/openvoice/`
-- Languages: EN, ZH
-- Model types in config: `OpenVoiceV1Synthesizer`, `OpenVoiceV1ToneConverter`, `OpenVoiceV1ToneConverterEncoder`
-- Dependency: Requires Faster-Whisper for embedding step
+**OpenVoice V1:**
+- Source: `https://huggingface.co/myshell-ai/openvoice`
+- Model types: `OpenVoiceV1Synthesizer`, `OpenVoiceV1ToneConverter`, `OpenVoiceV1ToneConverterEncoder`
+- Languages: EN, ZH; voices for EN include default/whispering/shouting/excited/cheerful/terrified/angry/sad/friendly
+- Implementation: `harmonyspeech/modeling/models/openvoice/`
+- Depends on Faster-Whisper for the embedding/VAD-assisted step
 
-**OpenVoice V2 / MeloTTS (TTS + Voice Conversion):**
-- Source: `https://huggingface.co/myshell-ai/MeloTTS-*` and `https://huggingface.co/myshell-ai/openvoicev2`
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/melo/` and `harmonyspeech/modeling/models/openvoice/`
-- Languages: EN, ZH, ES, FR, JP, KR
-- Model types in config: `MeloTTSSynthesizer`, `OpenVoiceV2ToneConverter`, `OpenVoiceV2ToneConverterEncoder`
-- Dependency: Requires Faster-Whisper for embedding step
+**MeloTTS / OpenVoice V2:**
+- Sources: `myshell-ai/MeloTTS-English-v3`, `-Chinese`, `-Spanish`, `-French`, `-Japanese`, `-Korean`; tone converter from `https://huggingface.co/myshell-ai/openvoicev2`
+- Model types: `MeloTTSSynthesizer`, `OpenVoiceV2ToneConverter`, `OpenVoiceV2ToneConverterEncoder`
+- Implementation: `harmonyspeech/modeling/models/melo/` and `harmonyspeech/modeling/models/openvoice/`
+- Depends on Faster-Whisper for the embedding step
 
-**KittenTTS (ONNX TTS):**
-- Source: `https://huggingface.co/KittenML/kitten-tts-mini-0.8` (and micro/nano variants)
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/kittentts/`
-- Runtime: ONNX via `onnxruntime`
-- Phonemizer: `misaki[en]>=0.9.4`
-- Model type in config: `KittenTTSSynthesizer`
-- Voices: Bella, Jasper, Luna, Bruno, Rosie, Hugo, Kiki, Leo
-- **Variants available:**
-  - `kitten-tts-mini`: Highest quality, 80MB
-  - `kitten-tts-micro`: Good quality, 41MB
-  - `kitten-tts-nano`: Lightweight, 56MB fp32
-  - `kitten-tts-nano-int8`: Most compact, 25MB (quantized)
-- **Note:** KittenTTS is English-only TTS with ultra-fast inference via ONNX
+**VoiceFixer (audio restoration):**
+- Source: `https://huggingface.co/jlmarrugom/voice_fixer` (alternative in config comments: `cqchangm/voicefixer`)
+- Model types: `VoiceFixerRestorer`, `VoiceFixerVocoder`
+- Processes at 44.1 kHz internally
+- Implementation: `harmonyspeech/modeling/models/voicefixer/`
 
-**VoiceFixer (Audio Restoration):**
-- Source: `https://huggingface.co/jlmarrugom/voice_fixer` (alternative: `cqchangm/voicefixer`)
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/voicefixer/`
-- Components: Restorer (denoising) + Vocoder (mel-spectrogram to audio)
-- Model types in config: `VoiceFixerRestorer`, `VoiceFixerVocoder`
+### STT Providers
 
-**Chatterbox (TTS):**
-- Implementation: Adapted — model code in `harmonyspeech/modeling/models/chatterbox/`
-- Components: s3gen (Matcha-based), s3tokenizer, t3 transformer, voice encoder
-- Status: Present in codebase, not yet listed in default `config.yml`
+**Faster-Whisper / Distil-Whisper:**
+- Library: `faster-whisper>=1.1.0`; backend `ctranslate2==4.4.0` (pinned)
+- Model tags: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`
+- Config uses `medium` + `tiny` on CPU (`config.yml`) and `large-v3-turbo` + `tiny` on CUDA (`config.gpu.yml`)
+- Model type: `FasterWhisper`; implementation is the third-party package (registry entry `("faster-wisper", "native")`)
 
-### STT / ASR Providers
+### VAD Providers
 
-**Faster-Whisper / Distil-Whisper (STT + VAD):**
-- Source: SYSTRAN's `faster-whisper` library (PyPI: `faster-whisper>=1.1.0`); models from OpenAI via Hugging Face
-- Implementation: Native / Third-Party — uses the `faster_whisper` package directly
-- Model types in config: `FasterWhisper`
-- Supports all Faster-Whisper model tags: `tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`, `large-v3-turbo`
-- Backend: CTranslate2 (`ctranslate2` package, version 4.4.0)
-- Default models in config: `medium`, `tiny`
+**Silero VAD:**
+- Package: `silero-vad`; ONNX weights via `onnx-community/silero-vad`
+- Model type: `SileroVAD`, `load_format: "onnx"`, always CPU
+- Configurable params surfaced through `/v1/audio/vad`: `threshold`, `min_speech_duration_ms`, `min_silence_duration_ms`, `speech_pad_ms`, `return_seconds`
 
-### VAD (Voice Activity Detection) Providers
+### Planned Provider Integration (NOT implemented)
 
-**Silero VAD (Voice Activity Detection):**
-- Source: `https://huggingface.co/onnx-community/silero-vad`; PyTorch source at `snakers4/silero-vad`
-- Implementation: Native / Third-Party — uses `silero-vad` package + `onnxruntime`
-- Model type in config: `SileroVAD`
-- Load format: `onnx` (ONNX version for CPU-optimized inference)
+**vllm-omni (GPU-only):**
+- Design: `VllmOmniExecutor` wrapping `Omni`, which spawns its own per-stage subprocesses (`multiprocessing.spawn` or Ray) communicating over ZMQ/mp.Queue — bypasses `GPUWorker → GPUModelRunner → loader.get_model()`
+- Planned model type: `VllmOmniTTS`; planned config entries for `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` and `Qwen/Qwen3-TTS-12Hz-1.7B-Base`
+- Planned dependency placement: `requirements-cuda.txt` and `requirements-rocm.txt` only
+- Reference docs: `.current_work/vllm-omni-integration-plan.md`, `.current_work/vllm-omni-analysis.md` (upstream analyzed at v0.16.0)
+- Current repo state: no `harmonyspeech/executor/vllm_omni_executor.py`, no `VllmOmniTTS` in `harmonyspeech/modeling/models/__init__.py`, no `vllm-omni` requirement
 
 ## API Protocol
 
-**Exposed API (Outward-facing):**
-- Protocol: OpenAI-compatible REST API
-- Framework: FastAPI + Uvicorn
-- Default port: `12080`
-- Base path: `/v1/`
-- Documentation: Swagger UI at `/docs`, ReDoc at `/redoc`
-- OpenAPI spec: `docs/api/` directory (for client generation)
+**Exposed API (outward-facing):**
+- Protocol: OpenAI-style REST + JSON (audio returned base64-encoded)
+- Framework: FastAPI + Uvicorn; Swagger at `/docs`, ReDoc at `/redoc`
+- Port: `12080` (Docker entrypoint, Compose, README). CLI arg default is `2242` in `harmonyspeech/endpoints/openai/args.py`
+- OpenAPI artifacts: `docs/api/openapi.json`, generators `docs/api/generate_openapi_go.sh` / `generate_openapi_js.sh`; schema tagged `x-go-client-name: HarmonySpeechAPI`, `x-go-package: harmonyspeech`
+- Streaming: not active (streaming responses are commented out in `api_server.py`)
 
-**Endpoints:**
-- `POST /v1/audio/speech` — Text-to-Speech
-- `POST /v1/audio/transcriptions` — Speech-to-Text
-- `POST /v1/audio/vad` — Voice Activity Detection
-- `POST /v1/audio/convert` — Audio Conversion (e.g., VoiceFixer restoration)
-- `POST /v1/audio/voice-convert` — Voice Conversion (tone transfer)
-- `POST /v1/audio/embed` — Speaker Embedding
-- `POST /v1/audio/synthesize` — Low-level Synthesis (synthesizer step only)
-- `POST /v1/audio/vocode` — Low-level Vocoding step
-- `GET /v1/models` — List loaded models
-- `GET /metrics` — Prometheus metrics endpoint
+**Routes (from `harmonyspeech/endpoints/openai/api_server.py`):**
+- `GET /health` — aggregate health of TTS/STT/VC/embedding/VAD engines
+- `GET /version` — `harmonyspeech.__version__`
+- `POST /v1/audio/speech` — TTS
+- `GET /v1/audio/speech/models`
+- `POST /v1/embed/speaker` — speaker embedding
+- `GET /v1/embed/models`
+- `POST /v1/audio/transcriptions` — STT
+- `GET /v1/audio/transcriptions/models`
+- `POST /v1/voice/convert` — voice conversion
+- `GET /v1/voice/convert/models`
+- `POST /v1/audio/vad` — voice activity detection
+- `GET /v1/audio/vad/models`
+- `POST /v1/audio/convert` — audio restoration/conversion (VoiceFixer)
+- `GET /v1/audio/convert/models`
+- `GET /metrics` — Prometheus ASGI app mounted on the router
+- No `/v1/models`, `/v1/audio/synthesize`, `/v1/audio/vocode`, `/v1/audio/voice-convert`, or `/v1/audio/embed` routes exist (superseded by the per-modality `/models` and `/v1/embed/speaker` routes)
 
-**Request/Response format:**
-- JSON with base64-encoded audio payloads
-- Audio format configurable: default `wav`, sample rate optional
-- Defined in `harmonyspeech/endpoints/openai/protocol.py`
+**Request/response models:** `harmonyspeech/endpoints/openai/protocol.py`
+**Serving layer:** `harmonyspeech/endpoints/openai/serving_text_to_speech.py`, `serving_speech_to_text.py`, `serving_voice_conversion.py`, `serving_voice_embed.py`, `serving_voice_activity_detection.py`, `serving_audio_conversion.py`
+
+**Frontend integration:**
+- Operator UI lives in `frontend/` (React 19 + Vite 7 + Tailwind 4, zustand, i18next)
+- Client SDK: `@harmony-ai/harmonyspeech` (`^0.1.1`, `HarmonySpeechEnginePlugin`) and `@harmony-ai-solutions/soulbits-api-client` (pinned GitHub ref)
+- Defaults to engine endpoint `http://localhost:12080` (`frontend/src/HarmonySpeechEngineApp.jsx`)
+- Mode selectable via `VITE_APP_MODE` (`harmony-link` vs `speech-engine`) in `frontend/src/config/appMode.js`; build with `npm run build:speech-engine`
+- Management API client: `VITE_MGMT_API_URL` (default `http://localhost`) and `VITE_MGMT_API_PORT` (default `28081`) in `frontend/src/services/management/baseService.js`
 
 ## Monitoring & Observability
 
 **Metrics:**
-- `prometheus_client` — Prometheus metrics endpoint at `/metrics`
-- Metrics implementation: `harmonyspeech/common/metrics.py` and `harmonyspeech/engine/metrics.py`
+- `prometheus_client` ASGI app mounted at `/metrics` (`api_server.py:83`)
+- Counters/histograms/gauges defined in `harmonyspeech/engine/metrics.py` and `harmonyspeech/common/metrics.py`: scheduler running/swapped/waiting, GPU/CPU cache usage, prompt/generation tokens, time-to-first-token, time-per-output-token, E2E latency, avg prompt/generation throughput
+- Periodic stats logging: `HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC` (default 5)
 
 **Logs:**
-- `loguru` — Structured logging throughout application
-- Logger setup: `harmonyspeech/common/logger.py`
+- `loguru` throughout; `harmonyspeech/common/logger.py`, level from `HARMONYSPEECH_LOG_LEVEL` (default `INFO`); Uvicorn log config `UVICORN_LOG_CONFIG`
+- `auth/apikeys.py` uses the stdlib `logging` module
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Docker containers published to Docker Hub: `harmonyai/harmonyspeech-engine-cpu:latest`, `harmonyai/harmonyspeech-engine-nvidia:latest`
-- UI container: `harmonyai/harmonyspeech-ui:latest`
+- Docker Hub (namespace from `secrets.DOCKER_HUB_USERNAME`)
+- Engine images: `harmonyspeech-engine-cpu:latest`, `harmonyspeech-engine-nvidia:latest`, `harmonyspeech-engine-amd:latest`, `harmonyspeech-engine-amd-wsl:latest`
+- UI image: `harmonyspeech-ui` built from `frontend/Dockerfile.speech-engine`
 
 **CI Pipeline:**
-- GitHub Actions (`.github/workflows/` directory)
-- Test workflow (`test.yml`): Unit, integration, and E2E tests
-- Docker release workflow (`docker-release-engine.yml`): Builds CPU, AMD, NVIDIA variants
+- `.github/workflows/test.yml` — `test`, `lint` (ruff), and 10 model-scoped E2E jobs including `e2e-chatterbox`, `e2e-chatterbox-turbo`, `e2e-chatterbox-multilingual`
+- `.github/workflows/docker-release-engine.yml` — 4 build jobs, one per Docker variant, with buildx caching
+- `.github/workflows/docker-release-ui.yml` — single UI build/push job
 
-**Container Variants:**
-- CPU: `docker-compose.yml` → `harmonyai/harmonyspeech-engine-cpu:latest`
-- NVIDIA GPU: `docker-compose.nvidia.yml` → `harmonyai/harmonyspeech-engine-nvidia:latest` (requires `nvidia` driver capability)
-- AMD GPU: `docker-compose.amd.yml` (ROCm-based)
-- Docker build contexts: `docker/cpu`, `docker/amd`, `docker/amd-wsl`, `docker/nvidia`
+**Docker build contexts:** `docker/cpu`, `docker/amd`, `docker/amd-wsl`, `docker/nvidia`; `CLONE_FROM_GITHUB=1` build arg switches from local source to a fresh GitHub clone for CI
 
 ## Environment Configuration
 
-**Required env vars (from `.env`):**
-- `HF_TOKEN` — Optional Hugging Face token for private model access
-- API key configuration for endpoint auth (configured in `auth/apikeys.py`)
+**Required / meaningful env vars:**
+- `ENDPOINT_URL` — Harmony API-key service base URL (omit to disable key checks)
+- `HARMONYSPEECH_API_KEY` — static shared key; also enables the auth middleware
+- `HARMONYSPEECH_ADMIN_KEY` — admin key
+- `SERVICE_NAME` — default `harmony-speech-engine`
+- `HF_TOKEN` — optional Hugging Face token
+- `HF_HOME` — model cache root (set in images)
+- `NUMBA_CACHE_DIR` — numba cache (set in images)
+- `HARMONYSPEECH_LOG_LEVEL`, `HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC`, `HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S`
+- `HARMONYSPEECH_TARGET_DEVICE` — build-time target (`cuda`/`rocm`/`cpu`) read by `setup.py`
 
 **Secrets location:**
-- `.env` file (local, not committed to git; `.gitignore` enforced)
-- `.env-amd` for AMD GPU variant
+- `.env` (CPU/NVIDIA Compose) and `.env-amd` (AMD Compose) — present locally, not committed; `.env.example` is the committed template
+- GitHub Actions secrets: `DOCKER_HUB_USERNAME`, Docker Hub token, HF token for E2E caching
 
 ## Webhooks & Callbacks
 
-**Incoming:** None — purely request/response REST API
+**Incoming:** None — request/response REST only; no webhook receiver routes.
 
-**Outgoing:** None — all processing is local inference only
+**Outgoing:**
+- Hugging Face Hub downloads on first model use
+- `POST {ENDPOINT_URL}/check` and `POST {ENDPOINT_URL}/event` to the optional Harmony API-key service
+- No other outbound callbacks; all AI inference runs in-process
 
 ---
 
-*Integration audit: 2026-03-11*
+*Integration audit: 2026-11-02*

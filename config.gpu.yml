@@ -33,15 +33,15 @@ model_configs:
     device_config:
       device: "cuda"
 
-#  - name: "ov1-synthesizer-zh"
-#    model: "myshell-ai/openvoice"
-#    model_type: "OpenVoiceV1Synthesizer"
-#    language: "ZH"
-#    voices: ["default"]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cuda"
+  - name: "ov1-synthesizer-zh"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "ZH"
+    voices: ["default"]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
 
   - name: "ov1-tone-converter"
     model: "myshell-ai/openvoice"
@@ -69,15 +69,15 @@ model_configs:
     device_config:
       device: "cuda"
 
-#  - name: "ov2-synthesizer-zh"
-#    model: "myshell-ai/MeloTTS-Chinese"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "ZH"
-#    voices: [ "ZH" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cuda"
+  - name: "ov2-synthesizer-zh"
+    model: "myshell-ai/MeloTTS-Chinese"
+    model_type: "MeloTTSSynthesizer"
+    language: "ZH"
+    voices: [ "ZH" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
 
   - name: "ov2-synthesizer-es"
     model: "myshell-ai/MeloTTS-Spanish"
@@ -88,26 +88,26 @@ model_configs:
     dtype: "float32"
     device_config:
       device: "cuda"
-#
-#  - name: "ov2-synthesizer-fr"
-#    model: "myshell-ai/MeloTTS-French"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "FR"
-#    voices: [ "FR" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cuda"
-#
-#  - name: "ov2-synthesizer-ja"
-#    model: "myshell-ai/MeloTTS-Japanese"
-#    model_type: "MeloTTSSynthesizer"
-#    language: "JA"
-#    voices: [ "JP" ]
-#    max_batch_size: 10
-#    dtype: "float32"
-#    device_config:
-#      device: "cuda"
+
+  - name: "ov2-synthesizer-fr"
+    model: "myshell-ai/MeloTTS-French"
+    model_type: "MeloTTSSynthesizer"
+    language: "FR"
+    voices: [ "FR" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
+
+  - name: "ov2-synthesizer-ja"
+    model: "myshell-ai/MeloTTS-Japanese"
+    model_type: "MeloTTSSynthesizer"
+    language: "JA"
+    voices: [ "JP" ]
+    max_batch_size: 10
+    dtype: "float32"
+    device_config:
+      device: "cuda"
 
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
@@ -183,34 +183,34 @@ model_configs:
       device: "cpu"
 
   # kitten-tts-micro: Good quality, 41MB
-  # - name: "kitten-tts-micro"
-  #   model: "KittenML/kitten-tts-micro-0.8"
-  #   model_type: "KittenTTSSynthesizer"
-  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
-  #   max_batch_size: 4
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cpu"
+  - name: "kitten-tts-micro"
+    model: "KittenML/kitten-tts-micro-0.8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
 
   # kitten-tts-nano: Lightweight, 56MB fp32
-  # - name: "kitten-tts-nano"
-  #   model: "KittenML/kitten-tts-nano-0.8-fp32"
-  #   model_type: "KittenTTSSynthesizer"
-  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
-  #   max_batch_size: 4
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cpu"
+  - name: "kitten-tts-nano"
+    model: "KittenML/kitten-tts-nano-0.8-fp32"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
 
   # kitten-tts-nano-int8: Most compact, 25MB (quantized)
-  # - name: "kitten-tts-nano-int8"
-  #   model: "KittenML/kitten-tts-nano-0.8-int8"
-  #   model_type: "KittenTTSSynthesizer"
-  #   voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
-  #   max_batch_size: 4
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cpu"
+  - name: "kitten-tts-nano-int8"
+    model: "KittenML/kitten-tts-nano-0.8-int8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
 
   # ===========================================================================
   # Chatterbox TTS - High-quality voice cloning TTS
@@ -258,10 +258,10 @@ model_configs:
 
   # Chatterbox Embedding (OPTIONAL) - dedicated executor for /v1/embeddings endpoint
   # If omitted, embedding requests are handled by the ChatterboxTTS executor above.
-  # - name: "chatterbox_embedding"
-  #   model: "resemble-ai/chatterbox"
-  #   model_type: "ChatterboxEmbedding"
-  #   max_batch_size: 1
-  #   dtype: "float32"
-  #   device_config:
-  #     device: "cuda"
+  - name: "chatterbox_embedding"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxEmbedding"
+    max_batch_size: 1
+    dtype: "float32"
+    device_config:
+      device: "cuda"

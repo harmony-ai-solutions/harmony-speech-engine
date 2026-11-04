@@ -1,351 +1,514 @@
+<!-- refreshed: 2026-11-02 -->
 # Architecture
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-11-02
+
+## System Overview
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            External Clients                                   │
+│  (Harmony Link, Web UI, curl, other apps)                                     │
+└────────────────────────────────┬─────────────────────────────────────────────┘
+                                 │ HTTP (base64 audio in JSON)
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                    API Layer — FastAPI (`harmonyspeech/endpoints/openai`)      │
+│  ┌───────────────┐ ┌────────────────┐ ┌────────────────┐ ┌─────────────────┐ │
+│  │ TTS Serving   │ │ STT Serving    │ │ VC Serving     │ │ AudioConversion │ │
+│  │ Embed Serving │ │ VAD Serving    │ │ ModelCard/     │ │ Auth middleware │ │
+│  └───────┬───────┘ └───────┬────────┘ └───────┬────────┘ └─────────────────┘ │
+│          │ _*_MODEL_TYPES / _*_MODEL_GROUPS (toolchain "embed-dispatch")     │
+└──────────┴─────────────────┴─────────────────┴───────────────────────────────┘
+                                 │ EngineRequest(request_data = RequestInput)
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                 Engine Layer (`harmonyspeech/engine/`)                        │
+│  AsyncHarmonySpeech (async wrapper + RequestTracker + background loop)        │
+│      └── _AsyncHarmonySpeech (subclass of HarmonySpeechEngine)                │
+│  HarmonySpeechEngine: request rerouting + multi-step forward pipeline         │
+└────────────────────────────────┬─────────────────────────────────────────────┘
+                                 │ per-model queues
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│         Scheduler (`harmonyspeech/processing/scheduler.py`)                   │
+│  one deque of waiting + one of running; per-model batch budget                │
+└────────────────────────────────┬─────────────────────────────────────────────┘
+                                 │ SchedulerOutputs.scheduled_requests_per_model
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│              Executor Layer (`harmonyspeech/executor/`)                       │
+│  CPUExecutor · GPUExecutor · GPUExecutorAsync   (Ray executor is dead code)   │
+└────────────────────────────────┬─────────────────────────────────────────────┘
+                                 │ one worker per model config
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│        Worker / Model Runner (`harmonyspeech/task_handler/`)                  │
+│  CPUWorker / GPUWorker → CPUModelRunner / GPUModelRunner                      │
+│  ModelRunnerBase.execute_model(): prepare_inputs() → per-model `_execute_*`   │
+└────────────────────────────────┬─────────────────────────────────────────────┘
+                                 │
+                                 ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│            Modeling Layer (`harmonyspeech/modeling/`)                         │
+│  loader.get_model() → ModelRegistry (_MODELS) or native loader branches       │
+│  models/: harmonyspeech · openvoice · melo · kittentts · voicefixer ·         │
+│           chatterbox                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Component Responsibilities
+
+| Component | Responsibility | File |
+|-----------|----------------|------|
+| FastAPI app / routes | HTTP surface, auth middleware, CORS, OpenAPI customization | `harmonyspeech/endpoints/openai/api_server.py` |
+| API protocol | Single source of truth for request/response schemas | `harmonyspeech/endpoints/openai/protocol.py` |
+| Base serving class | Error responses, model-card construction from configs, per-model language/voice validation | `harmonyspeech/endpoints/openai/serving_engine.py` |
+| TTS serving | `/v1/audio/speech` → `TextToSpeechRequestInput`, returns base64 WAV | `harmonyspeech/endpoints/openai/serving_text_to_speech.py` |
+| Embedding serving | `/v1/embed/speaker` → `SpeechEmbeddingRequestInput` ("embed-dispatch") | `harmonyspeech/endpoints/openai/serving_voice_embed.py` |
+| STT serving | `/v1/audio/transcriptions` → `SpeechTranscribeRequestInput` | `harmonyspeech/endpoints/openai/serving_speech_to_text.py` |
+| VAD serving | `/v1/audio/vad` → `DetectVoiceActivityRequestInput` | `harmonyspeech/endpoints/openai/serving_voice_activity_detection.py` |
+| Voice conversion serving | `/v1/voice/convert` → `VoiceConversionRequestInput` | `harmonyspeech/endpoints/openai/serving_voice_conversion.py` |
+| Audio conversion serving | `/v1/audio/convert` → `AudioConversionRequestInput` | `harmonyspeech/endpoints/openai/serving_audio_conversion.py` |
+| Async engine | Request tracker, background loop, stream fan-out, abort | `harmonyspeech/engine/async_harmonyspeech.py` |
+| Core engine | Model rerouting, multi-step forwarding state machine, per-model parallel execution | `harmonyspeech/engine/harmonyspeech_engine.py` |
+| Scheduler | Waiting/running queues, per-model batch budgets, status transitions | `harmonyspeech/processing/scheduler.py` |
+| Executors | Device backend abstraction and one-worker-per-model ownership | `harmonyspeech/executor/` |
+| Model runners | Input preparation dispatch and per-model inference (`_execute_*`) | `harmonyspeech/task_handler/model_runner_base.py` |
+| Input preparation | `prepare_inputs()` + all `prepare_*_inputs()` functions | `harmonyspeech/task_handler/inputs.py` |
+| Model loader | model class/config/weight/speaker resolution and native model construction | `harmonyspeech/modeling/loader.py` |
+| Model registry | `model_type` → (module, class) or `"native"` | `harmonyspeech/modeling/models/__init__.py` |
+| HuggingFace downloader | Three-tier file resolution (local → HF cache → network), in-memory caches | `harmonyspeech/modeling/hf_downloader.py` |
 
 ## Pattern Overview
 
-**Overall:** Async inference server with layered pipeline architecture — similar in design to vLLM/Aphrodite Engine, adapted for speech AI tasks.
+**Overall:** Async inference server with layered pipeline architecture (vLLM/Aphrodite-derived skeleton), adapted for many independent speech models that are orchestrated into toolchains.
 
 **Key Characteristics:**
-- OpenAI-compatible REST API surface (extended for speech-specific operations)
-- Request batching scheduler that aggregates concurrent requests before dispatching to model workers
-- Pluggable executor backends (CPU, GPU, Ray multi-GPU) — selectable at startup
-- Multi-model configuration: multiple named model instances running concurrently, each with its own worker
-- Pipeline composition: a single high-level request (e.g., TextToSpeech) may internally fan out to multiple sub-model steps (encode → synthesize → vocode → convert)
-
-## System Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            External Clients                                  │
-│  (Harmony Link, curl, other apps)                                           │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        API Layer (Endpoints)                                 │
-│  harmonyspeech/endpoints/openai/                                            │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐  │
-│  │ TextToSpeech │ │ SpeechToText │ │ VoiceActivity│ │ VoiceConversion  │  │
-│  │ Serving      │ │ Serving      │ │ Detection    │ │ Serving          │  │
-│  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────────┘  │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      Engine Layer (Core)                                     │
-│  harmonyspeech/engine/                                                       │
-│  ┌─────────────────────────┐  ┌────────────────────────────────────────┐   │
-│  │ AsyncHarmonySpeech      │  │ HarmonySpeechEngine (sync wrapper)    │   │
-│  │ - request lifecycle     │  │ - orchestration                       │   │
-│  └───────────┬─────────────┘  └──────────────────────┬─────────────────┘   │
-│              │                                        │                      │
-│              ▼                                        ▼                      │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                    Processing/Scheduling Layer                       │   │
-│  │  harmonyspeech/processing/scheduler.py                              │   │
-│  │  - HarmonySpeechScheduler: queues requests, batches up to           │   │
-│  │    max_batch_size per model                                         │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      Executor Layer                                          │
-│  harmonyspeech/executor/                                                     │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────────────────────┐    │
-│  │ CPUExecutor  │ │ GPUExecutor  │ │ RayGPUExecutor (multi-GPU)      │    │
-│  └──────────────┘ └──────────────┘ └──────────────────────────────────┘    │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                   Task Handler / Worker Layer                                │
-│  harmonyspeech/task_handler/                                                 │
-│  ┌─────────────────────┐ ┌────────────────────────────────────────────┐    │
-│  │ WorkerBase          │ │ ModelRunnerBase                             │    │
-│  │ - CPUWorker         │ │ - CPUModelRunner                           │    │
-│  │ - GPUWorker         │ │ - GPUModelRunner                           │    │
-│  │ - loads models      │ │ - prepare_inputs()                         │    │
-│  │ - executes batches  │ │ - forward pass                             │    │
-│  └─────────────────────┘ └────────────────────────────────────────────┘    │
-└────────────────────────────────┬────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                      Modeling Layer                                          │
-│  harmonyspeech/modeling/                                                     │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │ loader.py: get_model_class(), get_model_config(), get_model_weights()│   │
-│  │ hf_downloader.py: HuggingFace Hub integration                        │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-│  harmonyspeech/modeling/models/                                              │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────────┐ ┌────────────┐          │
-│  │melotts/ │ │kittentts│ │openvoice│ │harmonysp..│ │voicefixer/ │          │
-│  │         │ │         │ │         │ │           │ │            │          │
-│  │ (PyTorch│ │ (ONNX)  │ │ (PyTorch│ │ (PyTorch) │ │ (PyTorch)  │          │
-│  │  TTS)   │ │ Ultra-  │ │  TTS/VC)│ │  Pipeline │ │  Restore)  │          │
-│  └─────────┘ └─────────┘ └─────────┘ └───────────┘ └────────────┘          │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+- OpenAI-style REST surface, extended with speech-specific request fields (`mode`, `input_audio`, `input_vad_data`, `input_embedding`, `generation_options`, `post_generation_filters`)
+- One executor + worker + loaded model per entry in `model_configs` (`config.yml`)
+- A single API call may fan out into several sequential model steps through internal request re-submission (never a synchronous nested call)
+- Dispatch is string-keyed on `ModelConfig.model_type` at four independent points: serving model lists, loader, input preparation, and model runner execution
+- All audio crosses the API boundary as base64 strings; decoding happens inside `prepare_inputs()` on worker threads
+- Batch execution is a Python loop over prepared inputs for every `_execute_*` method (no tensor batching)
 
 ## Layers
 
-**API Layer (Endpoint):**
-- Purpose: Accept HTTP requests, validate schemas, create `EngineRequest` objects, stream or return results
+**API Layer:**
+- Purpose: Accept HTTP requests, validate via Pydantic, convert protocol objects to `RequestInput`, consume the async result stream, shape responses
 - Location: `harmonyspeech/endpoints/openai/`
-- Contains: FastAPI app (`api_server.py`), Pydantic request/response protocol (`protocol.py`), per-capability serving modules (`serving_text_to_speech.py`, `serving_speech_to_text.py`, `serving_voice_conversion.py`, `serving_audio_conversion.py`, `serving_voice_activity_detection.py`, `serving_voice_embed.py`)
-- Depends on: Engine layer
-- Used by: External HTTP clients (Harmony Link, other applications)
+- Contains: `api_server.py`, `protocol.py`, `args.py`, `serving_engine.py`, one `serving_*.py` per capability
+- Depends on: Engine layer, `auth.apikeys`
+- Used by: External HTTP clients and the bundled React frontend
 
 **Engine Layer:**
-- Purpose: Orchestrate request lifecycle — submit to scheduler, dispatch to executor, collect and return outputs
+- Purpose: Own the request lifecycle. Resolve which concrete model config handles the current pipeline step, schedule, execute, and either finish or re-submit the request
 - Location: `harmonyspeech/engine/`
-- Contains: Synchronous engine (`harmonyspeech_engine.py`), async wrapper (`async_harmonyspeech.py`), argument parsing (`args_tools.py`), metrics (`metrics.py`)
-- Depends on: Processing (Scheduler), Executor layer
+- Contains: `harmonyspeech_engine.py` (`HarmonySpeechEngine`, `check_reroute_request_to_model`, `check_forward_processing`, `step`), `async_harmonyspeech.py` (`AsyncHarmonySpeech`, `AsyncStream`, `RequestTracker`, `_AsyncHarmonySpeech`), `args_tools.py`, `metrics.py`
+- Depends on: Scheduler, Executors, `common`
 - Used by: API layer
 
 **Processing / Scheduling Layer:**
-- Purpose: Queue and batch incoming `EngineRequest` objects; determine which requests to dispatch in each scheduling cycle
+- Purpose: Hold `EngineRequest`s in `waiting` / `running` deques and produce per-model batches
 - Location: `harmonyspeech/processing/scheduler.py`
-- Contains: `HarmonySpeechScheduler` — manages per-model request queues, batches up to `max_batch_size`
-- Depends on: Common (config, request types)
+- Contains: `Scheduler`, `SchedulingBudget`, `SchedulerOutputs`, `SchedulerWaitingOutputs`
+- Depends on: `common.config`, `common.request`
 - Used by: Engine layer
 
 **Executor Layer:**
-- Purpose: Abstract the compute backend; dispatch batches to one or more workers
+- Purpose: Own one worker per model and expose a sync/async execute entry point
 - Location: `harmonyspeech/executor/`
-- Contains: `ExecutorBase` (`executor_base.py`), `CPUExecutor` (`cpu_executor.py`), `GPUExecutor` (`gpu_executor.py`), `RayGPUExecutor` (`ray_gpu_executor.py`)
+- Contains: `executor_base.py` (`ExecutorBase`, `ExecutorAsyncBase`), `cpu_executor.py` (`CPUExecutor`), `gpu_executor.py` (`GPUExecutor`, `GPUExecutorAsync`)
 - Depends on: Task Handler layer
 - Used by: Engine layer
+- Note: `ray_gpu_executor.py` is entirely commented out and is not imported anywhere. Multi-GPU Ray dispatch is aspirational, not implemented.
 
 **Task Handler / Worker Layer:**
-- Purpose: Run on the compute device (CPU or GPU); load models, prepare inputs, run inference, return outputs
+- Purpose: Load the model onto its device and execute one scheduled batch
 - Location: `harmonyspeech/task_handler/`
-- Contains: `WorkerBase` (`worker_base.py`), `CPUWorker` (`cpu_worker.py`), `GPUWorker` (`gpu_worker.py`), `ModelRunnerBase` (`model_runner_base.py`), `CPUModelRunner` (`cpu_model_runner.py`), `GPUModelRunner` (`gpu_model_runner.py`), `inputs.py` (per-model input preparation)
+- Contains: `worker_base.py`, `cpu_worker.py`, `gpu_worker.py`, `model_runner_base.py` (all inference), `cpu_model_runner.py`, `gpu_model_runner.py` (model loading only), `inputs.py`
 - Depends on: Modeling layer
 - Used by: Executor layer
 
 **Modeling Layer:**
-- Purpose: Contain model class implementations and HuggingFace download/loading utilities
+- Purpose: Resolve and instantiate model classes, download weights, and host the model implementations
 - Location: `harmonyspeech/modeling/`
-- Contains: `loader.py` (model loading, config resolution, speaker embedding loading), `hf_downloader.py`, `utils.py`, per-model packages under `modeling/models/`
-- Depends on: PyTorch, HuggingFace Hub, ONNX Runtime
+- Contains: `loader.py`, `hf_downloader.py`, `utils.py`, `models/{harmonyspeech,openvoice,melo,kittentts,voicefixer,chatterbox}/`
+- Depends on: torch, ONNX Runtime, faster-whisper/CTranslate2, silero-vad, chatterbox-tts, HuggingFace Hub
 - Used by: Task Handler layer
 
 **Common / Shared Layer:**
-- Purpose: Data types, config, utilities shared across all layers
+- Purpose: Config dataclasses, internal request/output types, status enum, metrics, logging, utilities
 - Location: `harmonyspeech/common/`
-- Contains: `config.py` (ModelConfig, DeviceConfig, EngineConfig), `inputs.py` (RequestInput subclasses), `outputs.py` (RequestOutput, GenerationOutput), `request.py` (EngineRequest), `metrics.py`, `logger.py`, `utils.py`
-- Depends on: Nothing internal
-- Used by: All other layers
+- Contains: `config.py`, `inputs.py`, `outputs.py`, `request.py`, `metrics.py`, `logger.py`, `utils.py`
+- Depends on: Nothing internal except `common.utils` (and `inputs.py` imports protocol types for `from_openai` factories)
+- Used by: All layers
+
+## Request Lifecycle
+
+### Stage 1 — Protocol → Internal Input
+
+1. Route handler receives the Pydantic request (`harmonyspeech/endpoints/openai/api_server.py`)
+2. Serving module validates the model id, mode, language and voice against the `ModelCard` list built from config (`serving_engine.py::_check_model`, called from each `serving_*.py`)
+3. `{Capability}RequestInput.from_openai(request_id, request)` creates the internal object in `harmonyspeech/common/inputs.py`. `requested_model` and `model` both start as the API model id (for toolchains this is a sentinel such as `"chatterbox"` or `"openvoice_v2"`).
+4. `AsyncHarmonySpeech.generate()` yields an `AsyncStream`; the serving module consumes it and builds the response
+
+### Stage 2 — Reroute to a Concrete Model
+
+`HarmonySpeechEngine.add_request()` calls `check_reroute_request_to_model()` (`harmonyspeech_engine.py:337`), which dispatches on `request.requested_model`:
+
+| `requested_model` | Handler | Routing rule |
+|---|---|---|
+| `harmonyspeech` | `reroute_request_harmonyspeech` | embed step → `HarmonySpeechEncoder`; synthesis → `HarmonySpeechSynthesizer`; vocode → `HarmonySpeechVocoder`, decided by which of `input_audio` / `input_embedding` are set |
+| `openvoice_v1` | `reroute_request_openvoice_v1` | transcribe (VAD) → `FasterWhisper`; embed → `OpenVoiceV1ToneConverterEncoder`; synthesize → `OpenVoiceV1Synthesizer` matching `language`; convert → `OpenVoiceV1ToneConverter` |
+| `openvoice_v2` | `reroute_request_openvoice_v2` | same shape, with `MeloTTSSynthesizer` and `OpenVoiceV2ToneConverter(Encoder)` |
+| `voicefixer` | `reroute_request_voicefixer` | no `input_mel_spectrogram` → `VoiceFixerRestorer`; otherwise → `VoiceFixerVocoder` |
+| `chatterbox` / `chatterbox_turbo` / `chatterbox_multilingual` | `reroute_request_chatterbox` | embed-ish request → `ChatterboxEmbedding` if configured, else the matching TTS variant; synthesis → matching TTS variant |
+| `chatterbox_vc` | `reroute_request_chatterbox_vc` | always `ChatterboxVC` |
+
+Routing overwrites `request.model` with the concrete `ModelConfig.name`; `requested_model` is never mutated, so it remains the toolchain identity.
+
+Chatterbox sentinel → `model_type` map (`harmonyspeech_engine.py:294`):
+
+```python
+_CHATTERBOX_TTS_TYPE_MAP = {
+    "chatterbox": "ChatterboxTTS",
+    "chatterbox_turbo": "ChatterboxTurboTTS",
+    "chatterbox_multilingual": "ChatterboxMultilingualTTS",
+}
+```
+
+### Stage 3 — Schedule and Execute
+
+1. `Scheduler.schedule()` builds a `SchedulingBudget` from `model_configs[].max_batch_size` (`processing/scheduler.py:191`)
+2. `_schedule_waiting_requests()` admits requests only for models that have no in-flight batch and still have budget (`scheduler.py:134`)
+3. `SchedulerOutputs.scheduled_requests_per_model` maps model name → list of `EngineRequest`
+4. Sync `step()` dispatches each model's batch on a `ThreadPoolExecutor` (`harmonyspeech_engine.py:656`); async `step_async()` awaits each executor in sequence (`async_harmonyspeech.py:190`)
+5. Executor → worker → `ModelRunnerBase.execute_model()` → `prepare_inputs()` → `_execute_{model_type}()` → `ExecutorResult`
+
+### Stage 4 — Forward or Finish
+
+`check_forward_processing()` (`harmonyspeech_engine.py:363`) is the pipeline state machine. It compares the merged request:
+
+- If `result.result_data.finish_reason == "error"` → mark `FINISHED_STOPPED` and pass the error output through (never forward a failure)
+- If the executing config's `name` equals `requested_model` → the caller selected the concrete model directly; finish
+- Otherwise, per toolchain, it mutates the same `RequestInput` and calls `add_request(request_id, forwarding_request)` again:
+
+| Toolchain | Step output → next input | Status |
+|---|---|---|
+| HarmonySpeech / OpenVoice V1 / V2 | `SpeechTranscriptionRequestOutput` → `input_vad_data` | `FINISHED_FORWARDED` |
+| HarmonySpeech / OpenVoice V1 / V2 | `SpeechEmbeddingRequestOutput` → `input_embedding`, `input_audio = None` | `FINISHED_FORWARDED` |
+| OpenVoice V1 / V2 | `SpeechSynthesisRequestOutput` (voice_cloning) → `input_audio` | `FINISHED_FORWARDED` |
+| OpenVoice / HarmonySpeech | final vocode/VC output → wrapped as `TextToSpeechRequestOutput` | `FINISHED_STOPPED` |
+| Chatterbox TTS variants | `SpeechEmbeddingRequestOutput` → `input_embedding`, `input_audio = None` | `FINISHED_FORWARDED` |
+| VoiceFixer | restorer output → `input_mel_spectrogram` | `FINISHED_FORWARDED` |
+| VoiceFixer | vocoder output | `FINISHED_STOPPED` |
+
+Forwarded requests are drained from the scheduler (`free_finished_requests()`), and the async loop only exits its idle wait while `len(request_outputs) + len(forwarded_requests) > 0` (`async_harmonyspeech.py:361`).
 
 ## Data Flow
 
-**Standard TextToSpeech Request Flow:**
+### TextToSpeech — Direct Single-Model (KittenTTS, MeloTTS, Chatterbox Turbo, Chatterbox Multilingual)
 
-1. HTTP `POST /v1/audio/speech` received by FastAPI in `api_server.py`
-2. `serving_text_to_speech.py` validates request against `TextToSpeechRequest` (Pydantic model in `protocol.py`)
-3. `TextToSpeechRequestInput.from_openai()` creates internal input object (`common/inputs.py`)
-4. `AsyncHarmonySpeech.generate()` submits `EngineRequest` to the async engine (`engine/async_harmonyspeech.py`)
-5. Engine forwards to `HarmonySpeechScheduler.add_request()` — placed in per-model queue
-6. Scheduler batches requests up to `max_batch_size` and yields `ScheduledBatch` objects
-7. Executor (`GPUExecutor` / `CPUExecutor`) dispatches batch to corresponding `Worker.execute_model()`
-8. Worker calls `ModelRunner.execute_model()`:
-   a. `prepare_inputs()` in `task_handler/inputs.py` preprocesses audio/text (base64 decode, resampling, tokenization, mel spectrogram preparation) using `ThreadPoolExecutor` for parallel preparation
-   b. Model `forward()` is called (PyTorch / ONNX)
-   c. Outputs are post-processed (base64 encode audio, build `RequestOutput`)
-9. Output propagates back through Executor → Engine → Serving layer
-10. HTTP response returned as `TextToSpeechResponse` (audio bytes base64-encoded in JSON)
+1. `POST /v1/audio/speech` → `OpenAIServingTextToSpeech.create_text_to_speech()` (`serving_text_to_speech.py:43`)
+2. Streaming output is rejected with a 400 (`output_options.stream` not supported)
+3. `TextToSpeechRequestInput` submitted to `AsyncHarmonySpeech.generate()`
+4. Reroute by sentinel in `reroute_request_chatterbox` (or no-op for individually-listed synthesizers: `KittenTTSSynthesizer`, `MeloTTSSynthesizer`, `OpenVoiceV1Synthesizer`)
+5. `prepare_inputs()` → `prepare_kittentts_synthesizer_inputs` / `prepare_melotts_synthesizer_inputs` / `prepare_chatterbox_*_tts_inputs`
+6. `_execute_*` produces a base64 WAV; `TextToSpeechRequestOutput` or `SpeechSynthesisRequestOutput`
+7. Serving accepts either output class and returns `TextToSpeechResponse` (`serving_text_to_speech.py:97`)
 
-**Multi-Step TTS Pipeline (e.g., HarmonySpeech full pipeline):**
+### HarmonySpeech Full Pipeline (embed → synthesize → vocode)
 
-1. Request arrives with `mode` field indicating pipeline steps needed
-2. Engine orchestrates sequential sub-requests:
-   - Step 1: `HarmonySpeechEncoder` — extract speaker embedding from reference audio
-   - Step 2: `HarmonySpeechSynthesizer` — convert text + embedding → mel spectrogram
-   - Step 3: `HarmonySpeechVocoder` — convert mel spectrogram → waveform audio
-3. Optional post-generation filters (`post_generation_filters`) can chain `AudioConversionRequest` steps (e.g., VoiceFixer restoration/enhancement)
+1. `requested_model="harmonyspeech"`, `mode="voice_cloning"`, `input_audio` set
+2. → `HarmonySpeechEncoder` → `SpeechEmbeddingRequestOutput`
+3. `check_forward_processing` sets `input_embedding`, clears `input_audio`, re-submits
+4. → `HarmonySpeechSynthesizer` → `SpeechSynthesisRequestOutput`
+5. `check_forward_processing` sets `input_audio` to the mel output, re-submits
+6. → `HarmonySpeechVocoder` → `VocodeRequestOutput` → wrapped as `TextToSpeechRequestOutput`
 
-**Voice Activity Detection + Voice Conversion Flow:**
+Passing a pre-computed `input_embedding` skips steps 2–3.
 
-1. VAD request (`SileroVAD` or `FasterWhisper`) identifies speech segments in audio
-2. VAD result stored as `input_vad_data` (JSON with segments/timestamps)
-3. Tone converter encoder uses VAD segments to extract speaker embedding
-4. Tone converter applies embedding for voice conversion
+### OpenVoice V1 / V2 Pipeline (VAD → embed → synthesize → tone convert)
+
+1. `FasterWhisper` transcribes and returns segments (`SpeechTranscriptionRequestOutput`) → `input_vad_data`
+2. `OpenVoiceV1ToneConverterEncoder` / `OpenVoiceV2ToneConverterEncoder` use audio + VAD segments → embedding
+3. `OpenVoiceV1Synthesizer` (language-matched) or `MeloTTSSynthesizer` (language-matched) → mel audio
+4. `OpenVoiceV1ToneConverter` / `OpenVoiceV2ToneConverter` applies the embedding → `VoiceConversionRequestOutput` wrapped as TTS output
+
+`mode="single_speaker_tts"` deliberately skips the embedding requirement in the rerouter (`harmonyspeech_engine.py:187`, marked `FIXME`).
+
+### Chatterbox Voice Cloning (embed → synthesize)
+
+1. `requested_model="chatterbox"`, `mode="voice_cloning"`, `input_audio` set
+2. If a `ChatterboxEmbedding` model is configured: `_execute_chatterbox_embedding` runs `model.prepare_conditionals()`, serializes `Conditionals` with `torch.save` into `BytesIO`, and returns it base64-encoded
+3. Engine sets `input_embedding` (serialized conditionals), clears `input_audio`, re-submits
+4. TTS variant assigns `model.conds = conditionals.to(device)` and calls `generate()`
+5. Without a dedicated embedding executor, the TTS variant handles `input_audio` directly inside `_execute_chatterbox_*_tts` via `prepare_conditionals(audio_buffer, ...)` — a single-step path because the executing config name equals `requested_model`
+
+The embedding output format is also the intended future cache value; the documented intercept point for an embedding cache is inside `check_forward_processing` between the embed step and TTS re-submission (`model_runner_base.py:806-821`).
+
+### Chatterbox Voice Conversion
+
+`/v1/voice/convert` with `model="chatterbox_vc"` → `ChatterboxVC`. Exactly one of `target_audio` or `target_embedding` must be present (`task_handler/inputs.py:840`). `target_embedding` is deserialized with `Conditionals.load(..., map_location="cpu")` and applied to `model.ref_dict`; `target_audio` goes through `model.set_target_voice()`.
+
+### VoiceFixer Audio Conversion (restore → vocode)
+
+1. `/v1/audio/convert` with `model="voicefixer"`, no `input_mel_spectrogram`
+2. `VoiceFixerRestorer` (44.1 kHz internal) → `AudioConversionRequestOutput` → `input_mel_spectrogram`
+3. `VoiceFixerVocoder` → final audio
+
+### Voice Activity Detection / Transcription
+
+- `/v1/audio/vad` supports `FasterWhisper` and `SileroVAD`, each with their own tunables (`threshold`, `min_speech_duration_ms`, `min_silence_duration_ms`, `speech_pad_ms`, `return_seconds`, `get_timestamps`)
+- `/v1/audio/transcriptions` supports `FasterWhisper` only (`_STT_MODEL_TYPES = ["FasterWhisper"]`)
+- VAD output is JSON text in `DetectVoiceActivityRequestOutput.output`; transcription output is JSON in `SpeechTranscriptionRequestOutput.output` and parsed by the serving layer for `text` / `language` / `timestamps`
 
 **State Management:**
-- No persistent session state in the engine; each request is self-contained
-- Model weights are loaded once per worker at startup and held in memory
-- Request queue state is held in-memory in the `Scheduler` — not persisted
+- No persistent session state; every request carries its own pipeline cursor in mutable `RequestInput` fields
+- Model weights are loaded once per worker at startup and held for the process lifetime
+- Queues, running set, and streams live in memory only (`Scheduler`, `RequestTracker`)
+- Per-request timing captured in `RequestMetrics` (`common/metrics.py`)
 
-## TTS Provider Abstraction
+## Embed Dispatch (Embedding-Capable TTS Models)
 
-The architecture uses a `model_type` string key system to abstract different TTS providers. Each provider implements a specific interface:
+Two cooperating mechanisms let a TTS model also serve `/v1/embed/speaker`:
 
-**TTS Provider Types (model_type strings):**
+1. **Model-card level** — `harmonyspeech/endpoints/openai/serving_voice_embed.py:16`:
+   - `_EMBEDDING_MODEL_TYPES` includes `ChatterboxEmbedding` and the three Chatterbox TTS variants
+   - `_EMBEDDING_MODEL_GROUPS["chatterbox"] = ["ChatterboxEmbedding", "ChatterboxTTS"]`, so a group card is only emitted when at least one is configured
+2. **Execution level** — `ModelRunnerBase.execute_model()` inspects the *request type*, not just the model type. For `ChatterboxTTS` / `ChatterboxTurboTTS` / `ChatterboxMultilingualTTS`, a batch whose first item is `SpeechEmbeddingRequestInput` is routed to `_execute_chatterbox_embedding` (`model_runner_base.py:96-111`)
+3. **Input level** — `prepare_inputs()` splits a Chatterbox batch into `embed_inputs` and `tts_inputs` and picks the matching preparation function (`task_handler/inputs.py:174-219`). `ChatterboxEmbedding` accepts both `SpeechEmbeddingRequestInput` and `TextToSpeechRequestInput` because the voice-cloning pipeline routes the TTS request into the embedding step (`inputs.py:227-240`).
 
-| model_type | Implementation | Framework | Notes |
-|------------|----------------|-----------|-------|
-| `MeloTTSSynthesizer` | `harmonyspeech/modeling/models/melo/melo.py` | PyTorch | Multi-language TTS |
-| `KittenTTSSynthesizer` | `harmonyspeech/modeling/models/kittentts/kittentts.py` | ONNX | Ultra-lightweight, CPU-optimized |
-| `HarmonySpeechSynthesizer` | `harmonyspeech/modeling/models/harmonyspeech/harmonyspeech.py` | PyTorch | Full pipeline component |
-| `OpenVoiceV1Synthesizer` | `harmonyspeech/modeling/models/openvoice/openvoice.py` | PyTorch | OpenVoice V1 TTS |
-| `OpenVoiceV2ToneConverter` | `harmonyspeech/modeling/models/openvoice/openvoice.py` | PyTorch | OpenVoice V2 voice conversion |
+Known limitation to respect when extending: the request-type check uses `requests_to_batch[0]`, so a mixed embed + TTS batch is not supported and must not be produced.
 
-**Adding a New TTS Provider:**
+## Chatterbox Model Family
 
-1. Create model class in `harmonyspeech/modeling/models/{provider}/`
-2. Register in `harmonyspeech/modeling/loader.py`:
-   - Add entry to `_MODEL_CONFIGS`
-   - Add entry to `_MODEL_WEIGHTS`
-   - Add to `ModelRegistry` if native model
-3. Add input preparation in `harmonyspeech/task_handler/inputs.py`
-4. Add model runner logic in `gpu_model_runner.py` or `cpu_model_runner.py`
-5. Add `model_type` entry to `config.yml`
+**Location:** `harmonyspeech/modeling/models/chatterbox/`
 
-## KittenTTS Position in Architecture
+| Wrapper class | Upstream class | `model_type` | Notes |
+|---|---|---|---|
+| `ChatterboxTTSModel` | `chatterbox.ChatterboxTTS` | `ChatterboxTTS` | `from_pretrained(device)` |
+| `ChatterboxTurboTTSModel` | `chatterbox.tts_turbo.ChatterboxTurboTTS` | `ChatterboxTurboTTS` | Downloads `ResembleAI/chatterbox-turbo` itself; float32 patches |
+| `ChatterboxMultilingualTTSModel` | `chatterbox.ChatterboxMultilingualTTS` | `ChatterboxMultilingualTTS` | Exposes `SUPPORTED_LANGUAGES` for model cards; forces `attn_implementation="eager"` |
+| `ChatterboxVCModel` | `chatterbox.ChatterboxVC` | `ChatterboxVC` | Voice conversion |
 
-KittenTTS is an ultra-lightweight ONNX-based TTS synthesizer positioned as a fast, CPU-efficient alternative to heavier PyTorch models:
+`ChatterboxEmbedding` is not a wrapper class — it is a *role* served by whichever Chatterbox model the loader instantiates based on the configured repo id (`loader.py:328-337`: turbo → Turbo wrapper, multilingual → Multilingual wrapper, otherwise standard).
 
-- **Location:** `harmonyspeech/modeling/models/kittentts/`
-- **Files:**
-  - `kittentts.py` — `KittenTTSSynthesizer` class (main model)
-  - `onnx_model.py` — ONNX runtime wrapper
-  - `preprocess.py` — Text/audio preprocessing utilities
+**Module-level compatibility patches** in `chatterbox.py` (apply on import):
+- `chatterbox.mtl_tts.torch.load` is patched to default `map_location=cpu` so CUDA-saved checkpoints load on CPU
+- `perth.PerthImplicitWatermarker` is replaced with a fallback delegating to `DummyWatermarker` when the optional watermarker is unavailable
+- Turbo loader bypasses upstream `token=True` by calling `snapshot_download(token=HF_TOKEN or None)` then `from_local`
+- Turbo's `s3tokenizer.log_mel_spectrogram` and `ve.forward` are patched per instance to cast float64 → float32
 
-- **Integration Point:** `harmonyspeech/modeling/loader.py` lines 83-86, 136-139, 278-280
-  - Registered as `"KittenTTSSynthesizer"` in `model_type` string dispatch
-  - Uses `"native"` config/weights (bypasses HuggingFace config loading)
-  - Instantiated directly via `KittenTTSSynthesizer(model_name_or_path=...)`
+Watermarking is config-driven: `loader.get_model()` swaps `model.watermarker = perth.DummyWatermarker()` whenever `ModelConfig.watermark` is false (`loader.py:307`, `313`, `319`, `325`).
 
-- **Execution Path:**
-  1. `task_handler/inputs.py`: `prepare_kittentts_inputs()` — tokenizes text, prepares conditioning
-  2. `task_handler/gpu_model_runner.py`: Routes to `_run_kittentts()` for ONNX inference
-  3. Output: Raw audio waveform converted to base64
+**Parameter surface** (validated in `task_handler/inputs.py:652-820`):
 
-- **Advantages:**
-  - No PyTorch dependency for inference
-  - Minimal memory footprint (~50MB model)
-  - Fast inference on CPU
-  - Can run alongside heavier GPU models
+| Parameter | Standard TTS | Multilingual | Turbo |
+|---|---|---|---|
+| `exaggeration`, `cfg_weight`, `min_p` | yes | yes | rejected |
+| `top_k`, `norm_loudness` | rejected | rejected | yes |
+| `temperature`, `repetition_penalty`, `top_p` | yes | yes | yes |
 
-## STT/ASR Provider Abstraction
+Model-specific defaults are applied in the `prepare_*` functions when the field is `None`.
 
-**STT Provider Types:**
+## Model Type Registry
 
-| model_type | Implementation | Framework | Notes |
-|------------|----------------|-----------|-------|
-| `FasterWhisper` | Native (faster-whisper library) | CTranslate2/ONNX | OpenAI Whisper faster implementation |
-| (via VAD) `SileroVAD` | Native (silero-vad library) | PyTorch/ONNX | Voice Activity Detection |
+Execution dispatch is a four-way string switch. Adding a model requires touching all four.
 
-**VAD Integration:**
-- VAD runs before STT to identify speech segments
-- VAD results (`input_vad_data`) passed to encoder for speaker extraction
-- Supports chaining: VAD → Encoder → Tone Converter
-
-## Configuration System
-
-**Configuration Sources:**
-1. `config.yml` (root) — Primary runtime model configuration
-2. `config.gpu.yml` — GPU-targeted variant
-3. CLI arguments via `harmonyspeech/engine/args_tools.py`
-4. Environment variables for API keys
-
-**Key Config Classes:**
-- `ModelConfig` (`harmonyspeech/common/config.py`): Per-model settings
-- `DeviceConfig`: Device assignment and dtype
-- `EngineConfig`: Global engine settings (max batch size, timeout)
-
-**Config Flow:**
-```
-config.yml → EngineArgs → EngineConfig + [ModelConfig] → Scheduler/Executor
-```
-
-## Model Loading/Management
-
-**Loading Pipeline:**
-1. `loader.get_model()` receives `ModelConfig`, `DeviceConfig`
-2. Resolve model class via `ModelRegistry` or `_get_model_cls()`
-3. Determine flavour (language variant for multi-lingual models)
-4. Fetch config: `get_model_config()` → HuggingFace or "native"
-5. Fetch weights: `get_model_weights()` → cached/downloaded
-6. Instantiate model class, load weights
-7. Return model in eval mode
-
-**Model Caching:**
-- HuggingFace Hub `snapshot_download` in `hf_downloader.py`
-- Local cache in `models/` directory (not committed)
-- Supports revision/branch pinning
-
-**Model Types by Loading Pattern:**
-- **PyTorch models:** OpenVoice, MeloTTS, HarmonySpeech, VoiceFixer — use `load_weights()` method
-- **Native models:** FasterWhisper, SileroVAD, KittenTTS — instantiated directly, no weight loading
-- **VoiceFixer:** Native class but with fixed config path
+| `model_type` | Loader branch | `prepare_*` | `_execute_*` |
+|---|---|---|---|
+| `HarmonySpeechEncoder` | registry `SpeakerEncoder` | `prepare_harmonyspeech_encoder_inputs` | `_execute_harmonyspeech_encoder` |
+| `HarmonySpeechSynthesizer` | registry `ForwardTacotron` | `prepare_harmonyspeech_synthesizer_inputs` | `_execute_harmonyspeech_synthesizer` |
+| `HarmonySpeechVocoder` | registry `MelGANGenerator` | `prepare_harmonyspeech_vocoder_inputs` | `_execute_harmonyspeech_vocoder` |
+| `OpenVoiceV1Synthesizer` | registry `SynthesizerTrn` | `prepare_openvoice_synthesizer_inputs` | `_execute_openvoice_synthesizer` |
+| `OpenVoiceV1ToneConverter` | registry `SynthesizerTrn` | `prepare_openvoice_tone_converter_inputs` | `_execute_openvoice_tone_converter` |
+| `OpenVoiceV1ToneConverterEncoder` | registry `SynthesizerTrn` | `prepare_openvoice_tone_converter_encoder_inputs` | `_execute_openvoice_tone_converter_encoder` |
+| `MeloTTSSynthesizer` | registry `SynthesizerTrn` (melo) | `prepare_melotts_synthesizer_inputs` | `_execute_melotts_synthesizer` |
+| `OpenVoiceV2ToneConverter` | registry `SynthesizerTrn` | `prepare_openvoice_tone_converter_inputs` | `_execute_openvoice_tone_converter` |
+| `OpenVoiceV2ToneConverterEncoder` | registry `SynthesizerTrn` | `prepare_openvoice_tone_converter_encoder_inputs` | `_execute_openvoice_tone_converter_encoder` |
+| `FasterWhisper` | native (`WhisperModel`) | `prepare_faster_whisper_inputs` | `_execute_faster_whisper` |
+| `SileroVAD` | native (`load_silero_vad`) | `prepare_silero_vad_inputs` | `_execute_silero_vad` |
+| `VoiceFixerRestorer` | registry + native config | `prepare_voicefixer_restorer_inputs` | `_execute_voicefixer_restorer` |
+| `VoiceFixerVocoder` | registry + native config | `prepare_voicefixer_vocoder_inputs` | `_execute_voicefixer_vocoder` |
+| `KittenTTSSynthesizer` | native (`KittenTTSSynthesizer(...)`) | `prepare_kittentts_synthesizer_inputs` | `_execute_kittentts_synthesizer` |
+| `ChatterboxTTS` | native wrapper | `prepare_chatterbox_tts_inputs` (+ embedding) | `_execute_chatterbox_tts` / `_execute_chatterbox_embedding` |
+| `ChatterboxTurboTTS` | native wrapper | `prepare_chatterbox_turbo_tts_inputs` (+ embedding) | `_execute_chatterbox_turbo_tts` / `_execute_chatterbox_embedding` |
+| `ChatterboxMultilingualTTS` | native wrapper | `prepare_chatterbox_multilingual_tts_inputs` (+ embedding) | `_execute_chatterbox_multilingual_tts` / `_execute_chatterbox_embedding` |
+| `ChatterboxEmbedding` | native wrapper chosen by repo id | `prepare_chatterbox_embedding_inputs` | `_execute_chatterbox_embedding` |
+| `ChatterboxVC` | native wrapper | `prepare_chatterbox_vc_inputs` | `_execute_chatterbox_vc` |
 
 ## Key Abstractions
 
-**ModelConfig:**
-- Purpose: Declarative configuration for one named model instance
-- Examples: `harmonyspeech/common/config.py`
-- Pattern: Dataclass with fields `name`, `model` (HuggingFace repo ID or local path), `model_type` (string key used by all dispatch switches), `max_batch_size`, `dtype`, `device_config`, `language`, `voices`, `revision`
-- Config source: `config.yml` at repo root (list of `model_configs`)
+**`ModelConfig`** (`harmonyspeech/common/config.py:28`):
+- Declarative description of one served model instance: `name`, `model` (HF repo id or local path), `model_type`, `max_batch_size`, `device_config`, `language`, `voices`, `dtype`, `load_format`, `revision`, `enforce_eager`, `watermark`
+- `name` is the scheduler/executor key **and** the value that rerouting writes into `RequestInput.model`
 
-**RequestInput Hierarchy:**
-- Purpose: Typed internal representation of a request destined for a specific model type
-- Examples: `harmonyspeech/common/inputs.py`
-- Types: `TextToSpeechRequestInput`, `SpeechEmbeddingRequestInput`, `SynthesisRequestInput`, `VocodeRequestInput`, `VoiceConversionRequestInput`, `AudioConversionRequestInput`, `SpeechTranscribeRequestInput`, `DetectVoiceActivityRequestInput`
-- Pattern: `RequestInput` base class; each subclass has a `from_openai(request_id, openai_request)` factory classmethod
+**`EngineConfig`** (`common/config.py:102`):
+- Frozen dataclass holding `list[ModelConfig]`; `load_config_from_yaml()` is the only loader, used once at startup
 
-**EngineRequest:**
-- Purpose: Wrapper that pairs a `request_id` with `request_data` (a `RequestInput`) and tracks lifecycle
-- Location: `harmonyspeech/common/request.py`
+**`RequestInput` hierarchy** (`common/inputs.py`):
+- Base carries `request_id`, `requested_model`, `model`, `metrics`
+- Subclasses: `TextToSpeechRequestInput`, `SpeechEmbeddingRequestInput`, `SynthesisRequestInput`, `VocodeRequestInput`, `VoiceConversionRequestInput`, `AudioConversionRequestInput`, `SpeechTranscribeRequestInput`, `DetectVoiceActivityRequestInput`
+- Each has a `from_openai(request_id, request)` classmethod; toolchain steps mutate these objects in place rather than constructing new ones
 
-**model_type String Key:**
-- Purpose: Central dispatch identifier used in `inputs.py`, `model_runner_base.py`, and `loader.py` to select the correct code path for each model
-- Known values: `HarmonySpeechEncoder`, `HarmonySpeechSynthesizer`, `HarmonySpeechVocoder`, `OpenVoiceV1Synthesizer`, `OpenVoiceV1ToneConverter`, `OpenVoiceV1ToneConverterEncoder`, `OpenVoiceV2ToneConverter`, `OpenVoiceV2ToneConverterEncoder`, `MeloTTSSynthesizer`, `FasterWhisper`, `SileroVAD`, `VoiceFixerRestorer`, `VoiceFixerVocoder`, `KittenTTSSynthesizer`
-- Pattern: `if model_config.model_type == "X":` chains throughout `task_handler/inputs.py`
+**`EngineRequest` / `ExecutorResult` / `RequestStatus`** (`common/request.py`):
+- `EngineRequest` pairs id + `RequestInput` + status + metrics
+- `RequestStatus` includes the pipeline-specific `FINISHED_FORWARDED`, which is treated as finished by the scheduler but means "re-queued as a new step"
+- `ExecutorResult` carries both `input_data` and `result_data` so the engine can decide the next hop
 
-**Serving Modules:**
-- Purpose: One module per API capability; bridge OpenAI protocol to internal engine calls
-- Examples: `harmonyspeech/endpoints/openai/serving_text_to_speech.py`, `serving_speech_to_text.py`, `serving_voice_conversion.py`, `serving_voice_activity_detection.py`, `serving_voice_embed.py`, `serving_audio_conversion.py`
-- Pattern: Class with async `generate()` / `detect()` / `embed()` methods; references `AsyncHarmonySpeech` engine instance
+**`ModelCard` / model groups** (`endpoints/openai/serving_engine.py:221`):
+- `model_cards_from_config_groups(configured_models, individual_model_types, model_groups)` emits one card per directly-served model and one `object="toolchain"` card per group whose required model types are all present
+- Group cards are the ids clients pass as `model` (e.g. `harmonyspeech`, `openvoice_v1`, `openvoice_v2`, `voicefixer`, `chatterbox`, `chatterbox_turbo`, `chatterbox_multilingual`, `chatterbox_vc`)
+
+**`SchedulingBudget`** (`processing/scheduler.py:11`):
+- Per-model capacity tracker seeded from `max_batch_size`; consumed by `_schedule_waiting_requests`
+
+**Serving modules** (`endpoints/openai/serving_*.py`):
+- Uniform shape: module-level `_X_MODEL_TYPES` / `_X_MODEL_GROUPS`, `models_from_config()`, one public `async` method, one `*_full_generator()` that iterates the stream, checks `finish_reason == "error"`, and asserts the expected output class
+
+## API Surface
+
+| Method | Path | Handler | Output type |
+|---|---|---|---|
+| GET | `/health` | `health` | per-capability health map (calls `engine.check_health()`) |
+| GET | `/version` | `show_version` | `{"version": ...}` |
+| GET | `/metrics` | Prometheus ASGI mount | metrics |
+| POST | `/v1/audio/speech` | `create_speech` | `TextToSpeechResponse` |
+| GET | `/v1/audio/speech/models` | `show_available_speech_models` | `ModelList` |
+| POST | `/v1/embed/speaker` | `create_embedding` | `EmbedSpeakerResponse` |
+| GET | `/v1/embed/models` | `show_available_embedding_models` | `ModelList` |
+| POST | `/v1/audio/transcriptions` | `create_transcription` | `SpeechToTextResponse` |
+| GET | `/v1/audio/transcriptions/models` | `show_available_transcription_models` | `ModelList` |
+| POST | `/v1/voice/convert` | `convert_voice` | `VoiceConversionResponse` |
+| GET | `/v1/voice/convert/models` | `show_available_voice_conversion_models` | `ModelList` |
+| POST | `/v1/audio/vad` | `create_vad` | `DetectVoiceActivityResponse` |
+| GET | `/v1/audio/vad/models` | `show_available_vad_models` | `ModelList` |
+| POST | `/v1/audio/convert` | `convert_audio` | `AudioConversionResponse` |
+| GET | `/v1/audio/convert/models` | `show_available_audio_conversion_models` | `ModelList` |
+
+No aggregate `/v1/models` route exists; each capability exposes its own list.
 
 ## Entry Points
 
-**HTTP API Server:**
-- Location: `harmonyspeech/endpoints/openai/api_server.py`
-- Triggers: Started via `harmonyspeech/endpoints/cli.py` or directly via `uvicorn`
-- Responsibilities: Mounts all route handlers, initializes `AsyncHarmonySpeech` engine with `EngineArgs` parsed from CLI/config, exposes `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/voice-activity`, `/v1/audio/embeddings`, `/v1/audio/conversion`, `/v1/audio/voice-conversion`, `/v1/models`
+**HTTP server:**
+- `harmonyspeech/endpoints/openai/api_server.py` — `run_server()` loads `EngineConfig.load_config_from_yaml(args.config_file_path or "config.yml")`, constructs `AsyncHarmonySpeech`, builds all six serving objects, then calls `uvicorn.run`
+- `build_app()` adds CORS, optional API-key middleware (active only when `HARMONYSPEECH_API_KEY` or `--api-keys` is set), custom OpenAPI metadata for Go client generation, and dynamic middleware from `--middleware`
 
-**CLI Entry:**
-- Location: `harmonyspeech/endpoints/cli.py`
-- Triggers: `python -m harmonyspeech` or `uvicorn harmonyspeech.endpoints.openai.api_server:app`
+**CLI:**
+- `harmonyspeech/endpoints/cli.py` → `harmonyspeech run [options]`
+- Console script: `harmonyspeech = "harmonyspeech.endpoints.cli:main"` (`pyproject.toml:33`)
+- Equivalently: `uvicorn harmonyspeech.endpoints.openai.api_server:app` (module-level `__main__` block runs `run_server`)
+
+**Programmatic:**
+- `harmonyspeech.HarmonySpeechEngine` (`harmonyspeech/__init__.py`)
+- `HarmonySpeechEngine.from_engine_args(engine_args)` for sync use
+- `AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config)` for the async wrapper
+
+## Configuration System
+
+**Sources:**
+1. `config.yml` — CPU/default runtime model list
+2. `config.gpu.yml` — GPU variant (Chatterbox on `cuda`, Whisper large-v3-turbo, MeloTTS on `cuda`)
+3. CLI via `harmonyspeech/endpoints/openai/args.py` + `harmonyspeech/engine/args_tools.py`
+4. Environment: `HARMONYSPEECH_API_KEY`, `HARMONYSPEECH_ADMIN_KEY`, `SERVICE_NAME`, `HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S` (default 120), `HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC` (default 5)
+
+**Config flow:**
+```text
+config.yml → EngineConfig.load_config_from_yaml()
+           → [ModelConfig(device_config=DeviceConfig(...))]
+           → AsyncEngineArgs.create_engine_config(base_config)  # currently pass-through
+           → HarmonySpeechEngine(model_configs=...) → one Executor per ModelConfig
+```
+
+Model list in the shipped CPU config: HarmonySpeech V1 (encoder/synthesizer/vocoder), OpenVoice V1 (EN/ZH synthesizer, converter, converter encoder), MeloTTS (EN/ZH/ES/FR/JP/KR), OpenVoice V2 converter + encoder, FasterWhisper (medium, tiny), SileroVAD, VoiceFixer (restorer, vocoder), KittenTTS mini, Chatterbox (standard, turbo, multilingual, VC). `ChatterboxEmbedding` is present but commented out.
+
+## Model Loading
+
+1. `_get_model_cls()` → `ModelRegistry.load_model_cls(model_type)`; unknown arch raises with the supported list
+2. `get_model_flavour()` — only `OpenVoiceV1Synthesizer` uses `language` as flavour; everything else is `"default"`
+3. `get_model_config()` — `"native"` short-circuits; otherwise `load_or_download_config()` from HF
+4. Native branch constructs directly (`WhisperModel`, `load_silero_vad`, `KittenTTSSynthesizer`, Chatterbox wrappers)
+5. Non-native branches instantiate `model_class(**hf_config.model)` (with per-family dynamic fields injected for OpenVoice/MeloTTS) or `model_class(**hf_config)` (VoiceFixer)
+6. `get_model_weights()` + `model.load_weights(checkpoint, hf_config)`; `load_format="dummy"` uses `initialize_dummy_weights`
+7. Returns `model.eval()`
+
+**Safety rail:** FasterWhisper on `device="cuda"` is pre-checked by `_check_ctranslate2_cuda_available()` (`loader.py:31`) because CTranslate2 calls native `abort()` when cuDNN is unavailable — an uncatchable process kill. On failure it logs a warning and falls back to `cpu` + `int8`.
+
+**HuggingFace resolution** (`modeling/hf_downloader.py`): local filesystem → HF disk cache (`local_files_only=True`) → network. Configs and small static files are memoized in-process (`_config_cache`, `_file_cache`).
+
+## Architectural Constraints
+
+- **Threading:** One background `asyncio` loop per `AsyncHarmonySpeech`. Sync `step()` fans out across models with a `ThreadPoolExecutor`; async `step_async()` awaits models sequentially. Executors wrap the blocking worker call with `make_async()` (`common/utils.py:133`), which runs it in the default thread pool.
+- **Model concurrency:** Each model owns exactly one worker and one loaded model instance, so at most one batch per model is in flight. The scheduler enforces this by refusing to add waiting requests for a model that already has running requests.
+- **No true tensor batching:** every `_execute_*` method iterates prepared inputs one at a time. `max_batch_size` controls queue admission, not vectorization.
+- **Single-process, in-memory state:** scheduler queues, request tracker streams, and model instances are process-local. There is no distributed execution today.
+- **`model_type` string coupling:** the same literal appears in `serving_*.py` lists, `loader._MODEL_CONFIGS` / `_MODEL_WEIGHTS`, `models/__init__._MODELS`, `inputs.prepare_inputs()`, and `model_runner_base.execute_model()`. There is no enum or registry tying them together.
+- **Import-time side effects:** `harmonyspeech/engine/harmonyspeech_engine.py` calls `setup_logger()` at import (line 702); `harmonyspeech/modeling/models/chatterbox/chatterbox.py` monkey-patches `chatterbox.mtl_tts` and `perth` at import. Importing the modeling layer therefore mutates third-party modules.
+- **Mutable pipeline request:** forwarding re-uses the same `RequestInput` object and mutates `input_audio` / `input_embedding` / `input_vad_data` / `input_mel_spectrogram`. Any new step must keep those fields consistent or routing will pick the wrong model.
+- **`requested_model` is the toolchain identity and must not be overwritten.** Rerouting writes only `request.model`.
+- **Blocking work on the event loop:** `check_health()` calls executor health checks synchronously; `project.model_executors` iteration in `check_health` iterates dict keys (not values) in `harmonyspeech_engine.py:698`.
+
+## Anti-Patterns
+
+### Adding a model type to only one dispatch point
+
+**What happens:** A `model_type` is added to `_MODELS` and `config.yml`, but not to `prepare_inputs()` or `execute_model()`.
+**Why it's wrong:** `prepare_inputs()` raises `NotImplementedError`, which `execute_model()` converts into a per-request error result — the endpoint returns 400/500 at runtime with no startup failure.
+**Do this instead:** Update all five in one change: `serving_*_MODEL_TYPES/GROUPS` (if user-facing), `loader._MODEL_CONFIGS`, `loader._MODEL_WEIGHTS`, `models/__init__._MODELS`, `task_handler/inputs.py`, `task_handler/model_runner_base.py`.
+
+### Assuming `request.model` is stable
+
+**What happens:** Code reads `request_data.model` expecting the API-supplied id.
+**Why it's wrong:** `check_reroute_request_to_model()` overwrites it with the concrete `ModelConfig.name` before scheduling. The API id lives in `requested_model`.
+**Do this instead:** Use `requested_model` for toolchain logic and `model` for scheduler/executor selection, as `check_forward_processing()` does.
+
+### Emitting a group model card unconditionally
+
+**What happens:** A toolchain id is added to `model_groups` without ensuring every required `model_type` exists in `config.yml`.
+**Why it's wrong:** The group card advertises a toolchain that cannot complete, and requests will fail mid-pipeline after consuming compute.
+**Do this instead:** Add the group to `_*_MODEL_GROUPS` in the appropriate serving module and let `model_cards_from_config_groups()` filter it out, as done in `serving_audio_conversion.py:22`.
+
+### Batch-type detection on `requests_to_batch[0]` for Chatterbox
+
+**What happens:** A batch mixes `SpeechEmbeddingRequestInput` and `TextToSpeechRequestInput`.
+**Why it's wrong:** `execute_model()` and `prepare_inputs()` both branch on the first element, so mixed batches silently take one path and fail or mis-prepare the rest.
+**Do this instead:** Keep one request type per scheduled batch; if mixed batches become necessary, split them before dispatch in `prepare_inputs()` and return per-type sub-batches.
+
+### Reaching into third-party libraries without a wrapper
+
+**What happens:** Inference code touches upstream Chatterbox internals (`model.s3gen`, `model.ve`, `model.ref_dict`, `model.conds`).
+**Why it's wrong:** Version upgrades break call sites in `task_handler/` silently at runtime; the compatibility patches in `models/chatterbox/chatterbox.py` are the only seam.
+**Do this instead:** Add adapter methods to the wrapper classes in `harmonyspeech/modeling/models/chatterbox/chatterbox.py` and call those from `model_runner_base.py`.
 
 ## Error Handling
 
-**Strategy:** Exception-based with HTTP error responses at the API boundary
+**Strategy:** Per-request error results inside a resilient async loop; HTTP error shaping at the serving boundary.
 
 **Patterns:**
-- Pydantic validation errors surface as 422 responses automatically via FastAPI
-- Internal model errors raise `ValueError` or `NotImplementedError` in `task_handler/inputs.py` and propagate up
-- `ErrorResponse` Pydantic model defined in `protocol.py` for structured error JSON
-- `loguru` logger used throughout for structured logging of errors
+- `ModelRunnerBase.execute_model()` wraps `prepare_inputs()` and each `_execute_*` item in `try/except` and returns `_build_error_result()` — a `RequestOutput(finish_reason="error", error=str(exc))` wrapped in `ExecutorResult` (`model_runner_base.py:57-68`, `121-137`). One bad request does not kill the batch.
+- `check_forward_processing()` short-circuits error results to `FINISHED_STOPPED` so failed steps are never forwarded and never leak in `scheduler.running`.
+- Serving modules check `final_res.finish_reason == "error"` and return `ErrorResponse` with the embedded message.
+- `AsyncHarmonySpeech.engine_step()` catches uncaught step failures, propagates the exception to every in-flight request stream, aborts them in the scheduler, and returns `False` instead of letting the background loop die (`async_harmonyspeech.py:336-355`).
+- `run_engine_loop()` wraps each iteration in `asyncio.wait_for(..., ENGINE_ITERATION_TIMEOUT_S)` and marks the engine errored on timeout.
+- `RequestValidationError` is mapped to a 400 with an `ErrorResponse` body (`api_server.py:299`).
+- Chatterbox upstream `AssertionError`s (e.g. "Audio prompt must be longer than 5 seconds!") are re-raised as `ValueError` so they become a 400 rather than an unhandled exception (`model_runner_base.py:827-830`).
 
 ## Cross-Cutting Concerns
 
-**Logging:** `loguru` (`from loguru import logger`) used consistently across all layers
+**Logging:** `loguru` everywhere (`from loguru import logger`). `common/logger.py` provides `setup_logger()` and `UVICORN_LOG_CONFIG`. Engine/runner errors use `logger.opt(exception=...)` to preserve stack traces.
 
-**Validation:** Pydantic v2 models for all API request/response types; `protocol.py` is the single source of protocol truth
+**Validation:** Pydantic v2 at the boundary (`protocol.py`), plus hand-written semantic validation in `serving_engine._check_model()` (mode, model existence, language/voice membership, Chatterbox mode↔reference consistency). Internal model-type and option validation lives in `task_handler/inputs.py` and raises `ValueError`.
 
-**Authentication:** Basic auth middleware present (`auth/` directory); applied at FastAPI middleware level in `api_server.py`
+**Authentication:** Optional bearer/Api-Key middleware in `build_app()`; `auth/apikeys.py::ApiKeyCacheManager` performs rate-limit checks against Harmony Auth and registers usage events on a background thread. Auth only applies to paths starting with `/v1`, and `OPTIONS` requests pass through.
 
-**Batching:** `ThreadPoolExecutor` used inside `task_handler/inputs.py` for parallel input preprocessing within a batch; model inference itself is single-threaded per worker (PyTorch/ONNX)
+**Batching:** Per-model admission batching (`max_batch_size`) with sequential per-item inference; `ThreadPoolExecutor` inside each `prepare_*_inputs()` parallelizes base64 decode, resampling, and tokenization.
 
-**Model Loading:** HuggingFace Hub `snapshot_download` via `modeling/hf_downloader.py`; models cached locally; supports CPU, CUDA, ROCm device targets
+**Audio transport:** Base64 strings in JSON in both directions. Final audio outputs are base64 WAV produced with `soundfile.write` into an in-memory buffer (Chatterbox, KittenTTS, VoiceFixer, OpenVoice, MeloTTS). Pipeline intermediates are also base64: VoiceFixerRestorer emits base64-encoded JSON mel, and Chatterbox embedding emits base64 `torch.save` bytes. VoiceFixer resamples internally to 44.1 kHz.
 
-**Audio Data Transport:** All audio transmitted as base64-encoded strings in JSON body; decoded at the worker layer immediately before inference
+**Metrics:** `RequestMetrics` (arrival, first scheduled, queue time, finish time) attached to every `EngineRequest`; `StatLogger`/`Stats` exist in `engine/metrics.py` but `stat_logger.log()` is commented out in `step()`.
 
 ---
 
-*Architecture analysis: 2026-03-11*
+*Architecture analysis: 2026-11-02*
