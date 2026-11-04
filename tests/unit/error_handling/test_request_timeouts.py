@@ -172,7 +172,12 @@ async def test_check_health_async_returns_payload():
 
     payload = await engine.check_health_async()
 
-    assert payload == {"healthy": True, "models": {"kitten": {"model_type": "KittenTTSSynthesizer", "healthy": True}}}
+    assert payload["healthy"] is True
+    assert payload["models"]["kitten"]["model_type"] == "KittenTTSSynthesizer"
+    assert payload["models"]["kitten"]["healthy"] is True
+    # Phase 4-5: VRAM accounting rides along with the health payload.
+    assert "vram" in payload
+    assert payload["vram"]["resident_models"] == 1
 
 
 # ---------------------------------------------------------------------------

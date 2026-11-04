@@ -57,12 +57,12 @@ Track the completion of each phase as implementation progresses:
   - [x] Startup validation & model cards — [3-3-StartupValidationModelCards.md](3-3-StartupValidationModelCards.md)
   - [x] VAD switch & entry points — [3-4-VadSwitchEntryPoints.md](3-4-VadSwitchEntryPoints.md)
   - [x] Routing tests — [3-5-RoutingTests.md](3-5-RoutingTests.md)
-- [ ] **Phase 4: VRAM — fp16 + Chatterbox weight dedup**
-  - [ ] dtype plumbing & config flip — [4-1-DtypePlumbingConfigFlip.md](4-1-DtypePlumbingConfigFlip.md)
-  - [ ] Audio regression gate — [4-2-AudioRegressionGate.md](4-2-AudioRegressionGate.md)
-  - [ ] Weight registry — [4-3-WeightRegistry.md](4-3-WeightRegistry.md)
-  - [ ] Chatterbox backbone sharing — [4-4-ChatterboxBackboneSharing.md](4-4-ChatterboxBackboneSharing.md)
-  - [ ] VRAM metrics & profile — [4-5-VramMetricsProfile.md](4-5-VramMetricsProfile.md)
+- [x] **Phase 4: VRAM — fp16 + Chatterbox weight dedup** — **COMPLETE 2026-11-04** (Chatterbox block 14.29 → 6.35 GiB; full catalogue 16.45 → 8.52 GiB torch / 8.83 GiB nvidia-smi, ~7.1 GiB headroom; floor of ≥8 GiB diagnosed, not met). Unit 530 / integration 23 / wire-contract e2e 38 + 3.
+  - [x] dtype plumbing & config flip — [4-1-DtypePlumbingConfigFlip.md](4-1-DtypePlumbingConfigFlip.md)
+  - [x] Audio regression gate — [4-2-AudioRegressionGate.md](4-2-AudioRegressionGate.md)
+  - [x] Weight registry — [4-3-WeightRegistry.md](4-3-WeightRegistry.md)
+  - [x] Chatterbox backbone sharing — [4-4-ChatterboxBackboneSharing.md](4-4-ChatterboxBackboneSharing.md)
+  - [x] VRAM metrics & profile — [4-5-VramMetricsProfile.md](4-5-VramMetricsProfile.md)
 - [ ] **Phase 5: Honest batching (HSE only)**
   - [ ] Type-checked batches & pairing invariants — [5-1-TypeCheckedBatches.md](5-1-TypeCheckedBatches.md)
   - [ ] Padded batch on SynthesizerTrn — [5-2-SynthesizerTrnPaddedBatch.md](5-2-SynthesizerTrnPaddedBatch.md)

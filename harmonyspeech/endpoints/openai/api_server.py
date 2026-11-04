@@ -9,12 +9,12 @@ from threading import Thread
 
 import fastapi
 import uvicorn
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from loguru import logger
-from prometheus_client import make_asgi_app
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 import harmonyspeech
 
@@ -40,18 +40,18 @@ from harmonyspeech.endpoints.openai.protocol import (
     VoiceConversionRequest,
     VoiceConversionResponse,
 )
-from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
-from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
-from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
-from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
-from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.endpoints.openai.request_envelope import (
     UploadTooLargeError,
     dual_body_openapi,
     parse_dual_request,
     resolve_max_upload_bytes,
 )
+from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
+from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
+from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
+from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
+from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -110,9 +110,25 @@ async def lifespan(app: fastapi.FastAPI):
     yield
 
 
-# Add prometheus asgi middleware to route /metrics requests
-metrics_app = make_asgi_app()
-router.mount("/metrics", metrics_app)
+# Prometheus metrics: the default registry's series plus the engine's VRAM
+# gauges (Phase 4-5). Rendered by hand so a scrape never needs a running GPU to
+# return a well-formed body.
+@router.get("/metrics", description="Prometheus metrics (default registry + VRAM gauges).")
+async def metrics() -> Response:
+    from harmonyspeech.engine.vram_metrics import render_vram_metrics
+
+    body = generate_latest().decode("utf-8", errors="replace")
+    engine_ref = None
+    for serving in (openai_serving_tts, openai_serving_stt, openai_serving_vc, openai_serving_embedding):
+        engine_ref = getattr(serving, "engine", None)
+        if engine_ref is not None:
+            break
+    if engine_ref is not None:
+        try:
+            body += render_vram_metrics(engine_ref.get_vram_stats())
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to render VRAM metrics: {exc}")
+    return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
 @router.get("/health", response_model=dict)
@@ -128,6 +144,9 @@ async def health() -> JSONResponse:
     status_code = http.HTTPStatus.OK
     try:
         result = await openai_serving_tts.engine.check_health()
+        if isinstance(result, dict) and result.get("vram"):
+            # Phase 4-5: per-model VRAM accounting rides along with /health.
+            health_status["vram"] = result["vram"]
         if isinstance(result, dict) and not result.get("healthy", True):
             health_status["text_to_speech"] = f"unhealthy: {result}"
             status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR

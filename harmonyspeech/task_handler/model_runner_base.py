@@ -125,12 +125,64 @@ def _audio_artifact_from_tensor(wav: torch.Tensor, sample_rate: int) -> AudioArt
     return AudioArtifact(waveform=tensor, sample_rate=sample_rate)
 
 
+def _clone_tensor(value):
+    """Clone a tensor as a detached leaf, or pass a non-tensor through."""
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    if isinstance(value, dict):
+        return {key: _clone_tensor(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_tensor(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_tensor(item) for item in value)
+    return value
+
+
+def _clone_conditionals(conds):
+    """Clone Chatterbox ``Conditionals`` (dataclass of ``T3Cond`` + gen dict).
+
+    Deep-copying the upstream dataclass fails when a checkpoint tensor carried
+    ``requires_grad`` (``.to(device)`` then yields a non-leaf tensor). Field-wise
+    detach+clone keeps the baseline snapshot safe and cheap. Plain dict/list
+    stand-ins (used by tests and future wrappers) are cloned recursively so the
+    baseline never aliases live request state.
+    """
+    if conds is None:
+        return None
+    if isinstance(conds, (dict, list, tuple)):
+        return _clone_tensor(conds)
+    t3 = getattr(conds, "t3", None)
+    gen = getattr(conds, "gen", None)
+    if t3 is None and gen is None and not hasattr(conds, "__dict__"):
+        return _clone_tensor(conds)
+    t3_clone = None
+    if t3 is not None:
+        try:
+            t3_clone = type(t3)(**{key: _clone_tensor(value) for key, value in vars(t3).items()})
+        except TypeError:  # pragma: no cover - future upstream field changes
+            t3_clone = t3
+    gen_clone = {key: _clone_tensor(value) for key, value in (gen or {}).items()}
+    try:
+        return type(conds)(t3_clone, gen_clone)
+    except TypeError:  # pragma: no cover
+        return _clone_tensor(conds)
+
+
 class ModelRunnerBase:
     def __init__(
-        self, model_config: ModelConfig, device_config: DeviceConfig, is_driver_worker: bool = False, *args, **kwargs
+        self,
+        model_config: ModelConfig,
+        device_config: DeviceConfig,
+        is_driver_worker: bool = False,
+        *args,
+        weight_registry=None,
+        **kwargs,
     ):
         self.model_config = model_config
         self.is_driver_worker = is_driver_worker
+        # Engine-owned shared-weight registry (Phase 4-3); optional so tests and
+        # standalone runners keep working without one.
+        self.weight_registry = weight_registry
 
         self.device_config = device_config if device_config is not None else DeviceConfig()
         self.device = self.device_config.device
@@ -145,22 +197,35 @@ class ModelRunnerBase:
         self._baseline_state: dict | None = None
 
     def _load_model(self):
-        return get_model(self.model_config, self.device_config)
+        return get_model(self.model_config, self.device_config, weight_registry=self.weight_registry)
 
     def _snapshot_chatterbox_state(self) -> dict:
         """Snapshot the model's conditionals so they can be restored later.
 
         Only Chatterbox-family models expose ``conds`` / ``ref_dict``; other
         models yield an empty snapshot and are never touched again.
+
+        Tensors are detached and cloned field-by-field instead of
+        ``copy.deepcopy`` on the whole object: a checkpoint tensor that carries
+        ``requires_grad`` becomes a non-leaf when moved to CUDA, and non-leaf
+        tensors refuse the deepcopy protocol.
         """
         state: dict = {}
         model = self.model
         if model is None:
             return state
         if hasattr(model, "conds"):
-            state["conds"] = copy.deepcopy(model.conds)
+            state["conds"] = _clone_conditionals(model.conds)
         if hasattr(model, "ref_dict"):
-            state["ref_dict"] = copy.deepcopy(model.ref_dict)
+            ref_dict = model.ref_dict
+            state["ref_dict"] = (
+                {
+                    key: value.detach().clone() if torch.is_tensor(value) else value
+                    for key, value in ref_dict.items()
+                }
+                if isinstance(ref_dict, dict)
+                else ref_dict
+            )
         return state
 
     def _capture_baseline_state(self) -> None:
@@ -181,6 +246,38 @@ class ModelRunnerBase:
             model.conds = state.get("conds")
         if hasattr(model, "ref_dict"):
             model.ref_dict = state.get("ref_dict")
+
+    def _align_chatterbox_conditionals(self, exaggeration: float | None = None) -> None:
+        """Cast per-request conditionals to the T3 weight dtype (Phase 4-1).
+
+        Upstream ``Conditionals.to(device)`` only moves tensors; when the T3
+        backbone runs in float16 the per-request ``speaker_emb`` / emotion
+        tensors must match or the first conditional projection raises a dtype
+        mismatch. This lives here (not on the shared backbone) because
+        conditionals are per-executor state (Phase 0-2).
+
+        Setting ``emotion_adv`` to the requested exaggeration up front also
+        prevents upstream ``generate`` from rebuilding an fp32 ``T3Cond`` for
+        the "exaggeration changed" branch.
+        """
+        model = self.model
+        if model is None:
+            return
+        conds = getattr(model, "conds", None)
+        t3 = getattr(model, "t3", None)
+        t3_cond = getattr(conds, "t3", None)
+        if t3_cond is None or t3 is None:
+            return
+        dtype = None
+        for param in t3.parameters():
+            dtype = param.dtype
+            break
+        if dtype is None:
+            return
+        device = getattr(model, "device", None) or str(self.device)
+        conds.t3 = t3_cond.to(device=device, dtype=dtype)
+        if exaggeration is not None and getattr(conds.t3, "emotion_adv", None) is not None:
+            conds.t3.emotion_adv = exaggeration * torch.ones(1, 1, 1, dtype=dtype, device=device)
 
     @torch.inference_mode()
     def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
@@ -642,6 +739,9 @@ class ModelRunnerBase:
         hf_config = get_model_config(
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
+        # Phase 4-1: prepared BERT features arrive as float32 host tensors; the
+        # text encoder's projections follow the model dtype (float16 on GPU).
+        model_dtype = next(self.model.parameters()).dtype
 
         def synthesize_text(input_params, initial_request):
             # Iterate over inputs and add data to list
@@ -656,8 +756,8 @@ class ModelRunnerBase:
                     x_tst = phones.to(self.device).unsqueeze(0)
                     tones = tones.to(self.device).unsqueeze(0)
                     lang_ids = lang_ids.to(self.device).unsqueeze(0)
-                    bert = bert.to(self.device).unsqueeze(0)
-                    ja_bert = ja_bert.to(self.device).unsqueeze(0)
+                    bert = bert.to(self.device, dtype=model_dtype).unsqueeze(0)
+                    ja_bert = ja_bert.to(self.device, dtype=model_dtype).unsqueeze(0)
                     x_tst_lengths = torch.LongTensor([phones.size(0)]).to(self.device)
                     del phones
                     speakers = torch.LongTensor([speaker_id]).to(self.device)
@@ -900,6 +1000,9 @@ class ModelRunnerBase:
                     raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
                 self.model.conds = copy.deepcopy(baseline)
 
+            # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
+            self._align_chatterbox_conditionals(exaggeration)
+
             wav = self.model.generate(
                 text,
                 exaggeration=exaggeration,
@@ -945,6 +1048,9 @@ class ModelRunnerBase:
                 if baseline is None and getattr(self.model, "conds", None) is None:
                     raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
                 self.model.conds = copy.deepcopy(baseline)
+
+            # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
+            self._align_chatterbox_conditionals()
 
             wav = self.model.generate(
                 text,
@@ -992,6 +1098,9 @@ class ModelRunnerBase:
                 if baseline is None and getattr(self.model, "conds", None) is None:
                     raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
                 self.model.conds = copy.deepcopy(baseline)
+
+            # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
+            self._align_chatterbox_conditionals(exaggeration)
 
             wav = self.model.generate(
                 text,

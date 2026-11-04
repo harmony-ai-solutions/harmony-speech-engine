@@ -60,6 +60,13 @@ class HarmonySpeechEngine:
         self._pending_error_outputs: list[RequestOutput] = []
         self._verify_args()
 
+        # One shared-weight registry per engine (Phase 4-3): executor configs
+        # that opt into the same `backbone_group` load shared backbone modules
+        # once instead of duplicating them.
+        from harmonyspeech.modeling.weight_registry import WeightRegistry
+
+        self.weight_registry = WeightRegistry()
+
         logger.info(
             f"Initializing Harmony Speech Engine (v{harmonyspeech.__version__}) with the following config:\nPreloaded Models = \n"
             # TODO
@@ -131,7 +138,7 @@ class HarmonySpeechEngine:
                 executor_class = GPUExecutorAsync
 
             # Create a new executor for each ModelConfig
-            executor = executor_class(model_config=model_cfg)
+            executor = executor_class(model_config=model_cfg, weight_registry=self.weight_registry)
             # Append the created executor to the dict of model executors
             self.model_executors[model_cfg.name] = executor
 
@@ -657,14 +664,20 @@ class HarmonySpeechEngine:
         """Probe every model executor and return a structured health payload.
 
         Returns ``{"healthy": bool, "models": {<executor name>: {"healthy": bool,
-        "model_type": str, "error": str | None}}}``. Per-model detail is the
-        extension point for Phase 4-5 VRAM reporting.
+        "model_type": str, "vram_bytes": int, "error": str | None}},
+        "vram": {...}}``. ``vram`` is the Phase 4-5 summary (see
+        :meth:`get_vram_stats`).
         """
+        vram = self.get_vram_stats()
         models: dict[str, dict] = {}
         healthy = True
         for name, model_executor in getattr(self, "model_executors", {}).items():
             model_config = getattr(model_executor, "model_config", None)
-            detail: dict = {"model_type": getattr(model_config, "model_type", None), "healthy": True}
+            detail: dict = {
+                "model_type": getattr(model_config, "model_type", None),
+                "healthy": True,
+                "vram_bytes": vram["models"].get(name, {}).get("vram_bytes", 0),
+            }
             try:
                 model_executor.check_health()
             except Exception as e:  # noqa: BLE001 - health probes must not raise
@@ -672,7 +685,108 @@ class HarmonySpeechEngine:
                 detail["healthy"] = False
                 detail["error"] = str(e)
             models[name] = detail
-        return {"healthy": healthy, "models": models}
+        return {"healthy": healthy, "models": models, "vram": vram}
+
+    # ------------------------------------------------------------------
+    # VRAM accounting (Phase 4-5)
+    # ------------------------------------------------------------------
+    def get_vram_stats(self) -> dict:
+        """Return per-model VRAM accounting plus shared-backbone group totals.
+
+        Per-model ``vram_bytes`` is the CUDA allocation delta measured while
+        that model loaded (``GPUModelRunner.model_memory_usage``); on CPU it is
+        ``0`` and ``weights_bytes`` (host-resident parameter/buffer size) is
+        still reported. Shared backbone components are listed once under
+        ``shared`` and aggregated per ``backbone_group`` so a deduplicated
+        deployment is not counted twice.
+
+        Safe on CPU-only builds: CUDA fields are ``0``/``None`` and nothing
+        here raises.
+        """
+        import torch
+
+        cuda = False
+        allocated = reserved = peak = total = 0
+        device_name = None
+        device_index = torch.cuda.current_device() if torch.cuda.is_available() else None
+        if torch.cuda.is_available():
+            try:
+                cuda = True
+                allocated = int(torch.cuda.memory_allocated(device_index))
+                reserved = int(torch.cuda.memory_reserved(device_index))
+                peak = int(torch.cuda.max_memory_allocated(device_index))
+                total = int(torch.cuda.get_device_properties(device_index).total_memory)
+                device_name = torch.cuda.get_device_name(device_index)
+            except Exception:  # pragma: no cover - defensive on odd driver states
+                cuda = False
+
+        registry = getattr(self, "weight_registry", None)
+        shared = registry.stats() if registry is not None else {
+            "entries": 0,
+            "total_bytes": 0,
+            "components": {},
+        }
+
+        # Map checkpoint repo -> backbone group name so shared bytes can be
+        # attributed to the group operators recognise in the config. Repo ids
+        # are normalised (case/hyphen-insensitive): configs spell them
+        # lowercase while the HF cache and registry keys carry the on-disk name.
+        def _repo_key(repo: str | None) -> str:
+            return str(repo or "").lower().replace("-", "").replace("_", "")
+
+        repo_to_group: dict[str, str] = {}
+        models: dict[str, dict] = {}
+        for name, model_executor in getattr(self, "model_executors", {}).items():
+            model_config = getattr(model_executor, "model_config", None)
+            runner = getattr(getattr(model_executor, "driver_worker", None), "model_runner", None)
+            model = getattr(runner, "model", None)
+            weights_bytes = 0
+            if model is not None:
+                try:
+                    from harmonyspeech.modeling.weight_registry import model_nbytes
+
+                    weights_bytes = model_nbytes(model)
+                except Exception:  # pragma: no cover - non-module natives
+                    weights_bytes = 0
+            group = getattr(model_config, "backbone_group", None)
+            repo = getattr(model_config, "model", None)
+            if group and repo:
+                repo_to_group[_repo_key(repo)] = group
+            models[name] = {
+                "model_type": getattr(model_config, "model_type", None),
+                "device": str(getattr(getattr(model_config, "device_config", None), "device", "")),
+                "dtype": str(getattr(model_config, "dtype", "")) or None,
+                "vram_bytes": int(getattr(runner, "model_memory_usage", 0) or 0),
+                "weights_bytes": int(weights_bytes),
+                "backbone_group": group,
+            }
+
+        groups: dict[str, int] = {}
+        dedup_saved = 0
+        for key_text, detail in shared.get("components", {}).items():
+            repo = key_text.split("@", 1)[0]
+            group = repo_to_group.get(_repo_key(repo))
+            if group:
+                groups[group] = groups.get(group, 0) + int(detail.get("bytes", 0))
+            # Bytes that would have been re-loaded per additional acquirer.
+            refs = int(detail.get("refs", 1))
+            if refs > 1:
+                dedup_saved += int(detail.get("bytes", 0)) * (refs - 1)
+
+        return {
+            "cuda": cuda,
+            "device": device_name,
+            "total_bytes": total,
+            "allocated_bytes": allocated,
+            "reserved_bytes": reserved,
+            "peak_allocated_bytes": peak,
+            "headroom_bytes": max(0, total - reserved) if cuda else 0,
+            "resident_models": len(models),
+            "models": models,
+            "shared": shared,
+            "groups": groups,
+            "dedup_saved_bytes": dedup_saved,
+        }
 
 
 setup_logger()

@@ -15,9 +15,88 @@ from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
 from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
 from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
 from huggingface_hub import snapshot_download
+from loguru import logger
 
 # HuggingFace repo ID for ChatterboxTurboTTS (mirrors tts_turbo.py REPO_ID)
 _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
+
+# ---------------------------------------------------------------------------
+# dtype policy (Phase 4-1)
+# ---------------------------------------------------------------------------
+# `dtype` selects the precision of the autoregressive T3 backbone only. The
+# measured rollout (docs/benchmarks/audio-regression.md) showed that casting
+# S3Gen — its flow-matching decoder, the 16 kHz speech tokenizer, or the
+# HiFiGAN vocoder — to float16 audibly degrades synthesis: vocoder/flow noise
+# flips sampled tokens *after* the AR stage, producing different words even
+# with identical reference audio (upstream itself keeps an `estimator_dtype =
+# "fp32"` hint in s3gen.py). The VoiceEncoder's LSTM path is float32-only by
+# construction (chatterbox.py casts its inputs back to float32).
+#
+# Hence: T3 -> configured dtype, S3Gen -> float32, VoiceEncoder -> float32.
+# This keeps the ~1 GiB/role T3 saving without touching the quality-critical
+# vocoder. CPU loading also forces float32 (the CPU executor rewrites fp16 to
+# bf16, and bf16 sampling in T3 is neither tested nor faster here).
+_S3GEN_DTYPE = torch.float32
+_VE_DTYPE = torch.float32
+
+
+def _resolve_load_dtype(device: str, dtype: torch.dtype | None) -> torch.dtype:
+    """Resolve the effective T3 dtype for a device (CPU is always float32)."""
+    if dtype is None:
+        return torch.float32
+    if device != "cuda":
+        return torch.float32
+    return dtype
+
+
+def _submodule_dtypes(model) -> dict[str, str]:
+    """Return the effective dtype names of the precision-relevant submodules."""
+    result: dict[str, str] = {}
+    for name in ("t3", "s3gen", "ve"):
+        module = getattr(model, name, None)
+        if module is None or not hasattr(module, "parameters"):
+            continue
+        for param in module.parameters():
+            result[name] = str(param.dtype).replace("torch.", "")
+            break
+    return result
+
+
+def apply_model_dtype(model, dtype: torch.dtype | None) -> None:
+    """Apply the project dtype policy to a freshly loaded Chatterbox model.
+
+    Casts the T3 backbone to ``dtype`` (on CUDA only) and leaves S3Gen / the
+    VoiceEncoder in float32. The Perth watermark network is also pinned to
+    float32: it is constructed inside the loader's default-dtype context, so a
+    float16 request would otherwise leave it with half-precision conv weights
+    that reject the float32 mel input. Logs the effective per-submodule dtypes
+    so an operator can see what actually got loaded.
+    """
+    device = str(getattr(model, "device", "cpu"))
+    effective = _resolve_load_dtype(device, dtype)
+    # Upstream `from_local` constructs modules inside the loader's
+    # `torch.set_default_dtype(model_config.dtype)` context, so a float16
+    # request would otherwise leave S3Gen / VE (and every other module created
+    # there) silently half-precision even though `load_state_dict` loads float32
+    # weights. Pin the policy explicitly.
+    s3gen = getattr(model, "s3gen", None)
+    if isinstance(s3gen, torch.nn.Module):
+        model.s3gen = s3gen.to(_S3GEN_DTYPE)
+    ve = getattr(model, "ve", None)
+    if isinstance(ve, torch.nn.Module):
+        model.ve = ve.to(_VE_DTYPE)
+    t3 = getattr(model, "t3", None)
+    if isinstance(t3, torch.nn.Module):
+        model.t3 = t3.to(effective)
+    # The watermarker is not part of the synthesis stack; keep it float32.
+    watermarker = getattr(model, "watermarker", None)
+    perth_net = getattr(watermarker, "perth_net", None)
+    if isinstance(perth_net, torch.nn.Module):
+        watermarker.perth_net = perth_net.float()
+    logger.info(
+        "Chatterbox effective submodule dtypes "
+        f"(requested={getattr(dtype, '__str__', lambda: dtype)()}): {_submodule_dtypes(model)}"
+    )
 
 # ---------------------------------------------------------------------------
 # Monkey-patch for ChatterboxMultilingualTTS to support CPU loading
@@ -83,11 +162,19 @@ class ChatterboxTTSModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxTTS":
+    def from_pretrained(
+        cls,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> "ChatterboxTTS":
         """Load ChatterboxTTS model from pretrained weights.
 
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
+            dtype: Requested precision for the T3 backbone (Phase 4-1). S3Gen
+                and the VoiceEncoder always stay float32 — see the module
+                docstring for the measured rationale.
             **kwargs: Additional arguments passed to ChatterboxTTS.from_pretrained.
 
         Returns:
@@ -98,7 +185,9 @@ class ChatterboxTTSModel:
         elif isinstance(device, torch.device):
             device = str(device)
 
-        return ChatterboxTTS.from_pretrained(device=device, **kwargs)
+        model = ChatterboxTTS.from_pretrained(device=device, **kwargs)
+        apply_model_dtype(model, dtype)
+        return model
 
 
 class ChatterboxTurboTTSModel:
@@ -110,7 +199,12 @@ class ChatterboxTurboTTSModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "_ChatterboxTurboTTS":
+    def from_pretrained(
+        cls,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
 
         Workaround: The upstream `_ChatterboxTurboTTS.from_pretrained()` contains a bug
@@ -125,6 +219,7 @@ class ChatterboxTurboTTSModel:
 
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
+            dtype: Requested precision for the T3 backbone (Phase 4-1).
             **kwargs: Additional keyword arguments (unused; kept for API compatibility).
 
         Returns:
@@ -186,6 +281,7 @@ class ChatterboxTurboTTSModel:
 
         model.ve.forward = _ve_forward_float32
 
+        apply_model_dtype(model, dtype)
         return model
 
 
@@ -200,11 +296,17 @@ class ChatterboxMultilingualTTSModel:
     SUPPORTED_LANGUAGES: dict = _CHATTERBOX_SUPPORTED_LANGUAGES.copy()
 
     @classmethod
-    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxMultilingualTTS":
+    def from_pretrained(
+        cls,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> "ChatterboxMultilingualTTS":
         """Load ChatterboxMultilingualTTS model from pretrained weights.
 
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
+            dtype: Requested precision for the T3 backbone (Phase 4-1).
             **kwargs: Additional arguments passed to ChatterboxMultilingualTTS.from_pretrained.
 
         Returns:
@@ -227,6 +329,7 @@ class ChatterboxMultilingualTTSModel:
         if hasattr(model, "t3") and hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
             model.t3.tfmr.config._attn_implementation = "eager"
 
+        apply_model_dtype(model, dtype)
         return model
 
 
@@ -238,11 +341,19 @@ class ChatterboxVCModel:
     """
 
     @classmethod
-    def from_pretrained(cls, device: str | torch.device | None = None, **kwargs) -> "ChatterboxVC":
+    def from_pretrained(
+        cls,
+        device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> "ChatterboxVC":
         """Load ChatterboxVC model from pretrained weights.
 
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
+            dtype: Requested precision. VC has no T3 backbone, so this is
+                accepted for API symmetry and only S3Gen's float32 policy
+                applies (Phase 4-1).
             **kwargs: Additional arguments passed to ChatterboxVC.from_pretrained.
 
         Returns:
@@ -253,7 +364,15 @@ class ChatterboxVCModel:
         elif isinstance(device, torch.device):
             device = str(device)
 
-        return ChatterboxVC.from_pretrained(device=device, **kwargs)
+        model = ChatterboxVC.from_pretrained(device=device, **kwargs)
+        apply_model_dtype(model, dtype)
+        return model
 
 
-__all__ = ["ChatterboxTTSModel", "ChatterboxTurboTTSModel", "ChatterboxMultilingualTTSModel", "ChatterboxVCModel"]
+__all__ = [
+    "ChatterboxTTSModel",
+    "ChatterboxTurboTTSModel",
+    "ChatterboxMultilingualTTSModel",
+    "ChatterboxVCModel",
+    "apply_model_dtype",
+]

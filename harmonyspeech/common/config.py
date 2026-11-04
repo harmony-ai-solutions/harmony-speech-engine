@@ -40,6 +40,12 @@ class ModelConfig:
         enforce_eager: Whether to enforce eager execution. If True, we will
             disable CUDA graph and always execute the model in eager mode.
             If False, we will use CUDA graph and eager execution in hybrid.
+        backbone_group: Optional name of a shared-backbone group. Entries with
+            the same group **and** the same underlying checkpoint repo,
+            revision and dtype share backbone components through the engine's
+            :class:`~harmonyspeech.modeling.weight_registry.WeightRegistry`
+            instead of loading them once per config (Phase 4-4). Entries
+            without a group keep the historical one-tree-per-config load.
     """
 
     def __init__(
@@ -60,6 +66,7 @@ class ModelConfig:
         code_revision: str | None = None,
         enforce_eager: bool = True,
         watermark: bool = True,
+        backbone_group: str | None = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -77,6 +84,9 @@ class ModelConfig:
         self.code_revision = code_revision
         self.enforce_eager = enforce_eager
         self.watermark = watermark
+        if backbone_group is not None and not isinstance(backbone_group, str):
+            raise ValueError(f"backbone_group must be a string or None, got {type(backbone_group).__name__}")
+        self.backbone_group = backbone_group
 
         self.dtype = _get_and_verify_dtype(dtype)
 

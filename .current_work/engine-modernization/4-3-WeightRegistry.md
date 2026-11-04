@@ -68,8 +68,28 @@ class WeightRegistry:
 
 ## Checklist
 
-- [ ] Registry implemented (ref-count, lock, stats, read-only docs)
-- [ ] Engine owns one registry; loader plumbing in place
-- [ ] `backbone_group` config param validated
-- [ ] Registry unit tests green
-- [ ] `summary.md` Implementation Status updated
+- [x] Registry implemented (ref-count, lock, stats, read-only docs)
+- [x] Engine owns one registry; loader plumbing in place
+- [x] `backbone_group` config param validated
+- [x] Registry unit tests green
+- [x] `summary.md` Implementation Status updated
+
+## Outcome & deviations (2026-11-04)
+
+* `harmonyspeech/modeling/weight_registry.py` — `acquire(key, loader_fn)` loads
+  once under a `threading.Lock`, asserts the module's dtype matches the key,
+  pins `eval()` + `requires_grad=False`; `release()` decrements and drops at
+  zero; `stats()` returns entries/total bytes/refs per component;
+  `assert_readonly()` is now enforced rather than a no-op hook.
+* Plumbing: `HarmonySpeechEngine.weight_registry` →
+  `ExecutorBase(model_config, weight_registry)` → worker → model runner →
+  `get_model(..., weight_registry=)`.
+* `ModelConfig.backbone_group` is validated (string or None).
+* Key detail found during implementation: the component name must encode the
+  checkpoint *file set* (`s3gen`, `s3gen:mtl`, `s3gen:turbo`, `ve`, `ve:mtl`,
+  `ve:turbo`, `t3`, `t3:multilingual`, `t3:turbo`), otherwise a multilingual
+  role would incorrectly reuse the standard `s3gen.safetensors` when it was
+  supposed to load `s3gen.pt`.
+* Unit tests: `tests/unit/modeling/test_weight_registry.py` (identity, refcount,
+  release/reload, distinct keys, stats, read-only, dtype consistency, threaded
+  acquire).

@@ -13,9 +13,12 @@ class ExecutorBase(ABC):
     that can execute the model on multiple devices.
     """
 
-    def __init__(self, model_config: ModelConfig) -> None:
+    def __init__(self, model_config: ModelConfig, weight_registry=None) -> None:
         self.model_config = model_config
         self.device_config = model_config.device_config
+        # Engine-owned shared-weight registry (Phase 4-3). Executors for configs
+        # with the same `backbone_group` acquire the same module objects.
+        self.weight_registry = weight_registry
 
         self._init_executor()
         logger.info(

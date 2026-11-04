@@ -22,6 +22,7 @@ class GPUExecutor(ExecutorBase):
             local_rank=0,
             rank=0,
             is_driver_worker=True,
+            weight_registry=self.weight_registry,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()

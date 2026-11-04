@@ -214,9 +214,10 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Problem:** `init_custom_executors()` creates one executor per `ModelConfig`, and each GPU executor loads its model during construction (`gpu_executor.py:7-27`). Nothing unloads, evicts, or lazily loads models; there is no `gpu_memory_utilization`, memory budget, or OOM preflight.
 - **Files:** `harmonyspeech/engine/harmonyspeech_engine.py:69-87`, `harmonyspeech/executor/gpu_executor.py:7-31`, `harmonyspeech/task_handler/gpu_worker.py:46-75`, `config.gpu.yml`
 - **Current capacity:** `config.gpu.yml` declares 28 models, of which 20 target `cuda`: 2 OpenVoice V1 synthesizers, 2 OpenVoice V1 converter roles, 5 MeloTTS languages, 2 OpenVoice V2 converter roles, Faster-Whisper `large-v3-turbo` and `tiny`, VoiceFixer restorer + vocoder, 4 Chatterbox variants, and `chatterbox_embedding`.
-- **Limit:** `docs/models.md` documents roughly 512 MB per OpenVoice/Melo model, ~1 GB for HarmonySpeech, ~2 GB for VoiceFixer, and 1–6 GB for Whisper; `config.yml` notes Chatterbox is ~1–2 GB per copy. Summed for `config.gpu.yml`, weights alone are roughly 16–22 GB, before activations, librosa buffers, and PyTorch's caching allocator — i.e. at or beyond a 16 GB card. All 28 entries also set `dtype: "float32"`, doubling footprint versus fp16 where the model honors dtype.
-- **Aggravating factor:** Four separate executors load `resemble-ai/chatterbox` (`chatterbox`, `chatterbox_multilingual`, `chatterbox_vc`, `chatterbox_embedding`) and one loads `resemble-ai/chatterbox-turbo`. Each `from_pretrained` builds an independent copy; there is no weight sharing between executors.
-- **Improvement path:** Pick a small "resident set" per deployment; move the rest to lazy load with LRU eviction; share one Chatterbox instance across TTS/embedding/VC roles; default GPU configs to `dtype: "auto"` (fp16) and only keep models that are actually routed to on the GPU.
+- **Limit (measured after Phase 4, 2026-11-04):** the full catalogue now fits: 8.52 GiB of torch allocations (8.83 GiB via `nvidia-smi`) on a 15.93 GiB card, ~7 GiB free. Before Phase 4 the same catalogue allocated 16.45 GiB — i.e. it overflowed a 16 GB card and only "worked" by paging into shared system memory under WDDM. See `docs/benchmarks/vram-profiles.md`. The floor of ≥8 GiB headroom is still missed by ~0.7 GiB because OpenVoice/MeloTTS and VoiceFixer remain float32 (upstream fp16 incompatibilities) and Chatterbox Turbo carries ~1.5 GiB of GPT2 causal-mask buffers.
+- **Improved by:** Phase 4 — fp16 T3 for the Chatterbox family, plus the ref-counted `WeightRegistry` with `backbone_group: "chatterbox-base"` (one S3Gen/VE for `chatterbox`, `chatterbox_multilingual`, `chatterbox_vc`, `chatterbox_embedding`; the Chatterbox block dropped 14.29 GiB → 6.35 GiB). The remaining gap is upstream-model work, not engine wiring.
+- **Still open:** no unload/evict path, no OOM preflight. `/health` and `/metrics` now expose per-model and shared-group VRAM (`hse_model_vram_bytes`, `hse_shared_backbone_bytes`, …), which is the input a future governor needs.
+- **Improvement path:** Pick a small "resident set" per deployment; move the rest to lazy load with LRU eviction (the registry's `release()` is already wired for it); finish the fp16 opt-ins once upstream VITS/VoiceFixer code is half-precision safe.
 
 ### Per-Request Batching in Name Only
 
@@ -324,9 +325,9 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ### VRAM Saturation Prevents Concurrency
 
-- **Current capacity:** With `config.gpu.yml`, weights alone approach the 16 GB limit.
-- **Limit:** No headroom for activations or a second concurrent request for a large model; OOM appears at inference time, not load time.
-- **Scaling path:** Resident-set configs, lazy load/evict, fp16 defaults, and per-model memory accounting reported by `/health`.
+- **Current capacity (measured after Phase 4):** full `config.gpu.yml` catalogue = 8.52 GiB torch allocations (8.83 GiB via `nvidia-smi`) on a 15.93 GiB card, ~7 GiB free; before Phase 4 it was 16.45 GiB and overflowed the card.
+- **Limit:** Headroom is now sufficient for activations and a second concurrent request on the smallest models, but not for two concurrent large generations (Chatterbox Turbo alone is ~3.4 GiB and its activation peak is several GiB). OOM still appears at inference time, not load time.
+- **Scaling path:** Resident-set configs, lazy load/evict (registry `release()` is ready), finishing the fp16 opt-ins for OpenVoice/MeloTTS/VoiceFixer, and the per-model/shared-group gauges now reported by `/health` and `/metrics`.
 
 ## Dependencies at Risk
 
@@ -415,8 +416,8 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ### Model Unloading / Capacity Management
 
-- **Problem:** No API or runtime mechanism unloads a model, swaps a resident set, or reports per-model VRAM.
-- **Files:** `harmonyspeech/engine/harmonyspeech_engine.py:69-87`, `harmonyspeech/executor/gpu_executor.py`
+- **Problem:** No API or runtime mechanism unloads a model or swaps a resident set. Per-model VRAM **is** now reported (Phase 4): `get_vram_stats()` feeds `/health` and `/metrics` (`hse_model_vram_bytes`, `hse_vram_reserved_bytes`, `hse_resident_models`, `hse_shared_backbone_bytes{group}`), and `WeightRegistry.release()` decrements ref counts — but nothing calls it in production yet.
+- **Files:** `harmonyspeech/engine/harmonyspeech_engine.py` (`get_vram_stats`), `harmonyspeech/modeling/weight_registry.py`, `harmonyspeech/executor/gpu_executor.py`
 - **Blocks:** Hosting more models than fit in VRAM; operating a 16 GB card with a catalogue of 20 CUDA models.
 
 ## Test Coverage Gaps
@@ -452,10 +453,10 @@ Also untested by design: E2E suites download real weights and are split across s
 
 ### Priority 2 — GPU Viability on a 16 GB Card
 
-6. **Introduce a resident-set model config** — split `config.gpu.yml` into a small GPU set plus CPU/on-demand models; do not ship a 20-CUDA-model default.
-7. **Add lazy load with LRU eviction and per-model VRAM reporting**, plus an OOM preflight before loading (`engine/harmonyspeech_engine.py:69`, `executor/gpu_executor.py`).
-8. **Share Chatterbox weights** across TTS/embedding/VC roles, or drop duplicate configs; four copies of the same checkpoint is the single largest avoidable VRAM cost.
-9. **Default GPU configs to `dtype: "auto"` (fp16)** and remove `dtype: "float32"` from model entries that honor dtype.
+6. **Introduce a resident-set model config** — split `config.gpu.yml` into a small GPU set plus CPU/on-demand models; do not ship a 20-CUDA-model default. *(Still open — the measured post-Phase-4 catalogue now fits, so this is a latency/headroom choice rather than a hard blocker.)*
+7. **Add lazy load with LRU eviction and per-model VRAM reporting**, plus an OOM preflight before loading (`engine/harmonyspeech_engine.py`, `executor/gpu_executor.py`). *(Reporting done — Phase 4-5 `/health` + `/metrics` + `scripts/measure_vram.py`; eviction/preflight still open, `WeightRegistry.release()` is the hook.)*
+8. **Share Chatterbox weights** across TTS/embedding/VC roles. *(Done — Phase 4-4 `backbone_group`; block 14.29 GiB → 6.35 GiB.)*
+9. **Default GPU configs to `dtype: "auto"` (fp16)** and remove `dtype: "float32"` from model entries that honor dtype. *(Partially done — Phase 4-1: Chatterbox entries are `float16` (T3). OpenVoice/MeloTTS/VoiceFixer stay `float32` because their adapted code is not half-precision safe; see `docs/benchmarks/audio-regression.md`.)*
 10. **Replace the 120 s engine-step timeout with per-request timeouts** so one slow generation cannot kill the loop (`async_harmonyspeech.py:375-383`).
 
 ### Priority 3 — Throughput and API Contract

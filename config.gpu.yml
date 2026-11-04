@@ -222,7 +222,8 @@ model_configs:
     model_type: "ChatterboxTTS"
     watermark: true          # Set to false to disable perth audio watermarking
     max_batch_size: 1
-    dtype: "float32"
+    dtype: "float16"         # T3 backbone; S3Gen/VE stay float32 (see docs/models.md)
+    backbone_group: "chatterbox-base"  # shares S3Gen/VE with the other Chatterbox roles
     device_config:
       device: "cuda"
 
@@ -232,7 +233,7 @@ model_configs:
     model_type: "ChatterboxTurboTTS"
     watermark: true
     max_batch_size: 1
-    dtype: "float32"
+    dtype: "float16"         # T3 backbone; own meanflow S3Gen (ungrouped)
     device_config:
      device: "cuda"
 
@@ -242,7 +243,11 @@ model_configs:
     model_type: "ChatterboxMultilingualTTS"
     watermark: true
     max_batch_size: 1
-    dtype: "float32"
+    dtype: "float16"
+    # Joins the base group on checkpoint-hash evidence (see
+    # harmonyspeech/modeling/models/chatterbox/factory.py): s3gen.pt and ve.pt
+    # are bit-identical to the base s3gen.safetensors / ve.safetensors.
+    backbone_group: "chatterbox-base"
     device_config:
      device: "cuda"
 
@@ -252,7 +257,8 @@ model_configs:
     model_type: "ChatterboxVC"
     watermark: true
     max_batch_size: 1
-    dtype: "float32"
+    dtype: "float16"         # no T3 here; grouped for the shared S3Gen/VE
+    backbone_group: "chatterbox-base"
     device_config:
      device: "cuda"
 
@@ -262,6 +268,7 @@ model_configs:
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxEmbedding"
     max_batch_size: 1
-    dtype: "float32"
+    dtype: "float16"
+    backbone_group: "chatterbox-base"  # shares S3Gen/VE/T3; owns its conds
     device_config:
       device: "cuda"

@@ -23,6 +23,10 @@
 
 ### Performance
 
+*   **Chatterbox runs in half precision where it is safe**: the large T3 backbone of the Chatterbox family can now load in float16 (the shipped GPU config does), roughly halving its memory. The vocoder and speaker encoder stay float32 because casting them was measured to audibly degrade synthesis. Other torch families keep float32 where their code is not half-precision safe, and that choice is documented per family.
+*   **Chatterbox roles share their backbones**: `chatterbox`, `chatterbox_multilingual`, `chatterbox_vc` and `chatterbox_embedding` can now share one vocoder/speaker-encoder copy (opt in with `backbone_group`), instead of loading a full duplicate of the checkpoint per role. On the shipped GPU config the Chatterbox block drops from ~14.3 GiB to ~6.4 GiB.
+*   **VRAM is observable**: `/health` reports per-model and shared-group memory, and `/metrics` exposes Prometheus gauges for per-model VRAM, reservation, resident model count and shared backbone bytes. `scripts/measure_vram.py` records a full profile of a config.
+
 *   **In-process audio pipeline**: intermediate audio, mel spectrograms, speaker embeddings and Chatterbox conditioning now stay in memory as typed objects between pipeline steps instead of being re-encoded as base64/JSON/WAV at every hop. On the worst hop (VoiceFixer restorer → vocoder) this removes roughly 25 ms of serialization and ~1 MiB of allocations per second of audio; the OpenVoice clone path now decodes the reference audio once instead of three times. API responses are unchanged.
 
 ### Fixes

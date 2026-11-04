@@ -53,9 +53,43 @@ On the 4060 Ti host: run the script before Phase 4 (fp32, duplicated — from gi
 
 ## Checklist
 
-- [ ] Per-model + shared-group VRAM accounting implemented
-- [ ] `/health` payload and `/metrics` endpoint live
-- [ ] `measure_vram.py` committed; before/after runs recorded
-- [ ] 16 GiB acceptance floor (≥8 GiB headroom, full catalogue) met or diagnosed
-- [ ] `docs/models.md` now carries measured figures
-- [ ] Phase 4 ticked in summary.md
+- [x] Per-model + shared-group VRAM accounting implemented
+- [x] `/health` payload and `/metrics` endpoint live
+- [x] `measure_vram.py` committed; before/after runs recorded
+- [x] 16 GiB acceptance floor (≥8 GiB headroom, full catalogue) met or diagnosed
+- [x] `docs/models.md` now carries measured figures
+- [x] Phase 4 ticked in summary.md
+
+## Outcome (2026-11-04)
+
+* `HarmonySpeechEngine.get_vram_stats()` — CUDA allocated/reserved/peak/total/
+  headroom, per-model `vram_bytes` (load-time allocation delta), per-model
+  `weights_bytes`, per-model dtype/device/group, registry `shared` detail,
+  per-group `groups`, and `dedup_saved_bytes`. Safe on CPU-only builds.
+* `/health` gains a `vram` block and per-model `vram_bytes`;
+  `/metrics` is now a hand-rendered endpoint combining the default Prometheus
+  registry with `hse_model_vram_bytes{model,model_type}`,
+  `hse_model_weights_bytes{model}`, `hse_vram_allocated_bytes`,
+  `hse_vram_reserved_bytes`, `hse_vram_peak_allocated_bytes`,
+  `hse_vram_total_bytes`, `hse_vram_headroom_bytes`, `hse_resident_models`,
+  `hse_shared_backbone_bytes{group}`, `hse_shared_total_bytes`,
+  `hse_shared_components`.
+* `scripts/measure_vram.py`: boots a config, samples torch + `nvidia-smi`,
+  optional per-family warmup with `reset_peak_memory_stats`, table + optional
+  JSON/markdown; pure helpers are unit-tested.
+
+### Measured result (full `config.gpu.yml`, RTX 5060 Ti 16 GiB)
+
+| | Before (fp32, duplicated) | After (fp16 T3 + dedup) |
+|---|---:|---:|
+| torch allocated | 16.45 GiB | 8.52 GiB |
+| nvidia-smi used | 15.67 GiB | 8.83 GiB |
+| headroom (reserved) | 0.00 GiB | 7.30 GiB |
+| Chatterbox block | 14.29 GiB | 6.35 GiB |
+
+**Acceptance floor: missed by ≈0.7–0.9 GiB** (7.10–7.30 GiB headroom vs 8 GiB).
+Diagnosed in `docs/benchmarks/vram-profiles.md`: the remaining fp32 families
+(OpenVoice/MeloTTS ≈2.0 GiB, VoiceFixer ≈0.4 GiB) are upstream half-precision
+incompatibilities, and Chatterbox Turbo carries ≈1.5 GiB of GPT2 causal-mask
+buffers in its checkpoint module tree. The card is exactly 16 GiB, so the floor
+was applied as written rather than scaled.

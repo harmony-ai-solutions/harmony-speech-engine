@@ -3,8 +3,24 @@
 ## Implementation Status Overview
 
 **Current Version**: 0.1.0-rc9  
-**Overall Completion**: ~75%  
+**Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
+
+## Engine Modernization — Phase 4 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 4 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **4-1 dtype plumbing & config flip** — `ChatterboxTTS/TurboTTS/MultilingualTTS/VC` wrappers accept `dtype` and apply a documented per-submodule policy (T3 → configured dtype, S3Gen/VE/Perth watermarker pinned float32); the loader forwards `model_config.dtype` in every Chatterbox branch and logs effective dtypes. `config.gpu.yml` Chatterbox entries flipped to `float16`; other torch families stay `float32` (measured opt-outs: OpenVoice/MeloTTS build float32 tensors internally and MeloTTS splines assert under fp16; VoiceFixer has a pre-existing GPU placement bug).
+- ✅ **4-2 Audio regression gate** — `scripts/audio_regression.py` (+ `tests/audio_fixtures/` with synthetic reference clips and documented provenance): two-process A/B per family, log-mel MSE / duration / RMS / correlation for deterministic families, LTAS/duration/RMS for stochastic ones, JSON + markdown output, non-zero exit, listening pack. Identity axis passes; fp16 Chatterbox/Turbo/Multilingual pass; sharing axis passes.
+- ✅ **4-3 Weight registry** — `harmonyspeech/modeling/weight_registry.py`: ref-counted, lock-protected `(repo, revision, component, dtype)` store with `stats()`, read-only enforcement and `release()`; engine owns one and threads it through executor → worker → model runner → loader; `ModelConfig.backbone_group` added.
+- ✅ **4-4 Chatterbox backbone sharing** — `modeling/models/chatterbox/factory.py` builds one reference S3Gen/VE per checkpoint through the registry and assembles distinct wrapper instances per role (own `conds`/`ref_dict`); embedding shares T3 too. `backbone_group: "chatterbox-base"` on chatterbox/multilingual/vc/embedding; turbo ungrouped. Multilingual grouped on hash evidence (`s3gen.pt` ≡ `s3gen.safetensors`, `ve.pt` ≡ `ve.safetensors`, all tensors bit-identical). In-process A/B is bit-identical; cross-process gate within −60 dBFS kernel noise.
+- ✅ **4-5 VRAM metrics & profile** — `get_vram_stats()` per model + shared-group accounting, `/health` payload extension, Prometheus `/metrics` (`hse_model_vram_bytes`, `hse_vram_reserved_bytes`, `hse_resident_models`, `hse_shared_backbone_bytes{group}`, …), `scripts/measure_vram.py`, `docs/benchmarks/vram-profiles.md`, measured figures in `docs/models.md`.
+
+**Verification**: unit 469 → 530, integration 23, wire-contract e2e 38 passed + 3 skipped. Real-model e2e: Chatterbox family (routing/behavior unchanged after sharing) + OpenVoice V1 on GPU/CPU. Full-catalogue VRAM: 16.45 GiB (fp32, duplicated — overflowed the card) → **8.52 GiB (8.83 GiB nvidia-smi), 7.1–7.3 GiB headroom**. Chatterbox block 14.29 → 6.35 GiB. Acceptance floor of ≥8 GiB headroom missed by ~0.7 GiB; causes diagnosed in `docs/benchmarks/vram-profiles.md` (remaining float32 families + turbo's GPT2 mask buffers).
+
+**Deviations**: S3Gen stays float32 (fp16 audibly degrades synthesis — measured); turbo ungrouped; VoiceFixer/precision opt-outs documented.
+
+**Next**: Phase 5 — honest batching (HSE only).
 
 ## Engine Modernization — Phase 3 (COMPLETE, 2026-11-04)
 

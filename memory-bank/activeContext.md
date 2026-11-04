@@ -8,6 +8,19 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 4 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — phases 0–4 complete; 5–6 queued.
+
+- `dtype` is now real for Chatterbox: the four wrappers accept it, and the policy is per-submodule — **T3 → configured dtype (float16 on the shipped GPU config), S3Gen / VoiceEncoder / Perth watermarker pinned float32**. S3Gen fp16 was measured to audibly degrade synthesis (sampled tokens change after the AR stage), so the config flip targets the ~1 GiB/role T3.
+- `harmonyspeech/modeling/weight_registry.py`: ref-counted `(repo, revision, component, dtype)` module store owned by the engine and threaded down to the loader. `ModelConfig.backbone_group` opts a config into sharing.
+- `modeling/models/chatterbox/factory.py`: one reference S3Gen/VE per checkpoint, grafted into per-role wrapper instances (own `conds`/`ref_dict`; embedding shares T3 as it never synthesizes). `chatterbox-base` group = chatterbox + multilingual + vc + embedding; turbo stays ungrouped (meanflow S3Gen). Multilingual grouping rests on bit-identical checkpoint evidence (`s3gen.pt` ≡ `s3gen.safetensors`, `ve.pt` ≡ `ve.safetensors`).
+- `scripts/audio_regression.py` + `tests/audio_fixtures/` gate dtype and sharing changes on GPU; `scripts/measure_vram.py` + `docs/benchmarks/vram-profiles.md` record the footprint; `get_vram_stats()` powers `/health` and new Prometheus gauges on `/metrics`.
+- Measured: full catalogue 16.45 GiB (fp32 + duplicated, overflowing the 16 GiB card) → 8.52 GiB torch / 8.83 GiB nvidia-smi, ~7 GiB headroom; Chatterbox block 14.29 → 6.35 GiB. The ≥8 GiB headroom floor is 0.7 GiB short — remaining fp32 families (OpenVoice/MeloTTS/VoiceFixer, upstream fp16 issues) and turbo's ~1.5 GiB GPT2 mask buffers.
+- Open application risks: no unload/evict path yet (`WeightRegistry.release()` is the hook); VoiceFixer GPU inference has a pre-existing device-placement bug that blocks its fp16 measurement.
+
+Next up when work resumes: Phase 5 — honest batching (HSE only).
+
 ### Engine Modernization — Phase 3 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phases 0–3 are complete; Phases 4–6 are queued per `summary.md`.

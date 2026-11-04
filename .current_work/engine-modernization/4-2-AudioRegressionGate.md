@@ -62,9 +62,35 @@ On failure-or-marginal cases the script writes a small folder of A/B wav pairs (
 
 ## Checklist
 
-- [ ] Fixtures committed (documented provenance)
-- [ ] Harness with metrics, thresholds, JSON+md output, exit-code gate
-- [ ] Self-test (identity axis) passes; CPU families run in CI
-- [ ] First fp32-vs-fp16 run recorded; opt-out list derived
-- [ ] Listening-pack procedure documented
-- [ ] `summary.md` Implementation Status updated
+- [x] Fixtures committed (documented provenance)
+- [x] Harness with metrics, thresholds, JSON+md output, exit-code gate
+- [x] Self-test (identity axis) passes; CPU families run in CI
+- [x] First fp32-vs-fp16 run recorded; opt-out list derived
+- [x] Listening-pack procedure documented
+- [x] `summary.md` Implementation Status updated
+
+## Outcome & deviations (2026-11-04)
+
+* `scripts/audio_regression.py` runs each side of the axis in its own worker
+  process (real VRAM release between sides) and computes metrics in the parent.
+  Deterministic families: log-mel MSE + duration + RMS + waveform correlation.
+  Stochastic families: duration + RMS + LTAS RMSE. Sharing axis: identical
+  length + `max|Δsample|` ≤ 1e-3 + log-mel MSE ≤ 1e-2.
+* Identity self-test (`dtype:float32-vs-float32`) passes on KittenTTS (CPU) with
+  bit-identical output.
+* dtype axis recorded for Chatterbox, Turbo and Multilingual — all pass
+  (details in `docs/benchmarks/audio-regression.md`).
+* OpenVoice V1/V2 and MeloTTS fail structurally under fp16 (float32 tensors in
+  the adapted VITS code; MeloTTS spline-bin assertion) → per-entry `float32`
+  opt-outs. VoiceFixer could not be measured: its GPU path raises a
+  pre-existing "input cuda vs weight cpu" error; kept `float32`.
+* **Deviation:** across two processes the CUDA autoregressive path is not
+  bit-identical (kernel/workspace selection varies with free VRAM; measured
+  `max|Δsample|` ≈ 1.5e-4). Exact equality is therefore asserted in-process by
+  `tests/e2e/tts/test_chatterbox_sharing_identity.py`, and the cross-process
+  sharing gate uses the −60 dBFS tolerance above. Watermarking is disabled for
+  the sharing axis because PerthNet's conv kernels are not reproducible either.
+* Synthetic fixture clips (`tests/audio_fixtures/ref_voice_*.wav`) are used
+  where no VAD is involved; the Whisper-VAD-driven toolchains use the
+  pre-existing repository speech samples because synthetic vowels are not
+  detected as speech (documented in the fixture module and the benchmark doc).

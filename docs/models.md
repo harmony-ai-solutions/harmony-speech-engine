@@ -42,16 +42,20 @@ the field) uses Faster-Whisper; `"silero"` uses Silero VAD when one is
 configured and otherwise falls back to Faster-Whisper with a warning. See
 [Request routing](routing.md).
 
-The following table should help with evaluating the requirements:
+The following table should help with evaluating the requirements (footprint
+figures are **measured** on the shipped GPU config after Phase 4 — see
+[VRAM profiles](benchmarks/vram-profiles.md) for the full per-model table):
 
-| Model Toolchain   | Type         | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Storage & RAM / VRAM required |
-|-------------------|--------------|----------------|----------------------------|----------------------|----------------------------|-------------------------------|
-| Harmony Speech V1 | TTS          | Adapted        | No                         | Very Good            | ++                         | ~1GB                          |
-| OpenVoice V1      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
-| OpenVoice V2      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~512MB per language           |
-| Faster-Whisper    | STT <br>VAD* | Native         | N / A                      | Medium               | STT: +++ <br>VAD*: +       | ~1-6GB (depending on model)   |
-| Silero-VAD        | VAD          | Native         | N / A                      | Very Good            | +++                        | ~512MB                        |
-| VoiceFixer        | Converter    | Adapted        | N / A                      | Bad                  | input-dependent            | ~2GB                          |
+| Model Toolchain   | Type         | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Measured VRAM / RAM |
+|-------------------|--------------|----------------|----------------------------|----------------------|----------------------------|---------------------|
+| Harmony Speech V1 | TTS          | Adapted        | No                         | Very Good            | ++                         | 173 MiB host RAM    |
+| OpenVoice V1      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~405 MiB per language (synth + converters) |
+| OpenVoice V2      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~452 MiB per language (synth + converters) |
+| Faster-Whisper    | STT <br>VAD* | Native         | N / A                      | Medium               | STT: +++ <br>VAD*: +       | ~75 MiB (tiny) – 1.6 GiB (large-v3-turbo) |
+| Silero-VAD        | VAD          | Native         | N / A                      | Very Good            | +++                        | ~2 MiB host RAM     |
+| VoiceFixer        | Converter    | Adapted        | N / A                      | Bad                  | input-dependent            | 402 MiB (restorer + vocoder) |
+| Chatterbox        | TTS <br>VC   | Native         | N / A                      | n/a (GPU)            | +++                        | 2068 MiB (TTS) · 3413 MiB (Turbo) · 1025 MiB (multilingual) · 0 MiB marginal (VC/embedding, shared) |
+| KittenTTS         | TTS          | Native         | N / A                      | Very Good            | ++                         | 25–80 MiB host RAM per variant |
 
 \* While Whisper (or STT models in general) can work for pure VAD use cases, too, they require significantly more
 processing time and the precision isn't as good. Reason for this is because they don't just check for voice activity,
@@ -78,6 +82,62 @@ model's native rate:
 Clients that need a specific rate should set `output_options.sample_rate` (one of
 8000, 16000, 22050, 24000, 32000, 44100, 48000); the engine resamples once with
 SoXR at the API boundary. See the [Audio I/O contract](audio-io-contract.md).
+
+### Precision (`dtype`) and shared backbones
+
+`dtype` is per config entry (`auto`, `float16`, `bfloat16`, `float32`) and is
+applied to *torch* model weights only:
+
+* **Chatterbox** (`ChatterboxTTS/TurboTTS/MultilingualTTS/VC/Embedding`):
+  `float16` casts the **T3 backbone** (the large autoregressive model). S3Gen —
+  the flow-matching decoder plus HiFiGAN vocoder — and the VoiceEncoder stay
+  `float32`. Measured: casting S3Gen to half precision audibly degrades
+  synthesis (sampled tokens change *after* the AR stage), so it is pinned; the
+  VoiceEncoder's LSTM path is float32-only by construction. The Perth
+  watermarking network is also kept float32.
+* **OpenVoice V1/V2 and MeloTTS** stay `float32`: the adapted VITS code creates
+  float32 tensors inside the flow/text encoder, and the MeloTTS flow splines
+  assert under fp16. These are documented opt-outs, not oversights.
+* **VoiceFixer** stays `float32` (precision-sensitive STFT/log-mel restoration;
+  GPU inference has a pre-existing device-placement bug).
+* **Harmony Speech V1** runs on CPU in the shipped GPU config; on CPU a requested
+  `float16` is rewritten to `bfloat16` by the CPU executor.
+* **KittenTTS** (ONNX) and **Silero VAD** (ONNX) ignore torch `dtype` — the
+  variant is chosen by the `model` name. **Faster-Whisper** is CTranslate2 and
+  selects its precision with `compute_type` (default `float16` on CUDA,
+  `int8` on CPU); `dtype` does not affect it.
+
+`backbone_group` (optional, any entry) makes configs that point at the same
+checkpoint + revision + dtype **share backbone components** instead of loading a
+copy each. The shipped `config.gpu.yml` puts `chatterbox`,
+`chatterbox_multilingual`, `chatterbox_vc` and `chatterbox_embedding` in the
+`chatterbox-base` group (one S3Gen + one VoiceEncoder; the embedding role also
+shares T3, which it never synthesizes with). Every role keeps its own wrapper
+instance, so per-request conditioning (`conds` / `ref_dict`) remains isolated.
+`chatterbox_turbo` stays ungrouped — it synthesizes from a different
+(`s3gen_meanflow`) checkpoint.
+
+#### Measured footprint (RTX 5060 Ti 16 GiB, full `config.gpu.yml` catalogue)
+
+| Model toolchain | Implementation | Measured VRAM (after Phase 4) | Notes |
+|---|---|---|---|
+| Harmony Speech V1 | Adapted | 173 MiB host RAM (3 executors) | CPU-pinned |
+| OpenVoice V1 | Adapted | ~153 MiB per language synth + 126 MiB × 2 converters | float32 |
+| OpenVoice V2 / MeloTTS | Adapted | ~199 MiB per language synth + 126–127 MiB × 2 converters | float32 |
+| Faster-Whisper | Native | ~1.6 GiB (large-v3-turbo) / ~75 MiB (tiny) | CT2, outside the torch allocator |
+| Silero VAD | Native | ~2 MiB host RAM | ONNX, CPU |
+| VoiceFixer | Adapted | 273 MiB restorer + 129 MiB vocoder | float32 |
+| KittenTTS (4 variants) | Native | 25–80 MiB host RAM each | ONNX, CPU |
+| Chatterbox (TTS) | Native | 2068 MiB | fp16 T3 + deduped S3Gen/VE |
+| Chatterbox Turbo | Native | 3413 MiB | fp16 T3; own meanflow S3Gen |
+| Chatterbox Multilingual | Native | 1025 MiB marginal | fp16 T3; S3Gen/VE shared |
+| Chatterbox VC / Embedding | Native | 0 MiB marginal | fully shared backbones |
+
+Whole catalogue: **8.52 GiB of torch allocations (8.83 GiB via `nvidia-smi`) on
+a 15.93 GiB card**, versus 16.45 GiB (fp32, duplicated) before Phase 4 — which
+overflowed the card into shared system memory. Details and the acceptance-floor
+analysis: [VRAM profiles](benchmarks/vram-profiles.md); quality gates:
+[audio regression](benchmarks/audio-regression.md).
 
 ### Model Types
 - **Native** / **Third-Party** Models: build on top of other Repositories. This is the preferred way of adding new

@@ -248,7 +248,25 @@ def get_model_flavour(model_config: ModelConfig):
     return "default"
 
 
-def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
+def _build_chatterbox(model_config: ModelConfig, device: str, weight_registry, wrapper):
+    """Build a Chatterbox model, honoring shared backbones and the dtype policy.
+
+    When ``model_config.backbone_group`` is set the Phase 4-4 factory assembles
+    the role around shared S3Gen / VoiceEncoder modules from the engine's
+    :class:`WeightRegistry`; otherwise the historical one-tree-per-config load
+    is kept (opt-in rollout), with ``dtype`` now forwarded to the wrapper
+    (Phase 4-1 — the Chatterbox loaders ignored it before).
+    """
+    if getattr(model_config, "backbone_group", None):
+        from harmonyspeech.modeling.models.chatterbox.factory import build_role_model
+
+        shared_model = build_role_model(model_config, device, weight_registry)
+        if shared_model is not None:
+            return shared_model
+    return wrapper.from_pretrained(device=device, dtype=model_config.dtype)
+
+
+def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_registry=None, **kwargs):
     model_class = _get_model_cls(model_config)
 
     with _set_default_torch_dtype(model_config.dtype):
@@ -303,25 +321,31 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     return model
                 elif model_config.model_type == "ChatterboxTTS":
                     device = str(device_config.device)
-                    model = ChatterboxTTSModel.from_pretrained(device=device)
+                    model = _build_chatterbox(
+                        model_config, device, weight_registry, ChatterboxTTSModel
+                    )
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxTurboTTS":
                     device = str(device_config.device)
-                    model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                    model = _build_chatterbox(
+                        model_config, device, weight_registry, ChatterboxTurboTTSModel
+                    )
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxMultilingualTTS":
                     device = str(device_config.device)
-                    model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                    model = _build_chatterbox(
+                        model_config, device, weight_registry, ChatterboxMultilingualTTSModel
+                    )
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxVC":
                     device = str(device_config.device)
-                    model = ChatterboxVCModel.from_pretrained(device=device)
+                    model = _build_chatterbox(model_config, device, weight_registry, ChatterboxVCModel)
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
@@ -329,12 +353,12 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, **kwargs):
                     device = str(device_config.device)
                     model_name = getattr(model_config, "model", "") or ""
                     if "turbo" in model_name.lower():
-                        model = ChatterboxTurboTTSModel.from_pretrained(device=device)
+                        wrapper = ChatterboxTurboTTSModel
                     elif "multilingual" in model_name.lower():
-                        model = ChatterboxMultilingualTTSModel.from_pretrained(device=device)
+                        wrapper = ChatterboxMultilingualTTSModel
                     else:
-                        model = ChatterboxTTSModel.from_pretrained(device=device)
-                    return model
+                        wrapper = ChatterboxTTSModel
+                    return _build_chatterbox(model_config, device, weight_registry, wrapper)
 
             # Handle VoiceFixer models (native / fixed config but not native class)
             if hf_config == "native" and model_config.model_type in ["VoiceFixerRestorer", "VoiceFixerVocoder"]:

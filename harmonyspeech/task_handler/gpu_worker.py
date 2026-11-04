@@ -28,16 +28,20 @@ class GPUWorker(WorkerBase):
         local_rank: int,
         rank: int,
         is_driver_worker: bool = False,
+        weight_registry=None,
     ) -> None:
         self.model_config = model_config
         self.device_config = device_config
         self.local_rank = local_rank
         self.rank = rank
         self.is_driver_worker = is_driver_worker
+        self.weight_registry = weight_registry
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
 
-        self.model_runner = GPUModelRunner(model_config, device_config, is_driver_worker=is_driver_worker)
+        self.model_runner = GPUModelRunner(
+            model_config, device_config, is_driver_worker=is_driver_worker, weight_registry=weight_registry
+        )
         # Uninitialized cache engine. Will be initialized by
         # initialize_cache
         self.cache_engine = None

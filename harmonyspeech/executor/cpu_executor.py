@@ -26,6 +26,7 @@ class CPUExecutor(ExecutorBase):
             rank=0,
             distributed_init_method=distributed_init_method,
             is_driver_worker=True,
+            weight_registry=self.weight_registry,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()

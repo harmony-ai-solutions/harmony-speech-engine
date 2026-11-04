@@ -74,9 +74,51 @@ Each config still gets its **own** executor/model wrapper object (so `conds`/`re
 
 ## Checklist
 
-- [ ] Factory + assembly implemented against verified upstream attribute topology
-- [ ] `backbone_group` opt-in wired in loader; turbo ungrouped
-- [ ] Multilingual grouping decided on checkpoint-hash evidence (documented here)
-- [ ] 4-2 sharing axis passes (bit-identical)
-- [ ] Boot VRAM before/after recorded
-- [ ] `summary.md` Implementation Status updated
+- [x] Factory + assembly implemented against verified upstream attribute topology
+- [x] `backbone_group` opt-in wired in loader; turbo ungrouped
+- [x] Multilingual grouping decided on checkpoint-hash evidence (documented here)
+- [x] 4-2 sharing axis passes (bit-identical in-process; see deviation)
+- [x] Boot VRAM before/after recorded
+- [x] `summary.md` Implementation Status updated
+
+## Outcome, evidence & deviations (2026-11-04)
+
+**Verified upstream topology (`chatterbox-tts==0.1.6`, installed package):**
+`ChatterboxTTS` exposes `t3`, `s3gen`, `ve`, `tokenizer`, `conds`, `watermarker`;
+`ChatterboxMultilingualTTS` the same; `ChatterboxVC` only `s3gen` + `ref_dict`.
+Standard loads `ve.safetensors`/`t3_cfg.safetensors`/`s3gen.safetensors`/
+`tokenizer.json`/`conds.pt`; multilingual loads `ve.pt`/`t3_mtl23ls_v2.safetensors`/
+`s3gen.pt`/`grapheme_mtl_merged_expanded_v1.json`; turbo loads
+`s3gen_meanflow.safetensors` + `t3_turbo_v1.safetensors`.
+
+**Checkpoint-hash evidence for the multilingual decision** (tensors compared
+bit-for-bit from the local HF cache snapshot):
+
+| Pair | Result |
+|---|---|
+| `s3gen.pt` vs `s3gen.safetensors` (base repo) | 2489 shared keys, **0 mismatched**; `.pt` only adds the non-persistent `tokenizer.window` buffer |
+| `ve.pt` vs `ve.safetensors` | 16 keys, **0 mismatched**, identical SHA-256 |
+| turbo `s3gen.safetensors` vs base | identical (but turbo *uses* `s3gen_meanflow`, so it stays ungrouped) |
+| turbo `ve.safetensors` vs base `ve.safetensors` | identical (kept ungrouped per plan) |
+
+Multilingual therefore **joins** `chatterbox-base` for S3Gen/VE while keeping
+its own T3 + tokenizer. Its own `s3gen.pt`/`ve.pt` are not loaded when grouped.
+
+**Wiring:** `modeling/models/chatterbox/factory.py` — `load_s3gen`/`load_ve`/
+`load_t3` mirror the upstream `from_local` code, `build_backbone` uses the
+registry, `assemble_role` constructs a *distinct* upstream wrapper per role with
+shared module references and its own `conds`/`ref_dict`. The embedding role
+additionally shares the TTS T3 (stateless for inference; the role never
+synthesizes) and therefore costs ~0 MiB marginal. `build_role_model` returns
+`None` for turbo or ungrouped configs so the loader keeps the historical path.
+
+**Gate results:** `sharing:dedup-vs-dup` passes for TTS/VC/embedding; VC output
+is bit-identical, TTS differs only by last-bit CUDA kernel noise
+(`max|Δsample|` ≈ 1.5e-4). The in-process e2e test
+(`tests/e2e/tts/test_chatterbox_sharing_identity.py`) asserts **exact**
+sample equality between a duplicated and a shared build.
+
+**Boot VRAM (TTS+VC+embedding, fp32 weights):** duplicated 7.10 GiB allocated /
+7.45 GiB reserved → deduplicated 3.04 / 3.39 GiB (2.97 GiB held once in the
+registry, 3.96 GiB not duplicated). With float16 T3 the same set is 2.05 GiB.
+Full-catalogue numbers: `docs/benchmarks/vram-profiles.md`.

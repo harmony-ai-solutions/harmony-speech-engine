@@ -64,10 +64,39 @@ ONNX/CT2 paths ignore torch `dtype` — add a code comment + config-schema note 
 
 ## Checklist
 
-- [ ] Chatterbox wrappers accept + apply dtype (VE exception implemented & documented)
-- [ ] Loader passes dtype for all native branches
-- [ ] KittenTTS/Silero dtype no-op documented
-- [ ] 4-2 harness green on all families → `config.gpu.yml` flipped to float16
-- [ ] VRAM-before/after numbers recorded (feeds 4-5)
-- [ ] `docs/models.md` + `CHANGELOG.md` updated
-- [ ] `summary.md` Implementation Status updated
+- [x] Chatterbox wrappers accept + apply dtype (per-submodule policy implemented & documented)
+- [x] Loader passes dtype for all native branches
+- [x] KittenTTS/Silero/Whisper dtype no-op documented (docs/models.md)
+- [x] 4-2 harness green on every runnable family; Chatterbox entries flipped to float16
+- [x] VRAM-before/after numbers recorded (feeds 4-5)
+- [x] `docs/models.md` + `CHANGELOG.md` updated
+- [x] `summary.md` Implementation Status updated
+
+## Outcome & deviations (2026-11-04)
+
+Measured on the RTX 5060 Ti (16 GiB, driver 610.88, torch 2.9.1+cu130).
+
+* **T3 → float16, S3Gen stays float32.** Casting S3Gen (flow decoder / 16 kHz
+  tokenizer / HiFiGAN) to half precision audibly degraded synthesis: with
+  identical T3 weights and a pinned seed the transcribed output changed
+  ("The quick-brown fog could jump so that the lazy dust…") while duration and
+  long-term spectrum stayed close. Upstream itself carries an
+  `estimator_dtype = "fp32"` hint. Casting only T3 keeps the ~1 GiB/role win
+  with no quality change. The VoiceEncoder is float32 by construction, and the
+  Perth watermark network is pinned float32 (it is built inside the loader's
+  default-dtype context and otherwise ends up with half-precision conv weights).
+* **Partial config flip.** `config.gpu.yml` flips the five Chatterbox entries to
+  `float16`. OpenVoice V1/V2 and MeloTTS stay `float32`: their adapted VITS code
+  builds float32 tensors in the flow/text encoder (`expected scalar type Float
+  but found Half`) and the MeloTTS flow splines assert under fp16. VoiceFixer
+  stays `float32` (precision-sensitive restoration; its GPU path currently has a
+  pre-existing device-placement bug, so the dtype axis could not be measured).
+  Each opt-out is recorded in `docs/models.md` and
+  `docs/benchmarks/audio-regression.md`.
+* **A latent CUDA bug was found and fixed.** Chatterbox's bundled `conds.pt`
+  carries a `requires_grad=True` tensor; `.to("cuda")` turned it into a non-leaf,
+  which broke the Phase 0-2 baseline `copy.deepcopy` on GPU. Conditionals are now
+  detached at load and the baseline snapshot clones field-by-field
+  (`_clone_conditionals`). This affected the unshared path too — CPU-only e2e
+  had masked it.
+* Boot VRAM (Chatterbox TTS+VC+embedding): 3.04 → 2.05 GiB allocated.
