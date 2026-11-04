@@ -63,10 +63,10 @@ Track the completion of each phase as implementation progresses:
   - [x] Weight registry — [4-3-WeightRegistry.md](4-3-WeightRegistry.md)
   - [x] Chatterbox backbone sharing — [4-4-ChatterboxBackboneSharing.md](4-4-ChatterboxBackboneSharing.md)
   - [x] VRAM metrics & profile — [4-5-VramMetricsProfile.md](4-5-VramMetricsProfile.md)
-- [ ] **Phase 5: Honest batching (HSE only)**
-  - [ ] Type-checked batches & pairing invariants — [5-1-TypeCheckedBatches.md](5-1-TypeCheckedBatches.md)
-  - [ ] Padded batch on SynthesizerTrn — [5-2-SynthesizerTrnPaddedBatch.md](5-2-SynthesizerTrnPaddedBatch.md)
-  - [ ] Honest batch config & benchmarks — [5-3-HonestBatchConfigBenchmarks.md](5-3-HonestBatchConfigBenchmarks.md)
+- [x] **Phase 5: Honest batching (HSE only)** — **COMPLETE 2026-11-04** (unit 578 / integration 34 / wire-contract e2e 38 + 3; `batching:1-vs-4` gate green: OpenVoice V1 byte-identical, MeloTTS max |Δ| 1.6e-5; MeloTTS 12.62 → 14.43 req/s at c=8. Scheduler "drop above batch limit" bug found and fixed.)
+  - [x] Type-checked batches & pairing invariants — [5-1-TypeCheckedBatches.md](5-1-TypeCheckedBatches.md)
+  - [x] Padded batch on SynthesizerTrn — [5-2-SynthesizerTrnPaddedBatch.md](5-2-SynthesizerTrnPaddedBatch.md)
+  - [x] Honest batch config & benchmarks — [5-3-HonestBatchConfigBenchmarks.md](5-3-HonestBatchConfigBenchmarks.md)
 - [ ] **Phase 6: Capabilities backlog (opt-in)**
   - [ ] Overview & prerequisites — [6-1-CapabilitiesBacklog.md](6-1-CapabilitiesBacklog.md)
 

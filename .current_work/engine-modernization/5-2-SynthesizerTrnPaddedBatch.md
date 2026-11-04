@@ -58,8 +58,50 @@ Padded-batch memory scales with `B × T_max`; a pathological mix (one long + man
 
 ## Checklist
 
-- [ ] Batched infer available (vendored code) with B=1 equivalence proof
-- [ ] Handlers batched with length-similar grouping + memory cap; config toggle
-- [ ] 4-2 batching axis passes
-- [ ] Integration tests green
-- [ ] `summary.md` Implementation Status updated
+- [x] Batched infer available (vendored code) with B=1 equivalence proof
+- [x] Handlers batched with length-similar grouping + memory cap; config toggle
+- [x] 4-2 batching axis passes
+- [x] Integration tests green
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+* **Vendored forwards re-read, not assumed.** Both `SynthesizerTrn.infer`
+  implementations already accepted `[B, T]`/`x_lengths`; what they did not
+  accept was *per-sample* `length_scale`/`noise_scale`/`noise_scale_w` (scalars
+  only, i.e. one speed for the whole batch). The shared math moved into
+  `_infer_impl` (unchanged for the single-sample path) and a new
+  `infer_batched` normalises those params to `[B, 1, 1]` tensors, forwards once
+  and returns the per-sample decoder frame counts (`y_lengths`) so the caller can
+  unpad without guessing. `infer` still returns its original 4-tuple.
+* **Batching happens over sentences, not requests.** The existing handlers
+  already split a request into sentences and concatenate them with a 50 ms gap,
+  so the step is flattened into `(request, sentence)` rows, batched, and
+  reassembled per request in input order. A request with several sentences
+  therefore benefits even when it is the only request in the step.
+* **Memory guard.** `plan_batches` caps a group at `max_batch_size`, at
+  `T_max / T_min <= 4` and at `batch_token_budget` (default
+  `max_batch_size × median length`, overridable per model).
+* **Sampling parameters moved onto the request.** The gate needs a deterministic
+  comparison, and the models can already do that; `generation_options` gained
+  `noise_scale`, `noise_scale_w`, `sdp_ratio` (None = current hard-coded
+  defaults), used by both the loop and the batched path. This is a small,
+  backward-compatible API addition rather than a test-only escape hatch.
+* **Gate method (4-2 `batching:1-vs-N`).** Side `1` = `max_batch_size: 1` +
+  `batched_inference: false` (legacy loop), side `N` = `max_batch_size: N` +
+  batched, four different-length texts, both sides noise-free and with TF32
+  disabled (TF32's kernel choice depends on the batch shape and would swamp the
+  signal). Result: OpenVoice V1 renders byte-identical WAVs, MeloTTS differs by
+  1.6e-5 max (below one 16-bit LSB). Details in `docs/benchmarks/throughput.md`.
+* **Known, documented boundary effect.** The convolutional vocoder's last frame
+  sees a different right-hand context inside a padded batch (explicit zeros plus
+  conv bias) than alone; measured ≤1e-4 peak with the shipped weights, and the
+  gate's 2e-3 bound covers it. Unit tests assert the exact parts (B=1 bit
+  identity, predicted durations and post-attention prior) and a looser interior
+  waveform match.
+* **Deviations.** Full OpenVoice V2 clone throughput does not improve (per-item
+  tone-converter hops dominate; those handlers are out of scope and stay at
+  `max_batch_size: 1`). Long-text synthesis shows no gain (compute-bound). Both
+  recorded in `docs/benchmarks/throughput.md`; `max_batch_size: 8` is the
+  measured sweet spot for short texts (still rising at 8, no knee observed).
+

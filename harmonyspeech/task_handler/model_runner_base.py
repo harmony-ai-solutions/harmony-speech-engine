@@ -28,6 +28,22 @@ Phase 2 invariants (artifact bus)
 * Chatterbox conditionals travel as object references
   (``SpeakerArtifact.conditionals``); the consuming handler moves them onto its
   own device. No pickle round trip on internal hops.
+
+Phase 5 invariants (honest batching)
+------------------------------------
+* **Type-homogeneous batches.** ``execute_model`` partitions by request-input
+  class *before* ``prepare_inputs``, so one prepare + one handler call happen per
+  ``(model, request type)`` partition and every handler sees aligned lists.
+* **Alignment is a typed error.** ``assert_batch_aligned`` raises
+  ``EngineBatchError``; the runner converts it into per-request error results.
+* **One result per request per step.** ``_build_result`` refuses to build a
+  second result for the same ``request_id`` inside one step; a pairing
+  regression surfaces immediately instead of silently duplicating an output.
+* **Real padded batches.** The one-shot synthesis families (OpenVoice V1,
+  MeloTTS) forward a padded ``[B, T_max]`` batch per step when
+  ``batched_inference`` is enabled (default), with length-similar sub-batching
+  and a per-model token budget; the per-item loop remains the ``len == 1`` fast
+  path and the fallback.
 """
 
 import copy
@@ -44,6 +60,7 @@ from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.artifacts import AudioArtifact, MelArtifact, SpeakerArtifact, VadArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.common.errors import EngineBatchError
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import (
     AudioConversionRequestOutput,
@@ -66,15 +83,34 @@ from harmonyspeech.modeling.loader import get_model, get_model_config, get_model
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
+from harmonyspeech.task_handler.batching import (
+    batched_inference_enabled,
+    collapse_per_sample,
+    default_token_budget,
+    pad_feature_batch,
+    pad_phone_batch,
+    plan_batches,
+    trim_decoder_output,
+)
 from harmonyspeech.task_handler.inputs import prepare_inputs
 
 
+def assert_batch_aligned(handler_name: str, inputs: list, requests: list) -> None:
+    """Assert that prepared inputs and requests are positionally aligned.
+
+    Every handler calls this before touching position ``i``. A violation is an
+    :class:`~harmonyspeech.common.errors.EngineBatchError`: the model runner
+    converts it into typed per-request error results (Phase 5-1), so a pairing
+    regression becomes an HTTP error for the affected requests instead of an
+    unhandled crash in the engine's background loop.
+    """
+    if len(inputs) != len(requests):
+        raise EngineBatchError(f"{handler_name}: {len(inputs)} inputs vs {len(requests)} requests")
+
+
 def _require_aligned(inputs, requests_to_batch, handler_name: str) -> None:
-    """Assert that prepared inputs and requests are positionally aligned."""
-    if len(inputs) != len(requests_to_batch):
-        raise AssertionError(
-            f"{handler_name}: {len(inputs)} inputs vs {len(requests_to_batch)} requests"
-        )
+    """Backwards-compatible alias for :func:`assert_batch_aligned`."""
+    assert_batch_aligned(handler_name, inputs, requests_to_batch)
 
 
 def _bind_to_device(artifact, device):
@@ -289,6 +325,10 @@ class ModelRunnerBase:
         if not requests_to_batch:
             return []
 
+        # One result per request id per step (Phase 5-1). Reset before any
+        # partition runs so the guard is scoped to this engine step.
+        self._step_result_ids = set()
+
         # Split mixed-type batches before preparing inputs. Some prepare
         # functions (e.g. the Chatterbox ones) return inputs for only one of
         # the request types present, which used to drop or mispair the other
@@ -330,15 +370,22 @@ class ModelRunnerBase:
             )
             return [self._build_error_result(req, e) for req in requests_to_batch]
 
-        if len(inputs) != len(requests_to_batch):
-            error = AssertionError(
-                f"{getattr(self.model_config, 'model_type', '?')}: "
-                f"{len(inputs)} inputs vs {len(requests_to_batch)} requests"
+        try:
+            assert_batch_aligned(
+                f"{getattr(self.model_config, 'model_type', '?')} prepare_inputs", inputs, requests_to_batch
             )
-            logger.opt(exception=error).error("Batch alignment invariant violated during input preparation")
-            return [self._build_error_result(req, error) for req in requests_to_batch]
+        except EngineBatchError as e:
+            logger.opt(exception=e).error("Batch alignment invariant violated during input preparation")
+            return [self._build_error_result(req, e) for req in requests_to_batch]
 
-        return self._dispatch_handler(inputs, requests_to_batch)
+        # A handler that detects an inconsistent batch raises EngineBatchError;
+        # convert it to per-request errors (Phase 5-1) rather than letting it
+        # escape into the engine loop.
+        try:
+            return self._dispatch_handler(inputs, requests_to_batch)
+        except EngineBatchError as e:
+            logger.opt(exception=e).error("Batch invariant violated during model execution")
+            return [self._build_error_result(req, e) for req in requests_to_batch]
 
     def _dispatch_handler(self, inputs, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
         """Run the handler matching this executor's model type."""
@@ -385,6 +432,31 @@ class ModelRunnerBase:
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
 
+    def _register_result_id(self, request_id: str, *, raise_on_duplicate: bool = True) -> bool:
+        """Register a result being built for ``request_id`` in the current step.
+
+        Returns ``False`` when the id was already registered. With
+        ``raise_on_duplicate`` (the success path) a duplicate raises
+        :class:`EngineBatchError`: building two results for one request inside a
+        single step means the batch pairing is broken, and silently returning
+        one of them would hide it (Phase 5-1).
+
+        The guard is scoped to an engine step: :meth:`execute_model` opens the
+        scope, and a handler invoked directly (unit tests, tooling) has no scope
+        so nothing is tracked.
+        """
+        ids = getattr(self, "_step_result_ids", None)
+        if ids is None:
+            return True
+        if request_id in ids:
+            message = f"duplicate result for request {request_id} within one engine step"
+            if raise_on_duplicate:
+                raise EngineBatchError(message)
+            logger.warning(message)
+            return False
+        ids.add(request_id)
+        return True
+
     def _build_error_result(self, initial_request, exception: Exception):
         """Build an error ExecutorResult for a single request that failed during inference.
         Wraps in ExecutorResult so _process_model_outputs / check_forward_processing can handle it
@@ -392,6 +464,7 @@ class ModelRunnerBase:
         and returns an HTTP error to the caller.
         """
         request_id = initial_request.request_id
+        self._register_result_id(request_id, raise_on_duplicate=False)
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
         # Log full stack trace so the server-side cause is always visible in logs.
@@ -405,6 +478,10 @@ class ModelRunnerBase:
 
     def _build_result(self, initial_request, inference_result, result_cls):
         request_id = initial_request.request_id
+        # Request-id uniqueness within a step (Phase 5-1): raises EngineBatchError
+        # if this request already produced a result, which the partition wrapper
+        # converts into per-request errors.
+        self._register_result_id(request_id)
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
 
@@ -428,7 +505,7 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_encoder(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_encoder")
+        assert_batch_aligned("_execute_harmonyspeech_encoder", inputs, requests_to_batch)
 
         def embed_utterance(audio_artifact, initial_request):
             # Numpy preprocessing runs on the artifact's waveform (CPU-side); the
@@ -460,7 +537,7 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_synthesizer")
+        assert_batch_aligned("_execute_harmonyspeech_synthesizer", inputs, requests_to_batch)
 
         def synthesize_text(input_params, initial_request):
             # Get inputs
@@ -509,7 +586,7 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_vocoder(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_vocoder")
+        assert_batch_aligned("_execute_harmonyspeech_vocoder", inputs, requests_to_batch)
 
         def vocode_mel(input_params, initial_request):
             mel_artifact, breaks = input_params
@@ -555,7 +632,7 @@ class ModelRunnerBase:
         )
 
         # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter_encoder")
+        assert_batch_aligned("_execute_openvoice_tone_converter_encoder", inputs, requests_to_batch)
 
         def run_converter_encoder(vad_audio_segments, initial_request):
             gs = []
@@ -598,7 +675,7 @@ class ModelRunnerBase:
         )
 
         # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter")
+        assert_batch_aligned("_execute_openvoice_tone_converter", inputs, requests_to_batch)
 
         def run_converter_encoder(input_params, initial_request):
             audio_artifact, target_speaker, source_speaker = input_params
@@ -645,7 +722,7 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_faster_whisper(self, inputs, requests_to_batch):
-        _require_aligned(inputs, requests_to_batch, "_execute_faster_whisper")
+        assert_batch_aligned("_execute_faster_whisper", inputs, requests_to_batch)
 
         def run_batched_transcribe(audio_artifact, initial_request):
             # faster-whisper takes a mono numpy array; the artifact already holds
@@ -675,19 +752,31 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
-        # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_synthesizer")
+        assert_batch_aligned("_execute_openvoice_synthesizer", inputs, requests_to_batch)
         # Get model flavour if applicable
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
+        sample_rate = int(hf_config.data.sampling_rate)
+        # VITS hop: one decoder frame == hop_length samples. Used to unpad the
+        # batched decoder output using the model's own per-sample y_lengths.
+        hop_length = int(hf_config.data.hop_length)
+
+        def _assemble(audio_segments, speed_modifier):
+            """Concatenate per-sentence waveforms with the historical 50 ms gap."""
+            audio_segments_out = []
+            gap = int((sample_rate * 0.05) / speed_modifier)
+            for segment_data in audio_segments:
+                audio_segments_out += np.asarray(segment_data).reshape(-1).tolist()
+                audio_segments_out += [0] * gap
+            return np.array(audio_segments_out).astype(np.float32)
 
         def synthesize_text(input_params, initial_request):
-            # Iterate over inputs and add data to list
+            """Per-sentence loop: the ``len(inputs) == 1`` fast path / fallback."""
             audio_segment_list = []
-            text_normalized, speaker_id, speed_modifier = input_params
+            text_normalized, speaker_id, speed_modifier, sampling = input_params
             for text_element in text_normalized:
                 # Inference
                 with torch.no_grad():
@@ -699,8 +788,9 @@ class ModelRunnerBase:
                             x_tst,
                             x_tst_lengths,
                             sid=sid,
-                            noise_scale=0.667,
-                            noise_scale_w=0.6,
+                            noise_scale=sampling["noise_scale"],
+                            noise_scale_w=sampling["noise_scale_w"],
+                            sdp_ratio=sampling["sdp_ratio"],
                             length_scale=1.0 / speed_modifier,
                         )[0][0, 0]
                         .data.cpu()
@@ -709,14 +799,67 @@ class ModelRunnerBase:
                     )
                 audio_segment_list.append(audio)
 
-            # Concat Output Audio
-            audio_segments = []
-            for segment_data in audio_segment_list:
-                audio_segments += segment_data.reshape(-1).tolist()
-                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
-            audio = np.array(audio_segments).astype(np.float32)
+            return AudioArtifact.from_numpy(_assemble(audio_segment_list, speed_modifier), sample_rate)
 
-            return AudioArtifact.from_numpy(audio, hf_config.data.sampling_rate)
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 5-2). A step is flattened into (request,
+        # sentence) rows and forwarded as one padded [N, T_max] batch per
+        # length-similar sub-batch; outputs are unpadded with the model's own
+        # per-sample frame counts, then reassembled per request in input order.
+        # ------------------------------------------------------------------
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows = [
+                (index, element, speaker_id, speed_modifier, sampling)
+                for index, (text_normalized, speaker_id, speed_modifier, sampling) in enumerate(inputs)
+                for element in text_normalized
+            ]
+            if rows:
+                try:
+                    segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
+                    lengths = [int(row[1].numel()) for row in rows]
+                    batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                    budget = self.model_config.batch_token_budget or default_token_budget(lengths, batch_size)
+                    groups = plan_batches(lengths, batch_size, budget)
+                    for group in groups:
+                        group_rows = [rows[index] for index in group]
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_phone_batch(
+                                [row[1] for row in group_rows], pad_id=0, device=self.device
+                            )
+                            sid = torch.tensor(
+                                [row[2] for row in group_rows], dtype=torch.long, device=self.device
+                            )
+                            waveforms, y_lengths, _, _, _ = self.model.infer_batched(
+                                padded,
+                                padded_lengths,
+                                sid=sid,
+                                noise_scale=collapse_per_sample(row[4]["noise_scale"] for row in group_rows),
+                                noise_scale_w=collapse_per_sample(row[4]["noise_scale_w"] for row in group_rows),
+                                sdp_ratio=collapse_per_sample(row[4]["sdp_ratio"] for row in group_rows),
+                                length_scale=collapse_per_sample(
+                                    1.0 / row[3] for row in group_rows
+                                ),
+                            )
+                            trimmed = trim_decoder_output(waveforms, y_lengths, hop_length)
+                        for position, absolute in enumerate(group):
+                            segment_audio[rows[absolute][0]].append(
+                                trimmed[position][0].detach().cpu().float().numpy()
+                            )
+                    logger.debug(
+                        f"OpenVoice V1: {len(rows)} sentence(s) from {len(inputs)} request(s) "
+                        f"forwarded in {len(groups)} padded sub-batch(es)"
+                    )
+                    return [
+                        self._build_audio_result(
+                            requests_to_batch[index],
+                            AudioArtifact.from_numpy(_assemble(segments, inputs[index][2]), sample_rate),
+                        )
+                        for index, segments in enumerate(segment_audio)
+                    ]
+                except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
+                    logger.warning(
+                        f"OpenVoice V1 batched synthesis failed ({e}); falling back to the per-request loop"
+                    )
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -730,23 +873,41 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
+    def _build_audio_result(self, initial_request, audio_artifact):
+        """Build a finished synthesis result carrying ``audio_artifact``."""
+        result = self._build_result(initial_request, "", SpeechSynthesisRequestOutput)
+        result.result_data.audio_artifact = audio_artifact
+        return result
+
+
     def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
-        # FIXME: This is not properly batched
-        _require_aligned(inputs, requests_to_batch, "_execute_melotts_synthesizer")
+        assert_batch_aligned("_execute_melotts_synthesizer", inputs, requests_to_batch)
         # Get model flavour if applicable
         flavour = get_model_flavour(self.model_config)
         # Load config
         hf_config = get_model_config(
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
+        sample_rate = int(hf_config.data.sampling_rate)
+        # VITS hop: one decoder frame == hop_length samples (MeloTTS English v3: 512).
+        hop_length = int(hf_config.data.hop_length)
         # Phase 4-1: prepared BERT features arrive as float32 host tensors; the
         # text encoder's projections follow the model dtype (float16 on GPU).
         model_dtype = next(self.model.parameters()).dtype
 
+        def _assemble(audio_segments, speed_modifier):
+            """Concatenate per-sentence waveforms with the historical 50 ms gap."""
+            audio_segments_out = []
+            gap = int((sample_rate * 0.05) / speed_modifier)
+            for segment_data in audio_segments:
+                audio_segments_out += np.asarray(segment_data).reshape(-1).tolist()
+                audio_segments_out += [0] * gap
+            return np.array(audio_segments_out).astype(np.float32)
+
         def synthesize_text(input_params, initial_request):
-            # Iterate over inputs and add data to list
+            """Per-sentence loop: the ``len(inputs) == 1`` fast path / fallback."""
             audio_segment_list = []
-            inference_items, speaker_id, speed_modifier = input_params
+            inference_items, speaker_id, speed_modifier, sampling = input_params
             for items in inference_items:
                 # rebuild items from tuple
                 bert, ja_bert, phones, tones, lang_ids = items
@@ -770,9 +931,9 @@ class ModelRunnerBase:
                             lang_ids,
                             bert,
                             ja_bert,
-                            sdp_ratio=0.2,
-                            noise_scale=0.6,
-                            noise_scale_w=0.8,
+                            sdp_ratio=sampling["sdp_ratio"],
+                            noise_scale=sampling["noise_scale"],
+                            noise_scale_w=sampling["noise_scale_w"],
                             length_scale=1.0 / speed_modifier,
                         )[0][0, 0]
                         .data.cpu()
@@ -782,14 +943,80 @@ class ModelRunnerBase:
                     del x_tst, tones, lang_ids, bert, ja_bert, x_tst_lengths, speakers
                 audio_segment_list.append(audio)
 
-            # Concat Output Audio
-            audio_segments = []
-            for segment_data in audio_segment_list:
-                audio_segments += segment_data.reshape(-1).tolist()
-                audio_segments += [0] * int((hf_config.data.sampling_rate * 0.05) / speed_modifier)
-            audio = np.array(audio_segments).astype(np.float32)
+            return AudioArtifact.from_numpy(_assemble(audio_segment_list, speed_modifier), sample_rate)
 
-            return AudioArtifact.from_numpy(audio, hf_config.data.sampling_rate)
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 5-2): flatten (request, sentence) rows,
+        # pad phones/tones/language ids and the BERT feature matrices, one
+        # padded forward per length-similar sub-batch, unpad by y_lengths.
+        # ------------------------------------------------------------------
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows = [
+                (index, item, speaker_id, speed_modifier, sampling)
+                for index, (inference_items, speaker_id, speed_modifier, sampling) in enumerate(inputs)
+                for item in inference_items
+            ]
+            if rows:
+                try:
+                    segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
+                    lengths = [int(row[1][2].numel()) for row in rows]
+                    batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                    budget = self.model_config.batch_token_budget or default_token_budget(lengths, batch_size)
+                    groups = plan_batches(lengths, batch_size, budget)
+                    for group in groups:
+                        group_rows = [rows[index] for index in group]
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_phone_batch(
+                                [row[1][2] for row in group_rows], pad_id=0, device=self.device
+                            )
+                            padded_tones, _ = pad_phone_batch(
+                                [row[1][3] for row in group_rows], pad_id=0, device=self.device
+                            )
+                            padded_lang, _ = pad_phone_batch(
+                                [row[1][4] for row in group_rows], pad_id=0, device=self.device
+                            )
+                            padded_bert = pad_feature_batch(
+                                [row[1][0].to(dtype=model_dtype) for row in group_rows], device=self.device
+                            )
+                            padded_ja_bert = pad_feature_batch(
+                                [row[1][1].to(dtype=model_dtype) for row in group_rows], device=self.device
+                            )
+                            speakers = torch.tensor(
+                                [row[2] for row in group_rows], dtype=torch.long, device=self.device
+                            )
+                            waveforms, y_lengths, _, _, _ = self.model.infer_batched(
+                                padded,
+                                padded_lengths,
+                                speakers,
+                                padded_tones,
+                                padded_lang,
+                                padded_bert,
+                                padded_ja_bert,
+                                sdp_ratio=collapse_per_sample(row[4]["sdp_ratio"] for row in group_rows),
+                                noise_scale=collapse_per_sample(row[4]["noise_scale"] for row in group_rows),
+                                noise_scale_w=collapse_per_sample(row[4]["noise_scale_w"] for row in group_rows),
+                                length_scale=collapse_per_sample(1.0 / row[3] for row in group_rows),
+                            )
+                            trimmed = trim_decoder_output(waveforms, y_lengths, hop_length)
+                        for position, absolute in enumerate(group):
+                            segment_audio[rows[absolute][0]].append(
+                                trimmed[position][0].detach().cpu().float().numpy()
+                            )
+                    logger.debug(
+                        f"MeloTTS: {len(rows)} sentence(s) from {len(inputs)} request(s) "
+                        f"forwarded in {len(groups)} padded sub-batch(es)"
+                    )
+                    return [
+                        self._build_audio_result(
+                            requests_to_batch[index],
+                            AudioArtifact.from_numpy(_assemble(segments, inputs[index][2]), sample_rate),
+                        )
+                        for index, segments in enumerate(segment_audio)
+                    ]
+                except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
+                    logger.warning(
+                        f"MeloTTS batched synthesis failed ({e}); falling back to the per-request loop"
+                    )
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -803,9 +1030,10 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
+
     def _execute_voicefixer_restorer(self, inputs, requests_to_batch):
         """Execute VoiceFixerRestorer model to enhance audio quality."""
-        _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_restorer")
+        assert_batch_aligned("_execute_voicefixer_restorer", inputs, requests_to_batch)
 
         def restore_audio(audio_artifact, initial_request):
             # [1, samples] -> [batch, channels, samples]
@@ -846,7 +1074,7 @@ class ModelRunnerBase:
 
     def _execute_voicefixer_vocoder(self, inputs, requests_to_batch):
         """Execute VoiceFixerVocoder model to convert mel spectrogram to audio."""
-        _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_vocoder")
+        assert_batch_aligned("_execute_voicefixer_vocoder", inputs, requests_to_batch)
 
         def vocode_mel(mel_artifact, initial_request):
             # VoiceFixer's forward expects [batch, 1, frames, bins].
@@ -882,7 +1110,7 @@ class ModelRunnerBase:
 
     def _execute_silero_vad(self, inputs, requests_to_batch):
         """Execute Silero VAD model to detect voice activity."""
-        _require_aligned(inputs, requests_to_batch, "_execute_silero_vad")
+        assert_batch_aligned("_execute_silero_vad", inputs, requests_to_batch)
 
         def run_vad(input_params, initial_request):
             audio_artifact, vad_params = input_params
@@ -936,7 +1164,7 @@ class ModelRunnerBase:
 
     def _execute_kittentts_synthesizer(self, inputs, requests_to_batch):
         """Execute KittenTTSSynthesizer to generate speech audio from text."""
-        _require_aligned(inputs, requests_to_batch, "_execute_kittentts_synthesizer")
+        assert_batch_aligned("_execute_kittentts_synthesizer", inputs, requests_to_batch)
 
         def synthesize_text(input_params, initial_request):
             input_text, voice, speed_modifier = input_params
@@ -977,7 +1205,7 @@ class ModelRunnerBase:
 
     def _execute_chatterbox_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxTTS to generate speech audio from text."""
-        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_tts")
+        assert_batch_aligned("_execute_chatterbox_tts", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
@@ -1031,7 +1259,7 @@ class ModelRunnerBase:
 
     def _execute_chatterbox_turbo_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxTurboTTS to generate speech audio from text."""
-        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_turbo_tts")
+        assert_batch_aligned("_execute_chatterbox_turbo_tts", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, speaker, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
@@ -1079,7 +1307,7 @@ class ModelRunnerBase:
 
     def _execute_chatterbox_multilingual_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxMultilingualTTS to generate speech audio from text."""
-        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_multilingual_tts")
+        assert_batch_aligned("_execute_chatterbox_multilingual_tts", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, language_id, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
@@ -1147,7 +1375,7 @@ class ModelRunnerBase:
         (``common.serialization.conditionals_to_payload``), reloaded with
         ``weights_only=True`` on the consumer side.
         """
-        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_embedding")
+        assert_batch_aligned("_execute_chatterbox_embedding", inputs, requests_to_batch)
 
         def compute_embedding(audio_artifact, initial_request):
             audio_buf = _wav_buffer(_bind_to_device(audio_artifact, "cpu"))
@@ -1176,7 +1404,7 @@ class ModelRunnerBase:
 
     def _execute_chatterbox_vc(self, inputs, requests_to_batch):
         """Execute ChatterboxVC to perform voice conversion."""
-        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_vc")
+        assert_batch_aligned("_execute_chatterbox_vc", inputs, requests_to_batch)
 
         def convert(input_params, initial_request):
             source_artifact, target_speaker, target_audio_artifact = input_params

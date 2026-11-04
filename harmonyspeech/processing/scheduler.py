@@ -204,7 +204,13 @@ class Scheduler:
             if model_name not in new_scheduled_for_models:
                 new_scheduled_for_models.append(model_name)
 
-        return waiting_queue, SchedulerWaitingOutputs(requests=requests, ignored_requests=ignored_requests)
+        # Phase 5-1: requests that did not fit this step stay in the waiting
+        # queue. Returning the (popped) input deque here used to drop every
+        # request above the model's `max_batch_size` on the floor — it never
+        # ran, was never reported, and the caller hung until its deadline.
+        return leftover_waiting_requests, SchedulerWaitingOutputs(
+            requests=requests, ignored_requests=ignored_requests
+        )
 
     def get_scheduling_budget(self) -> SchedulingBudget:
         """Calculate the overall scheduling Budget for requests per Model"""

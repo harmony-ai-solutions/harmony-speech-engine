@@ -184,3 +184,84 @@ model_configs:
     names = [m.name for m in cfg.model_configs]
     assert "tts-model" in names
     assert "stt-model" in names
+
+# ── Shipped config honesty (Phase 5-3) ────────────────────────────────────────
+
+import os as _os
+
+import yaml as _yaml
+
+from harmonyspeech.task_handler.batching import batched_inference_enabled, supports_batched_inference
+
+
+def _shipped_config(name: str):
+    repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    with open(_os.path.join(repo_root, name), encoding="utf-8") as handle:
+        return _yaml.safe_load(handle)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
+def test_shipped_config_batch_sizes_match_executor_reality(config_name):
+    """`max_batch_size` is a capacity signal: it must equal what the executor does.
+
+    * Chatterbox is autoregressive and runs one request per step -> 1.
+    * One-shot synthesizers with a padded-batch forward -> > 1 (and the flag on).
+    * Every remaining handler runs a per-item loop -> 1.
+    * Whisper (BatchedInferencePipeline) and the cheap CPU loops keep their values.
+    """
+    data = _shipped_config(config_name)
+    entries = data["model_configs"]
+    by_name = {entry["name"]: entry for entry in entries}
+
+    chatterbox = [entry for entry in entries if entry["name"].startswith("chatterbox")]
+    assert chatterbox, f"{config_name}: no Chatterbox entries found"
+    for entry in chatterbox:
+        assert entry["max_batch_size"] == 1, entry["name"]
+
+    loop_only = {
+        "hs1-encoder",
+        "hs1-synthesizer",
+        "hs1-vocoder",
+        "ov1-tone-converter",
+        "ov1-tone-converter-encoder",
+        "ov2-tone-converter",
+        "ov2-tone-converter-encoder",
+        "voicefixer-restorer",
+        "voicefixer-vocoder",
+    }
+    for name in loop_only:
+        entry = by_name.get(name)
+        if entry is None:
+            continue
+        assert entry["max_batch_size"] == 1, f"{name} runs a per-item loop"
+
+    for name, entry in by_name.items():
+        if name.startswith(("ov1-synthesizer-", "ov2-synthesizer-")):
+            assert entry["max_batch_size"] > 1, name
+            assert entry.get("batched_inference") is True, name
+
+    whisper = [entry for entry in entries if entry["model_type"] == "FasterWhisper"]
+    for entry in whisper:
+        assert entry["max_batch_size"] == 16, entry["name"]
+
+    kitten = [entry for entry in entries if entry["model_type"] == "KittenTTSSynthesizer"]
+    for entry in kitten:
+        assert entry["max_batch_size"] == 4, entry["name"]
+
+    silero = [entry for entry in entries if entry["model_type"] == "SileroVAD"]
+    for entry in silero:
+        assert entry["max_batch_size"] == 16, entry["name"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
+def test_shipped_config_loads_with_batched_inference_flags(config_name):
+    repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
+    config = EngineConfig.load_config_from_yaml(_os.path.join(repo_root, config_name))
+
+    synth = [cfg for cfg in config.model_configs if supports_batched_inference(cfg)]
+    assert synth, config_name
+    assert all(batched_inference_enabled(cfg) for cfg in synth)
+    for cfg in synth:
+        assert cfg.max_batch_size > 1

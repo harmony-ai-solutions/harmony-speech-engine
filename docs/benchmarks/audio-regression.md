@@ -138,6 +138,33 @@ Boot VRAM of the three-role set (TTS + VC + embedding, fp32 weights):
 | duplicated | 7.10 GiB | 7.45 GiB | — |
 | deduplicated | 3.04 GiB | 3.39 GiB | 2.97 GiB |
 
+### `batching:1-vs-4` (Phase 5)
+
+The padded-batch axis drives the engine step-by-step: side `1` schedules every
+case as its own one-request step (`max_batch_size: 1`, `batched_inference:
+false`), side `4` schedules all four cases in **one** step
+(`max_batch_size: 4`, `batched_inference: true`). Both sides run with the
+models' sampling noise switched off (`generation_options.noise_scale = 0`,
+`noise_scale_w = 0`) and with TF32 disabled in the worker, so the comparison
+isolates padding/unpadding rather than sampling noise or batch-shape-dependent
+kernel choice. Verdict: duration Δ ≤ 0.1 %, max |Δsample| ≤ 2e-3, log-mel MSE
+≤ 1e-2, corr ≥ 0.999.
+
+| Family | Case | Verdict | duration Δ% | max\|Δsample\| | log-mel MSE | corr | identical |
+|---|---|---|---|---|---|---|---|
+| melotts | batch_short | PASS | 0.0 | 1.59e-05 | 0.0 | 1.0 | False |
+| melotts | batch_medium | PASS | 0.0 | 1.59e-05 | 0.0 | 1.0 | False |
+| melotts | batch_long | PASS | 0.0 | 1.59e-05 | 0.0 | 1.0 | False |
+| melotts | batch_shortest | PASS | 0.0 | 1.58e-05 | 0.0 | 1.0 | False |
+| openvoice_v1 | batch_short | PASS | 0.0 | 0.0 | 0.0 | 1.0 | True |
+| openvoice_v1 | batch_medium | PASS | 0.0 | 0.0 | 0.0 | 1.0 | True |
+| openvoice_v1 | batch_long | PASS | 0.0 | 0.0 | 0.0 | 1.0 | True |
+| openvoice_v1 | batch_shortest | PASS | 0.0 | 0.0 | 0.0 | 1.0 | True |
+
+MeloTTS's 1.6e-5 residual is below one 16-bit LSB (the case only differs after
+rounding to PCM16); OpenVoice V1 is byte-identical. Throughput numbers for the
+same phase are in [throughput.md](throughput.md).
+
 ## Reproducing
 
 ```bash
@@ -151,4 +178,8 @@ python scripts/audio_regression.py --families chatterbox,chatterbox_turbo,chatte
 
 # sharing gate
 python scripts/audio_regression.py --families chatterbox --axis sharing:dedup-vs-dup --gpu
+
+# padded-batch equivalence gate (Phase 5)
+python scripts/audio_regression.py --families melotts,openvoice_v1 \
+    --axis batching:1-vs-4 --gpu
 ```

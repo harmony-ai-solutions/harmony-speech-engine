@@ -59,8 +59,33 @@ Make `max_batch_size` tell the truth — a capacity signal the scheduler and ope
 
 ## Checklist
 
-- [ ] All `max_batch_size` values match executor reality (post-5-2)
-- [ ] Chatterbox = 1 everywhere
-- [ ] `bench_throughput.py` committed; pre/post tables in `docs/benchmarks/throughput.md`
-- [ ] Ops docs on concurrency semantics + replica-scaling note
-- [ ] Phase 5 ticked in summary.md; knowledge docs updated
+- [x] All `max_batch_size` values match executor reality (post-5-2)
+- [x] Chatterbox = 1 everywhere
+- [x] `bench_throughput.py` committed; pre/post tables in `docs/benchmarks/throughput.md`
+- [x] Ops docs on concurrency semantics + replica-scaling note
+- [x] Phase 5 ticked in summary.md; knowledge docs updated
+
+## Implementation notes (2026-11-04)
+
+* Shipped values (`config.gpu.yml` and `config.yml`): `ov1-synthesizer-*` /
+  `ov2-synthesizer-*` → `8` + `batched_inference: true`; `hs1-*`,
+  `ov1/ov2-tone-converter*`, `voicefixer-*`, all `chatterbox*` → `1`;
+  `faster-whisper-*` and `silero-vad` → `16`; `kitten-tts-*` → `4` (unchanged —
+  those are genuinely parallel/cheap). `tests/unit/initialization/test_config.py`
+  asserts the table against both shipped files, so a future config edit that
+  re-introduces a lie fails the suite.
+* **Benchmark method.** HTTP against the CLI-booted server (`httpx`), warmup +
+  16 requests per concurrency level, p50/p95 + req/s; two reduced configs of the
+  *same build* (`pre` = old values/`batched_inference: false`, `post` = shipped
+  values) on idle GPU 1. Numbers, method and caveats in
+  `docs/benchmarks/throughput.md`; ops guidance in `docs/batching.md`.
+* Headline deltas (short text): MeloTTS 12.62 → **14.43 req/s** at c=8, p50
+  629 → 544 ms (+14 % / −13.5 %); Chatterbox flat 0.6 req/s in both (honesty
+  check); Whisper flat 2.8 req/s in both; OpenVoice V2 clone unchanged (~1.9
+  req/s) because the tone-converter hops are per-item. Long text: no gain
+  (compute-bound).
+* `max_batch_size: 8` comes from that data: throughput still rises at 8 with no
+  knee, and VRAM/CUDA memory during the runs stayed far below the card. A
+  deployment with longer queues can raise it (the sub-batcher and token budget
+  still bound one forward).
+

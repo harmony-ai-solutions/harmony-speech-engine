@@ -97,7 +97,8 @@ applied to *torch* model weights only:
   watermarking network is also kept float32.
 * **OpenVoice V1/V2 and MeloTTS** stay `float32`: the adapted VITS code creates
   float32 tensors inside the flow/text encoder, and the MeloTTS flow splines
-  assert under fp16. These are documented opt-outs, not oversights.
+  assert under fp16. These are documented opt-outs, not oversights; batching is
+  orthogonal to dtype (the padded-batch forward works in float32).
 * **VoiceFixer** stays `float32` (precision-sensitive STFT/log-mel restoration;
   GPU inference has a pre-existing device-placement bug).
 * **Harmony Speech V1** runs on CPU in the shipped GPU config; on CPU a requested
@@ -116,6 +117,15 @@ shares T3, which it never synthesizes with). Every role keeps its own wrapper
 instance, so per-request conditioning (`conds` / `ref_dict`) remains isolated.
 `chatterbox_turbo` stays ungrouped — it synthesizes from a different
 (`s3gen_meanflow`) checkpoint.
+
+#### Batching
+
+`max_batch_size` states how many requests a model processes per engine step, and
+`batched_inference` (default on for the OpenVoice V1 and MeloTTS synthesizers)
+selects the padded-batch forward for one-shot synthesis. Chatterbox is
+autoregressive and runs one request per step, so its capacity comes from
+replicas. See [Batching & concurrency](batching.md) for the per-family table,
+the length-similar sub-batching rules and the measured throughput.
 
 #### Measured footprint (RTX 5060 Ti 16 GiB, full `config.gpu.yml` catalogue)
 

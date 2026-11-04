@@ -31,7 +31,11 @@ class ModelConfig:
 
     Args:
         model: model name
-        max_batch_size: max batch size per processing step
+        max_batch_size: max requests admitted for this model per engine step
+            **and actually processed together** (Phase 5-3). A model whose
+            executor processes requests one at a time must declare 1, so the
+            value is a capacity signal operators can trust. See
+            ``docs/batching.md`` for the per-family reality.
         device_config: device config for this model's executor and worker
         dtype: Data type for model weights and activations. The "auto" option
             will use FP16 precision for FP32 and FP16 models, and BF16 precision
@@ -46,6 +50,15 @@ class ModelConfig:
             :class:`~harmonyspeech.modeling.weight_registry.WeightRegistry`
             instead of loading them once per config (Phase 4-4). Entries
             without a group keep the historical one-tree-per-config load.
+        batched_inference: Optional override for the padded-batch forward
+            (Phase 5-2). ``None`` (default) means "family default": on for the
+            one-shot synthesis families with a validated batched forward
+            (``OpenVoiceV1Synthesizer``, ``MeloTTSSynthesizer``) and off for
+            every other family. ``False`` forces the legacy per-item loop even
+            on those families (a batch size of 1 is the honest value then).
+        batch_token_budget: Optional cap for one padded sub-batch, measured as
+            ``items × T_max`` phone tokens (Phase 5-2). ``None`` derives
+            ``max_batch_size × median length`` per step.
     """
 
     def __init__(
@@ -67,6 +80,8 @@ class ModelConfig:
         enforce_eager: bool = True,
         watermark: bool = True,
         backbone_group: str | None = None,
+        batched_inference: bool | None = None,
+        batch_token_budget: int | None = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -87,6 +102,18 @@ class ModelConfig:
         if backbone_group is not None and not isinstance(backbone_group, str):
             raise ValueError(f"backbone_group must be a string or None, got {type(backbone_group).__name__}")
         self.backbone_group = backbone_group
+
+        if batched_inference is not None and not isinstance(batched_inference, bool):
+            raise ValueError(
+                f"batched_inference must be a bool or None, got {type(batched_inference).__name__}"
+            )
+        self.batched_inference = batched_inference
+        if batch_token_budget is not None:
+            if not isinstance(batch_token_budget, int) or batch_token_budget < 1:
+                raise ValueError(
+                    f"batch_token_budget must be a positive int or None, got {batch_token_budget!r}"
+                )
+        self.batch_token_budget = batch_token_budget
 
         self.dtype = _get_and_verify_dtype(dtype)
 

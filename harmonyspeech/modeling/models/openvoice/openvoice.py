@@ -11,6 +11,25 @@ from harmonyspeech.modeling.models.openvoice import attentions, commons, modules
 from harmonyspeech.modeling.models.openvoice.commons import init_weights
 
 
+def _batch_param(value, batch: int, device):
+    """Broadcast a per-sample parameter to ``[B, 1, 1]`` (Phase 5-2).
+
+    Scalars are returned untouched so a ``B == 1`` call keeps the historical
+    single-sample arithmetic; a length-``B`` sequence/tensor becomes a
+    ``[B, 1, 1]`` tensor that broadcasts against ``[B, *, T]`` activations.
+    """
+    if torch.is_tensor(value):
+        tensor = value.to(device)
+        if tensor.dim() == 1:
+            if tensor.numel() != batch:
+                raise ValueError(f"per-sample parameter has {tensor.numel()} values for a batch of {batch}")
+            tensor = tensor.view(batch, 1, 1)
+        return tensor
+    if isinstance(value, (list, tuple)):
+        return _batch_param(torch.as_tensor(value, dtype=torch.float32), batch, device)
+    return value
+
+
 class TextEncoder(nn.Module):
     def __init__(
         self, n_vocab, out_channels, hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout
@@ -416,9 +435,16 @@ class SynthesizerTrn(nn.Module):
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
         self.zero_g = zero_g
 
-    def infer(
-        self, x, x_lengths, sid=None, noise_scale=1, length_scale=1, noise_scale_w=1.0, sdp_ratio=0.2, max_len=None
+    def _infer_impl(
+        self, x, x_lengths, sid, noise_scale, length_scale, noise_scale_w, sdp_ratio, max_len
     ):
+        """Shared inference math for :meth:`infer` and :meth:`infer_batched`.
+
+        Every parameter is passed through untouched, so a scalar call is the
+        historical single-sample path bit for bit. ``noise_scale``,
+        ``noise_scale_w`` and ``length_scale`` may be tensors broadcastable to
+        ``[B, 1, 1]`` (per-sample speed/noise) — the batched API uses that.
+        """
         x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths)
         if self.n_speakers > 0:
             g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
@@ -444,7 +470,49 @@ class SynthesizerTrn(nn.Module):
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
         z = self.flow(z_p, y_mask, g=g, reverse=True)
         o = self.dec((z * y_mask)[:, :, :max_len], g=g)
-        return o, attn, y_mask, (z, z_p, m_p, logs_p)
+        return o, y_lengths, attn, y_mask, (z, z_p, m_p, logs_p)
+
+    def infer(
+        self, x, x_lengths, sid=None, noise_scale=1, length_scale=1, noise_scale_w=1.0, sdp_ratio=0.2, max_len=None
+    ):
+        o, _, attn, y_mask, extras = self._infer_impl(
+            x, x_lengths, sid, noise_scale, length_scale, noise_scale_w, sdp_ratio, max_len
+        )
+        return o, attn, y_mask, extras
+
+    def infer_batched(
+        self,
+        x,
+        x_lengths,
+        sid=None,
+        noise_scale=1.0,
+        length_scale=1.0,
+        noise_scale_w=1.0,
+        sdp_ratio=0.2,
+        max_len=None,
+    ):
+        """Padded-batch inference (Phase 5-2).
+
+        ``x`` is ``[B, T_max]`` with per-sample ``x_lengths``/``sid``; padded
+        positions are masked by the model, never by the caller. The per-sample
+        params accept a float or a sequence/tensor of length ``B`` (broadcast to
+        ``[B, 1, 1]``). Returns ``(waveform [B, 1, T], y_lengths [B], attn,
+        y_mask, extras)`` — ``y_lengths`` are decoder *frames*, so the caller can
+        unpad each sample with the model's own ``hop_length``.
+
+        With ``B == 1`` and scalar params this is the single-sample path: same
+        ops, same RNG draws, bit-identical output (asserted by the B=1
+        equivalence unit tests).
+        """
+        batch = int(x.shape[0])
+        device = x.device
+        noise_scale = _batch_param(noise_scale, batch, device)
+        length_scale = _batch_param(length_scale, batch, device)
+        noise_scale_w = _batch_param(noise_scale_w, batch, device)
+        o, y_lengths, attn, y_mask, extras = self._infer_impl(
+            x, x_lengths, sid, noise_scale, length_scale, noise_scale_w, sdp_ratio, max_len
+        )
+        return o, y_lengths, attn, y_mask, extras
 
     def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
         g_src = sid_src

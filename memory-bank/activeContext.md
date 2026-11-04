@@ -8,6 +8,18 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 5 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — phases 0–5 complete; 6 is an opt-in backlog (not implemented).
+
+- **5-1**: type partition happens before `prepare_inputs` for every handler; `assert_batch_aligned` raises `EngineBatchError` (an `AssertionError` subclass) which `_execute_partition` turns into per-request error results; `_build_result` enforces one result per request id per step. Engine-level suite `tests/integration/test_batching_invariants.py`. **Scheduler bug fixed:** `_schedule_waiting_requests` returned the drained input queue, so requests above a model's `max_batch_size` vanished (no run, no error, caller hung).
+- **5-2**: `infer_batched` on the vendored OpenVoice V1 and MeloTTS `SynthesizerTrn` (per-sample params, returns decoder frame counts); `task_handler/batching.py` (padding, `plan_batches` with `T_max/T_min ≤ 4` + `batch_token_budget`, `trim_decoder_output`); both handlers forward one padded batch per length-similar group, loop remains the `len==1` fast path and failure fallback; `ModelConfig.batched_inference` (default on for those two families).
+- **5-3**: truthful `max_batch_size` in both configs (synth 8 + flag; all loops 1; Chatterbox 1; Whisper 16; Kitten 4; Silero 16) with a config test; `scripts/bench_throughput.py`; `docs/benchmarks/throughput.md`; `docs/batching.md`.
+- Gate `batching:1-vs-4` (GPU, real weights, noise off, TF32 off): OpenVoice V1 byte-identical, MeloTTS max |Δsample| 1.6e-5. Bench (idle RTX 5060 Ti): MeloTTS 12.62 → 14.43 req/s at c=8 (p50 629 → 544 ms); Chatterbox 0.6 req/s flat; Whisper 2.8 req/s flat; full OpenVoice V2 clone unchanged at ~1.9 req/s (per-item tone-converter hops are the bottleneck).
+- Open items: Chatterbox AR batching (needs per-sequence KV cache) and batched tone-converter hops remain out of scope; long-text synthesis shows no batching gain (compute-bound).
+
+Next up when work resumes: Phase 6 capabilities backlog (opt-in; pick items individually).
+
 ### Engine Modernization — Phase 4 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — phases 0–4 complete; 5–6 queued.

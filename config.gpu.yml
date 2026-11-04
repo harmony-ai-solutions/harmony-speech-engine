@@ -2,7 +2,7 @@ model_configs:
   - name: "hs1-encoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechEncoder"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -10,7 +10,7 @@ model_configs:
   - name: "hs1-synthesizer"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechSynthesizer"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -18,7 +18,7 @@ model_configs:
   - name: "hs1-vocoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechVocoder"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -28,7 +28,8 @@ model_configs:
     model_type: "OpenVoiceV1Synthesizer"
     language: "EN"
     voices: ["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -38,7 +39,8 @@ model_configs:
     model_type: "OpenVoiceV1Synthesizer"
     language: "ZH"
     voices: ["default"]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -46,7 +48,7 @@ model_configs:
   - name: "ov1-tone-converter"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverter"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -54,7 +56,7 @@ model_configs:
   - name: "ov1-tone-converter-encoder"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverterEncoder"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -64,7 +66,8 @@ model_configs:
     model_type: "MeloTTSSynthesizer"
     language: "EN"
     voices: [ "EN-Newest" ]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -74,7 +77,8 @@ model_configs:
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
     voices: [ "ZH" ]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -84,7 +88,8 @@ model_configs:
     model_type: "MeloTTSSynthesizer"
     language: "ES"
     voices: [ "ES" ]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -94,7 +99,8 @@ model_configs:
     model_type: "MeloTTSSynthesizer"
     language: "FR"
     voices: [ "FR" ]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -104,7 +110,8 @@ model_configs:
     model_type: "MeloTTSSynthesizer"
     language: "JA"
     voices: [ "JP" ]
-    max_batch_size: 10
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -112,7 +119,7 @@ model_configs:
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverter"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -120,7 +127,7 @@ model_configs:
   - name: "ov2-tone-converter-encoder"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverterEncoder"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -155,7 +162,7 @@ model_configs:
   - name: "voicefixer-restorer"
     model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
     model_type: "VoiceFixerRestorer"
-    max_batch_size: 4
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -164,7 +171,7 @@ model_configs:
   - name: "voicefixer-vocoder"
     model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
     model_type: "VoiceFixerVocoder"
-    max_batch_size: 4
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cuda"

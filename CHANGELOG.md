@@ -23,6 +23,9 @@
 
 ### Performance
 
+*   **Batched synthesis for one-shot models**: OpenVoice V1 and MeloTTS requests that arrive together in one engine step are now synthesized as a single padded batch instead of one at a time, with automatic grouping of similar-length texts. Short-request throughput rises (~14 % at concurrency 8 on a RTX 5060 Ti) and tail latency drops; long-form requests are unaffected. A per-model `batched_inference` switch reverts to the previous behaviour.
+*   **Truthful capacity signals**: `max_batch_size` now means "requests admitted per step **and processed together**". Entries whose executor works request-by-request declare 1 (Chatterbox, Harmony Speech, VoiceFixer, tone converters); the one-shot synthesizers declare the measured batch size and Whisper keeps its real internal batching. Chatterbox throughput scales with replicas, not batch size.
+*   **Reproducible sampling controls**: OpenVoice V1 and MeloTTS synthesis accept `noise_scale`, `noise_scale_w` and `sdp_ratio` per request (setting them to 0 makes synthesis deterministic).
 *   **Chatterbox runs in half precision where it is safe**: the large T3 backbone of the Chatterbox family can now load in float16 (the shipped GPU config does), roughly halving its memory. The vocoder and speaker encoder stay float32 because casting them was measured to audibly degrade synthesis. Other torch families keep float32 where their code is not half-precision safe, and that choice is documented per family.
 *   **Chatterbox roles share their backbones**: `chatterbox`, `chatterbox_multilingual`, `chatterbox_vc` and `chatterbox_embedding` can now share one vocoder/speaker-encoder copy (opt in with `backbone_group`), instead of loading a full duplicate of the checkpoint per role. On the shipped GPU config the Chatterbox block drops from ~14.3 GiB to ~6.4 GiB.
 *   **VRAM is observable**: `/health` reports per-model and shared-group memory, and `/metrics` exposes Prometheus gauges for per-model VRAM, reservation, resident model count and shared backbone bytes. `scripts/measure_vram.py` records a full profile of a config.
@@ -31,6 +34,8 @@
 
 ### Fixes
 
+*   **Requests above the batch limit are no longer dropped**: when more requests were waiting for a model than its `max_batch_size`, the surplus left the waiting queue without ever running or reporting an error, leaving the caller waiting until its timeout. They now stay queued for the next engine step.
+*   **Mixed batches cannot duplicate a response**: a response is built at most once per request per engine step, and an inconsistent batch fails the affected requests with a clear error instead of corrupting the pairing or crashing the processing loop.
 *   **Voice isolation between requests**: Speech conditioning is restored after every request, so a request can no longer be synthesized with the previous caller's voice.
 *   **Missing conditioning is rejected**: Voice-cloning requests without reference audio or a precomputed embedding now fail with a clear error instead of reusing earlier state.
 *   **Chatterbox default voice**: Text-to-speech requests without a reference now use the voice bundled with the model instead of failing.

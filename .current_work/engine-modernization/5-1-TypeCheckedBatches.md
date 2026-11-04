@@ -57,7 +57,31 @@ See step 3 — the suite *is* the deliverable. All existing suites must remain g
 
 ## Checklist
 
-- [ ] Type-split hoisted before prepare; zip-based pairing everywhere
-- [ ] `EngineBatchError` + `_build_result` id-uniqueness guard
-- [ ] Integration suite (identical, mixed, delayed/reordered) green
-- [ ] `summary.md` Implementation Status updated
+- [x] Type-split hoisted before prepare; zip-based pairing everywhere
+- [x] `EngineBatchError` + `_build_result` id-uniqueness guard
+- [x] Integration suite (identical, mixed, delayed/reordered) green
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+* The Phase 0-3 split already ran before `prepare_inputs` for **every** handler
+  (`execute_model` -> `_partition_by_request_type` -> `_execute_partition`), so
+  no hoist was needed; the partition is now also asserted after preparation
+  (`assert_batch_aligned`) and a handler that raises `EngineBatchError` is
+  converted into per-request error results instead of escaping the step.
+* `EngineBatchError` subclasses `AssertionError` so the Phase 0-3 handlers that
+  asserted alignment with `pytest.raises(AssertionError)` keep working; it lives
+  in `harmonyspeech/common/errors.py`.
+* The duplicate-id guard is scoped to an engine step: `execute_model` opens the
+  scope, and handlers invoked directly (tests, tooling) do not track ids.
+* **Extra defect found and fixed (same seam):** `Scheduler._schedule_waiting_requests`
+  returned the *drained input* deque instead of `leftover_waiting_requests`, so
+  every request above a model's `max_batch_size` was dropped from the waiting
+  queue — it never ran, never produced an error, and the caller waited until its
+  deadline. `tests/integration/test_batching_invariants.py::test_batch_larger_than_max_batch_size_is_split_across_steps`
+  is the regression test.
+* Integration coverage uses the real engine/scheduler/executor/`prepare_inputs`
+  with stub model objects bound to the real model types (KittenTTS,
+  ChatterboxTTS, SileroVAD, FasterWhisper), so the suite is hermetic and CPU-only;
+  real weights are covered by `tests/e2e` and the Phase 4-2 harness.
+

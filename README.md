@@ -14,6 +14,7 @@ a variety of Speech-related model architectures for Text-To-Speech, Speech-To-Te
 - [OpenAI-Style APIs](docs/api.md) for Text-to-Speech, Speech-To-Text, Voice Conversion and Speech Embedding.
 - Multi-Model & Parallel Model Processing Support (See [Models](docs/models.md)).
 - Toolchain-based request processing & internal re-routing between models working together (See [Routing](docs/routing.md)).
+- Honest batching: one-shot synthesizers (OpenVoice V1, MeloTTS) process a step's requests as one padded batch, and every model's `max_batch_size` matches what its executor actually does (See [Batching & concurrency](docs/batching.md)).
 - Broad audio I/O: WAV/FLAC/OGG/MP3 input out of the box (AAC/M4A/WebM/AMR with ffmpeg), and `output_options` that really converts to WAV/FLAC/OGG/MP3/Opus/PCM (AAC with ffmpeg) at a requested sample rate. Audio can be sent as JSON base64 **or** as a `multipart/form-data` file upload (See [Audio I/O contract](docs/audio-io-contract.md)).
 - GPU & CPU Inference
 - Huggingface Integration

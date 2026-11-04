@@ -1,9 +1,9 @@
 """Threshold-based audio regression harness (Phase 4-2).
 
 Compares two *configurations of the current build* along a change axis — dtype
-(fp32 vs fp16), weight sharing (deduplicated vs duplicated) or a plain identity
-run — on fixed inputs, and fails (non-zero exit) when a family leaves its
-thresholds.
+(fp32 vs fp16), weight sharing (deduplicated vs duplicated), padded batching
+(B=1 vs B=N, Phase 5-2) or a plain identity run — on fixed inputs, and fails
+(non-zero exit) when a family leaves its thresholds.
 
 Design notes
 ------------
@@ -31,6 +31,10 @@ Usage
 
     python scripts/audio_regression.py --families chatterbox \
         --axis sharing:dedup-vs-dup --gpu
+
+    # padded-batch equivalence (Phase 5-2): B=1 loop vs one 4-request batch
+    python scripts/audio_regression.py --families melotts,openvoice_v1 \
+        --axis batching:1-vs-4 --gpu
 
     # identity self-test (must always pass)
     python scripts/audio_regression.py --families kittentts \
@@ -87,6 +91,17 @@ DTYPE_AXIS_EXEMPT = {
     "kittentts": "ONNX runtime ignores torch dtype (variant chosen by model name)",
     "harmonyspeech": "CPU-pinned in the shipped GPU config (torch dtype only selects bf16 on CPU)",
 }
+
+#: Batching axis (Phase 5-2). Padded-batch inference must not change what a
+#: sample sounds like: with sampling noise disabled both sides compute the same
+#: thing, so the comparison is sample-wise. The tolerances cover GPU
+#: accumulation-order noise only (measured max |Δsample| ≈ 1.1e-4 on the RTX
+#: 5060 Ti with TF32 disabled — see docs/benchmarks/throughput.md).
+BATCHING_MAX_ABS_DIFF = 2e-3
+BATCHING_LOG_MEL_MSE = 1e-2
+BATCHING_DURATION_PCT = 0.1
+BATCHING_CORR_MIN = 0.999
+
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +251,50 @@ FAMILY_SPECS: dict[str, dict] = {
                 "reference": "voice_b",
             },
         ],
+        # `batching:1-vs-N` axis: four different-length texts through the same
+        # clone toolchain, one engine step on the batched side.
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "openvoice_v1",
+                "text": "batch_1",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "default",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "openvoice_v1",
+                "text": "batch_2",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "default",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "openvoice_v1",
+                "text": "batch_3",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "default",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "openvoice_v1",
+                "text": "batch_4",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "default",
+                "reference": "repo_voice_a",
+            },
+        ],
     },
     "openvoice_v2": {
         "models": _openvoice_v2_models(),
@@ -270,6 +329,40 @@ FAMILY_SPECS: dict[str, dict] = {
                 "kind": "tts",
                 "model": "ov2-synthesizer-en",
                 "text": "en_short",
+                "language": "EN",
+                "voice": "EN-Newest",
+            },
+        ],
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "ov2-synthesizer-en",
+                "text": "batch_1",
+                "language": "EN",
+                "voice": "EN-Newest",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "ov2-synthesizer-en",
+                "text": "batch_2",
+                "language": "EN",
+                "voice": "EN-Newest",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "ov2-synthesizer-en",
+                "text": "batch_3",
+                "language": "EN",
+                "voice": "EN-Newest",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "ov2-synthesizer-en",
+                "text": "batch_4",
                 "language": "EN",
                 "voice": "EN-Newest",
             },
@@ -338,7 +431,7 @@ METRIC_SR = 24000
 class Axis:
     """A change axis with a label for each side."""
 
-    kind: str  # "dtype" | "sharing" | "baseline"
+    kind: str  # "dtype" | "sharing" | "baseline" | "batching"
     side_a: str
     side_b: str
 
@@ -359,8 +452,12 @@ def parse_axis(text: str) -> Axis:
     if "-vs-" not in pair:
         raise ValueError(f"axis must contain '-vs-', got {text!r}")
     a, b = pair.split("-vs-", 1)
-    if kind not in {"dtype", "sharing", "baseline"}:
-        raise ValueError(f"unknown axis kind '{kind}' (expected dtype, sharing or baseline)")
+    if kind not in {"dtype", "sharing", "baseline", "batching"}:
+        raise ValueError(f"unknown axis kind '{kind}' (expected dtype, sharing, batching or baseline)")
+    if kind == "batching":
+        for side in (a, b):
+            if not side.isdigit() or int(side) < 1:
+                raise ValueError(f"batching axis sides must be batch sizes >= 1, got {side!r}")
     return Axis(kind=kind, side_a=a, side_b=b)
 
 
@@ -369,7 +466,8 @@ def side_settings(axis: Axis, side: str) -> dict:
 
     ``dtype`` value is passed verbatim to ``ModelConfig.dtype``; ``sharing``
     values ``dedup`` / ``dup`` select whether grouped families get a
-    ``backbone_group``.
+    ``backbone_group``; ``batching`` values are the per-model ``max_batch_size``
+    of that side (1 = legacy per-item loop, N = padded batch).
     """
     if axis.kind == "dtype":
         return {"dtype": side, "share": True, "watermark": True}
@@ -379,6 +477,18 @@ def side_settings(axis: Axis, side: str) -> dict:
         # runs with the dummy watermarker: it tests the synthesis path, which is
         # what sharing touches. The dtype axis keeps watermarking enabled.
         return {"dtype": "float32", "share": side == "dedup", "watermark": False}
+    if axis.kind == "batching":
+        return {
+            "dtype": "float32",
+            "share": True,
+            "watermark": True,
+            "max_batch_size": int(side),
+            "batched_inference": int(side) > 1,
+            # Diagnostic mode: zero the stochastic scales and disable TF32 so the
+            # comparison isolates padding/unpacking instead of sampling noise or
+            # TF32's batch-shape-dependent kernel choice.
+            "deterministic": True,
+        }
     return {"dtype": side, "share": True, "watermark": True}
 
 
@@ -410,6 +520,12 @@ def _build_model_configs(family: str, settings: dict, use_gpu: bool):
             kwargs["watermark"] = bool(entry["watermark"]) and bool(settings.get("watermark", True))
         if spec.get("group") and settings["share"]:
             kwargs["backbone_group"] = spec["group"]
+        if settings.get("max_batch_size") is not None:
+            # Batching axis: the axis *is* the batch size, so it wins over the
+            # family catalogue's per-entry value.
+            kwargs["max_batch_size"] = int(settings["max_batch_size"])
+        if settings.get("batched_inference") is not None:
+            kwargs["batched_inference"] = bool(settings["batched_inference"])
         configs.append(ModelConfig(**kwargs))
     return configs
 
@@ -427,6 +543,105 @@ def _decode_response_audio(response) -> tuple[np.ndarray, int]:
     if samples.ndim > 1:
         samples = samples.mean(axis=1)
     return np.asarray(samples, dtype=np.float32), int(rate)
+
+
+def _run_batching_worker(job, engine, text_table) -> dict:
+    """Drive one engine step at a time with every case in a single batch.
+
+    The batching axis must compare *one step* of N requests against N steps of
+    one request, so the worker bypasses the background loop: it adds every case
+    to the scheduler first and then drives ``step_async`` until all of them
+    finish. With ``max_batch_size = N`` the explicit model receives all N
+    requests in the same step; with ``max_batch_size = 1`` it receives one per
+    step — the two sides of the axis.
+    """
+    import asyncio
+    import base64
+    import io
+
+    import soundfile as sf
+
+    from harmonyspeech.common.inputs import TextToSpeechRequestInput
+    from harmonyspeech.endpoints.openai.protocol import GenerationOptions, TextToSpeechRequest
+    from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
+    from tests.audio_fixtures import reference_wav_b64
+
+    deterministic = bool(job["settings"].get("deterministic"))
+    cases = {case["name"]: case for case in job["cases"]}
+    results: dict[str, dict] = {}
+
+    async def drive() -> None:
+        pending: list[str] = []
+        for name, case in cases.items():
+            request_id = f"batch-gate-{name}"
+            options = None
+            if deterministic:
+                # Zero every stochastic scale: both sides then compute the same
+                # deterministic function, so any difference is padding/unpacking.
+                options = GenerationOptions(noise_scale=0.0, noise_scale_w=0.0, seed=0)
+            request = TextToSpeechRequest(
+                model=case["model"],
+                input=text_table[case["text"]],
+                mode=case.get("mode", "single_speaker_tts"),
+                input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
+                language=case.get("language"),
+                voice=case.get("voice"),
+                generation_options=options,
+            )
+            request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+            artifacts = from_wire_audio(request_data)
+            await engine.engine.add_request_async(
+                request_id=request_id, request_data=request_data, artifacts=artifacts
+            )
+            pending.append(request_id)
+
+        seen: set[str] = set()
+        seen: set[str] = set()
+        steps = 0
+        while pending and steps < 20:
+            steps += 1
+            outputs, _forwarded = await engine.engine.step_async()
+            for output in outputs:
+                if output.request_id not in pending:
+                    continue
+                if output.finish_reason == "error":
+                    results[output.request_id] = {"error": output.error or "engine error"}
+                    pending.remove(output.request_id)
+                    continue
+                if output.finish_reason in ("stop", None):
+                    try:
+                        encoded = to_wire_audio(output, None)
+                        raw = base64.b64decode(encoded.data)
+                        samples, rate = sf.read(io.BytesIO(raw), dtype="float32", always_2d=False)
+                        samples = np.asarray(samples, dtype=np.float32).reshape(-1)
+                        name = output.request_id.replace("batch-gate-", "", 1)
+                        wav_path = os.path.join(job["out_dir"], f"{name}.wav")
+                        sf.write(wav_path, samples, rate, subtype="PCM_16")
+                        results[output.request_id] = {
+                            "wav": wav_path,
+                            "sample_rate": int(rate),
+                            "samples": int(samples.size),
+                            "seconds": round(float(samples.size) / rate, 4),
+                            "steps": steps,
+                        }
+                    except Exception as exc:  # noqa: BLE001 - reported per case
+                        results[output.request_id] = {"error": f"{type(exc).__name__}: {exc}"}
+                    pending.remove(output.request_id)
+                # "forwarded" keeps the request in the pipeline.
+            seen.update(outputs)
+        for request_id in pending:
+            results[request_id] = {"error": "request did not finish"}
+
+    asyncio.run(drive())
+
+    manifest_cases = {}
+    for name in cases:
+        request_id = f"batch-gate-{name}"
+        entry = results.get(request_id, {"error": "missing output"})
+        manifest_cases[name] = entry
+        state = "ERROR" if "error" in entry else f"{entry['seconds']}s audio in {entry['steps']} step(s)"
+        print(f"[worker:{job['side']}] {job['family']}/{name}: {state}", flush=True)
+    return manifest_cases
 
 
 def run_worker(job_path: str) -> int:
@@ -451,12 +666,21 @@ def run_worker(job_path: str) -> int:
     with open(job_path, encoding="utf-8") as handle:
         job = json.load(handle)
 
+    batching_axis = job["settings"].get("batching") is not None
+    if job["settings"].get("deterministic"):
+        # Diagnostic mode for the batching axis: TF32's conv/matmul kernel choice
+        # depends on the batch shape, which would swamp the ~1e-4 padding signal.
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+
     model_configs = _build_model_configs(job["family"], job["settings"], job["use_gpu"])
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
     from harmonyspeech.common.config import EngineConfig
 
     engine_config = EngineConfig(model_configs=model_configs)
-    engine = AsyncHarmonySpeech.from_engine_args_and_config(engine_args, engine_config, start_engine_loop=True)
+    engine = AsyncHarmonySpeech.from_engine_args_and_config(
+        engine_args, engine_config, start_engine_loop=not batching_axis
+    )
     serving_tts = OpenAIServingTextToSpeech(
         engine, OpenAIServingTextToSpeech.models_from_config(engine_config.model_configs)
     )
@@ -474,6 +698,13 @@ def run_worker(job_path: str) -> int:
     manifest = {"family": job["family"], "side": job["side"], "cases": {}}
 
     text_table = __import__("tests.audio_fixtures", fromlist=["TEXTS"]).TEXTS
+
+    if batching_axis:
+        manifest["cases"] = _run_batching_worker(job, engine, text_table)
+        manifest["vram"] = engine.engine.get_vram_stats() if hasattr(engine, "engine") else None
+        with open(job["manifest"], "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2)
+        return 0
 
     for case in job["cases"]:
         torch.manual_seed(1234)
@@ -664,6 +895,25 @@ def verdict_for_axis(axis: Axis, metrics: dict) -> tuple[bool, list[str]]:
             failures.append(f"logmel mse {metrics['logmel_mse']} > {SHARING_LOG_MEL_MSE}")
         return (not failures), failures
 
+    if axis.kind == "batching":
+        # Padded batching is a pure reshaping of the same computation (noise
+        # disabled on both sides), so a sample inside a batch must match the
+        # solo run up to GPU accumulation-order noise.
+        failures = []
+        if metrics["duration_pct"] > BATCHING_DURATION_PCT:
+            failures.append(
+                f"duration changed ({metrics['duration_pct']}%) — batching altered the frame count"
+            )
+        if metrics["max_abs_diff"] > BATCHING_MAX_ABS_DIFF:
+            failures.append(
+                f"max |Δsample| {metrics['max_abs_diff']} > {BATCHING_MAX_ABS_DIFF} (padding/unpacking bug)"
+            )
+        if metrics["logmel_mse"] > BATCHING_LOG_MEL_MSE:
+            failures.append(f"logmel mse {metrics['logmel_mse']} > {BATCHING_LOG_MEL_MSE}")
+        if metrics["corr"] < BATCHING_CORR_MIN:
+            failures.append(f"corr {metrics['corr']} < {BATCHING_CORR_MIN}")
+        return (not failures), failures
+
     return metrics["passed"], metrics["failures"]
 
 
@@ -711,7 +961,7 @@ def _run_side(family: str, side: str, axis: Axis, use_gpu: bool, workdir: str) -
         "side": side,
         "settings": side_settings(axis, side),
         "use_gpu": use_gpu,
-        "cases": FAMILY_SPECS[family]["cases"],
+        "cases": _cases_for_axis(axis, family),
         "out_dir": out_dir,
         "manifest": manifest_path,
     }
@@ -810,10 +1060,16 @@ def run_harness(args) -> int:
             continue
 
         kind = _family_kind(family)
+        cases = _cases_for_axis(axis, family)
         print(f"[harness] {family}: side A ({axis.side_a})…", flush=True)
         side_a = _run_side(family, axis.side_a, axis, use_gpu, workdir)
         print(f"[harness] {family}: side B ({axis.side_b})…", flush=True)
         side_b = _run_side(family, axis.side_b, axis, use_gpu, workdir)
+
+        if axis.kind == "batching":
+            # The family's stochastic thresholds are not what this axis asserts;
+            # the batching verdict below is sample-wise.
+            kind = "deterministic"
 
         family_entry = {"kind": kind, "cases": {}, "side_a": side_a, "side_b": side_b}
         if "error" in side_a or "error" in side_b:
@@ -822,7 +1078,7 @@ def run_harness(args) -> int:
             report["families"][family] = family_entry
             continue
 
-        for case in FAMILY_SPECS[family]["cases"]:
+        for case in cases:
             name = case["name"]
             a = side_a["cases"].get(name, {})
             b = side_b["cases"].get(name, {})
@@ -884,6 +1140,20 @@ def _family_kind(family: str) -> str:
     from tests.audio_fixtures import FAMILY_KIND
 
     return FAMILY_KIND.get(family, "deterministic")
+
+
+def _cases_for_axis(axis: Axis, family: str) -> list[dict]:
+    """Cases to run for this axis: the batching gate uses its own 4-case set."""
+    spec = FAMILY_SPECS[family]
+    if axis.kind == "batching":
+        cases = spec.get("batching_cases")
+        if not cases:
+            raise SystemExit(
+                f"family '{family}' has no batching_cases; the batching axis only covers "
+                "the padded-batch synthesis families (melotts, openvoice_v1)"
+            )
+        return cases
+    return spec["cases"]
 
 
 def _write_listening_pack(workdir: str, family: str, case: str, path_a: str, path_b: str) -> None:

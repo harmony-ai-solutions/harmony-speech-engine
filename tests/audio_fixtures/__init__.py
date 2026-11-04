@@ -48,7 +48,15 @@ TEXTS = {
     "en_numbers": "In nineteen eighty four the engine measured exactly nine models.",
     "de_short": "Der schnelle braune Fuchs springt ueber den faulen Hund.",
     "zh_short": "这是一个语音合成回归测试。",
+    # Mixed-length set for the `batching:1-vs-N` axis: one long, one medium and
+    # two short sentences so a padded batch really mixes lengths (and the
+    # length-similar sub-batcher has something to do).
+    "batch_1": "Hi.",
+    "batch_2": "The engine speaks clearly.",
+    "batch_3": "When the quick brown fox jumps over the lazy dog the river bank is very quiet.",
+    "batch_4": "Thank you very much.",
 }
+
 
 #: Families that sample (stochastic) and therefore need distribution-robust
 #: metrics instead of sample-exact comparison. Deterministic families are

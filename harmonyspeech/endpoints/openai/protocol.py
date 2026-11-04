@@ -92,6 +92,21 @@ class GenerationOptions(BaseModel):
         None,
         description="(Chatterbox Turbo only) Apply pyloudnorm loudness normalization to output. Default: True. Not supported by standard TTS or Multilingual variants.",
     )
+    # OpenVoice V1 / MeloTTS sampling parameters. Exposed because both models
+    # normally sample; `noise_scale: 0` (with `noise_scale_w: 0`) makes synthesis
+    # reproducible, which the batching equivalence gate relies on.
+    noise_scale: float | None = Field(
+        None,
+        description="(OpenVoice V1 / MeloTTS) Waveform sampling noise. Defaults: OpenVoice V1 0.667, MeloTTS 0.6. 0 disables sampling noise.",
+    )
+    noise_scale_w: float | None = Field(
+        None,
+        description="(OpenVoice V1 / MeloTTS) Duration-predictor noise. Defaults: OpenVoice V1 0.6, MeloTTS 0.8. 0 disables it.",
+    )
+    sdp_ratio: float | None = Field(
+        None,
+        description="(OpenVoice V1 / MeloTTS) Weight of the stochastic duration predictor vs the deterministic one. Default: 0.2.",
+    )
 
 
 class AudioOutputOptions(BaseModel):

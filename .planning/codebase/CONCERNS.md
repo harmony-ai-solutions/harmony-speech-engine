@@ -22,6 +22,19 @@ The following findings were fixed by the engine modernization Phase 0 plan
 Still open after Phase 0: authentication/CORS/rate-limit hardening, request size
 limits, real batching/streaming, VRAM residency management, dependency hygiene.
 
+## Phase 5 resolutions (2026-11-04)
+
+| Finding | Status | Fix |
+|---|---|---|
+| `max_batch_size` was decorative: schedulers admitted 10 requests and handlers looped one at a time | **RESOLVED** (5-2, 5-3) | padded-batch forward for the one-shot synthesizers (`infer_batched`, length-similar sub-batching, token budget); every value in `config.gpu.yml`/`config.yml` now matches executor reality (loops = 1, Chatterbox = 1) |
+| Requests above a model's `max_batch_size` were silently dropped by the scheduler | **RESOLVED** (5-1) | `_schedule_waiting_requests` returns the leftover queue instead of the drained input copy; regression test in `tests/integration/test_batching_invariants.py` |
+| Batch mispairing could only be caught in review | **RESOLVED** (5-1) | `assert_batch_aligned` + `EngineBatchError` (typed per-request errors) and a per-step request-id uniqueness guard in `_build_result`; engine-level invariant suite |
+| "Real batching" listed as an open gap (`gpu_model_runner` loop) | **PARTIALLY RESOLVED** (5-2) | one-shot synthesis families batch for real; Chatterbox stays autoregressive by decision (needs a per-sequence KV cache) and scales by replicas, documented in `docs/batching.md` |
+
+Remaining batching work (explicitly out of scope for Phase 5): Chatterbox AR
+batching with a KV cache; batched tone-converter/encoder hops (they are per-item
+loops and cap end-to-end clone throughput at ~1.9 req/s).
+
 ## Overview
 
 The engine hosts every model in a YAML config as a permanently resident executor, executes batches request-by-request in Python loops, and transports all audio as base64 inside JSON. Three properties dominate the risk profile:

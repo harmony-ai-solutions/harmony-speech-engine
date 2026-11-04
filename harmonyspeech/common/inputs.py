@@ -323,6 +323,10 @@ class TextToSpeechGenerationOptions:
     min_p: float | None = None
     top_k: int | None = None
     norm_loudness: bool | None = None
+    # OpenVoice V1 / MeloTTS sampling parameters (None = family default).
+    noise_scale: float | None = None
+    noise_scale_w: float | None = None
+    sdp_ratio: float | None = None
 
 
 class TextToSpeechAudioOutputOptions:

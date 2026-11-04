@@ -558,10 +558,37 @@ def prepare_openvoice_synthesizer_inputs(model_config: ModelConfig, requests_to_
                 speed_modifier = float(request.generation_options.speed)
 
         text_normalized = ov1_normalize_inputs(input_text, hf_config, model_config.language)
-        return text_normalized, speaker_id, speed_modifier
+        return text_normalized, speaker_id, speed_modifier, _openvoice_sampling_params(request)
 
     with ThreadPoolExecutor() as executor:
         return list(executor.map(prepare, requests_to_batch))
+
+
+#: OpenVoice V1 defaults, matching the values the handler has always used.
+_OPENVOICE_SAMPLING_DEFAULTS = {"noise_scale": 0.667, "noise_scale_w": 0.6, "sdp_ratio": 0.2}
+#: MeloTTS defaults, matching the values the handler has always used.
+_MELO_SAMPLING_DEFAULTS = {"noise_scale": 0.6, "noise_scale_w": 0.8, "sdp_ratio": 0.2}
+
+
+def _sampling_params(request, defaults: dict) -> dict:
+    """Per-request sampling params: request override, else the family default."""
+    options = getattr(request, "generation_options", None)
+    resolved = dict(defaults)
+    if options is not None:
+        for key in defaults:
+            value = getattr(options, key, None)
+            if value is not None:
+                resolved[key] = float(value)
+    return resolved
+
+
+def _openvoice_sampling_params(request) -> dict:
+    return _sampling_params(request, _OPENVOICE_SAMPLING_DEFAULTS)
+
+
+def _melo_sampling_params(request) -> dict:
+    return _sampling_params(request, _MELO_SAMPLING_DEFAULTS)
+
 
 
 def prepare_melotts_synthesizer_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
@@ -583,7 +610,7 @@ def prepare_melotts_synthesizer_inputs(model_config: ModelConfig, requests_to_ba
                 speed_modifier = float(request.generation_options.speed)
 
         inference_items = melo_normalize_inputs(input_text, hf_config, model_config.language)
-        return inference_items, speaker_id, speed_modifier
+        return inference_items, speaker_id, speed_modifier, _melo_sampling_params(request)
 
     with ThreadPoolExecutor() as executor:
         return list(executor.map(prepare, requests_to_batch))

@@ -6,6 +6,20 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 5 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 5 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **5-1 Type-checked batches & pairing invariants** — the type partition runs before `prepare_inputs` for every handler; `assert_batch_aligned` raises `EngineBatchError` which the runner converts into per-request errors; `_build_result` refuses a second result for the same request id inside one step. New engine-level suite `tests/integration/test_batching_invariants.py` (KittenTTS/Chatterbox/Silero/Whisper model types, batch sizes 1→5, delayed/failing items, forwarded+fresh scheduling). **Found and fixed a scheduler bug**: requests above a model's `max_batch_size` were dropped from the waiting queue (never ran, never errored, caller hung).
+- ✅ **5-2 Padded batch on `SynthesizerTrn`** — vendored `infer_batched` on OpenVoice V1 and MeloTTS (per-sample `length_scale`/noise, returns decoder frame counts), `harmonyspeech/task_handler/batching.py` (padding, length-similar sub-batching with `T_max/T_min ≤ 4`, token budget, unpadding), both handlers batched with the per-item loop as `len==1` fast path and failure fallback, per-model `batched_inference` flag (default on for these two families). Equivalence: `batching:1-vs-4` gate passes (OpenVoice V1 byte-identical, MeloTTS max |Δ| 1.6e-5); B=1 unit tests bit-identical.
+- ✅ **5-3 Honest batch config & benchmarks** — truthful `max_batch_size` in both configs (synth 8 + `batched_inference`, every loop 1, Chatterbox 1, Whisper 16, Kitten 4, Silero 16) asserted by a config test; `scripts/bench_throughput.py` (HTTP, warmup, p50/p95 + req/s at c={1,2,4,8}); `docs/benchmarks/throughput.md` pre/post tables; `docs/batching.md` ops guide (semantics, per-family concurrency, Chatterbox replicas-not-batch).
+
+**Verification**: unit 530 → 578, integration 23 → 34, wire-contract e2e 38 + 3 skipped; real-model e2e green for OpenVoice V1, MeloTTS and the OpenVoice VAD-mode suite; HTTP pre/post benchmark on an idle RTX 5060 Ti (MeloTTS 12.62 → 14.43 req/s at c=8, p50 629 → 544 ms; Chatterbox flat at 0.6 req/s and Whisper at 2.8 req/s in both).
+
+**Deviations**: full OpenVoice V2 clone throughput is unchanged (bound by per-item tone-converter hops, left at `max_batch_size: 1` by design); long-text batching shows no gain (compute-bound) — both documented in `docs/benchmarks/throughput.md`.
+
+**Next**: Phase 6 is an opt-in capabilities backlog (not implemented).
+
 ## Engine Modernization — Phase 4 (COMPLETE, 2026-11-04)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 4 of a 6-phase modernization; `summary.md` tracks all phases)
