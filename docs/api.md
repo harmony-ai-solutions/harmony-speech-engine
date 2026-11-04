@@ -72,12 +72,33 @@ Controls generation parameters for TTS and voice conversion models. Most fields 
 ### AudioOutputOptions
 
 Controls the output audio format for TTS, voice conversion, and audio conversion endpoints.
+See [Audio I/O contract](audio-io-contract.md) for the complete format/transport matrix.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `format` | string | `"wav"` | Output audio format (e.g. `"wav"`, `"mp3"`, `"flac"`) |
-| `sample_rate` | integer | null | Resample output to this rate (Hz). If null, uses the model's native rate |
-| `stream` | boolean | false | Whether to stream the response (reserved for future use) |
+| `format` | string | `"wav"` | `wav`, `flac`, `ogg`, `mp3`, `opus`, `pcm` (raw s16le) or `aac` (only when `ffmpeg` is available). Unsupported values → HTTP 400 |
+| `sample_rate` | integer | null | Resample output to this rate (Hz): 8000, 16000, 22050, 24000, 32000, 44100, 48000. If null, uses the model's native rate |
+| `stream` | boolean | false | Whether to stream the response (reserved for future use; `true` currently returns 400) |
+
+Notes:
+
+- Omitting `output_options` (or sending `format: "wav"` with no `sample_rate`) returns the
+  executor WAV **byte-identical** — no decode, no re-encode.
+- `pcm` is mono signed little-endian 16-bit samples, base64-encoded in `data`.
+  Set `sample_rate` explicitly for `pcm`; otherwise the model native rate applies.
+- Audio responses include an optional `sample_rate` field with the effective rate whenever the
+  engine re-encoded or resampled the payload.
+
+### Audio inputs and transports
+
+Every endpoint that accepts audio takes it either as base64 inside JSON **or** as a
+`multipart/form-data` file upload on the same path (content-type dispatch). Supported input
+formats: WAV, FLAC, OGG/Vorbis, AIFF/CAF/AU natively, MP3 with libsndfile ≥ 1.1, and
+AAC/M4A/WebM/AMR when `ffmpeg` is installed on the server. Undecodable audio returns HTTP 400
+with a message naming the field and the probed format. Uploads larger than
+`--max-upload-size-mb` (default 50 MiB, or `HARMONYSPEECH_MAX_UPLOAD_MB`) return HTTP 413.
+
+See [Audio I/O contract](audio-io-contract.md) for `curl -F` examples per endpoint.
 
 
 ## Endpoint Details
@@ -301,6 +322,16 @@ curl -X POST "http://localhost:12080/v1/audio/speech" \
   }'
 ```
 
+**Voice cloning with a multipart upload (no base64):**
+
+```bash
+curl -X POST "http://localhost:12080/v1/audio/speech" \
+  -F "input_audio=@reference.wav" \
+  -F "model=chatterbox" \
+  -F "mode=voice_cloning" \
+  -F "input=This voice will be cloned from the reference audio."
+```
+
 **Voice cloning (OpenVoice V2 — full pipeline with embedding):**
 
 ```bash
@@ -361,6 +392,8 @@ curl -X POST "http://localhost:12080/v1/embed/speaker" \
   }'
 ```
 
+**Multipart alternative:** `curl -X POST .../v1/embed/speaker -F "file=@speaker.wav" -F "model=chatterbox_embedding"`
+
 **Response (EmbedSpeakerResponse):**
 
 ```json
@@ -408,6 +441,8 @@ curl -X POST "http://localhost:12080/v1/audio/transcriptions" \
     "get_timestamps": true
   }'
 ```
+
+**Multipart alternative (OpenAI style):** `curl -X POST .../v1/audio/transcriptions -F "file=@speech.mp3" -F "model=faster-whisper-large-v3-turbo" -F "get_language=true"`
 
 **Response (SpeechToTextResponse):**
 
@@ -467,6 +502,8 @@ curl -X POST "http://localhost:12080/v1/voice/convert" \
   }'
 ```
 
+**Multipart alternative:** `curl -X POST .../v1/voice/convert -F "source_audio=@source.wav" -F "target_audio=@target.wav" -F "model=ov2-tone-converter"`
+
 **Response (VoiceConversionResponse):**
 
 ```json
@@ -518,6 +555,8 @@ curl -X POST "http://localhost:12080/v1/audio/vad" \
   }'
 ```
 
+**Multipart alternative:** `curl -X POST .../v1/audio/vad -F "file=@speech.wav" -F "model=silero-vad" -F "get_timestamps=true"`
+
 **Response (DetectVoiceActivityResponse):**
 
 ```json
@@ -568,6 +607,8 @@ curl -X POST "http://localhost:12080/v1/audio/convert" \
     }
   }'
 ```
+
+**Multipart alternative:** `curl -X POST .../v1/audio/convert -F "file=@noisy.wav" -F "model=voicefixer-restorer"`
 
 **Response (AudioConversionResponse):**
 

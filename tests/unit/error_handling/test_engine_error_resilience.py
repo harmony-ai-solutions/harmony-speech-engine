@@ -31,6 +31,7 @@ from harmonyspeech.common.inputs import (
 from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
+from tests.audio_fixtures import tiny_wav_bytes
 
 # ===========================================================================
 # Issue 1: ChatterboxEmbedding prepare_inputs accepts TextToSpeechRequestInput
@@ -62,21 +63,23 @@ def test_prepare_inputs_chatterbox_embedding_accepts_tts_request():
     from harmonyspeech.task_handler.inputs import prepare_inputs
 
     config = _make_chatterbox_embedding_config()
+    audio = tiny_wav_bytes()
     tts_input = TextToSpeechRequestInput(
         request_id="tts-test-001",
         requested_model="chatterbox",
         model="cb-embed",
         input_text="Hello world",
         mode="voice_cloning",
-        input_audio=base64.b64encode(b"fake_wav_bytes").decode(),
+        input_audio=base64.b64encode(audio).decode(),
     )
     engine_req = _make_engine_request(tts_input)
 
     # Must not raise ValueError
     inputs = prepare_inputs(config, [engine_req])
     assert len(inputs) == 1
-    # prepare_chatterbox_embedding_inputs returns raw decoded audio bytes
-    assert inputs[0] == b"fake_wav_bytes"
+    # prepare_chatterbox_embedding_inputs returns boundary-normalised audio bytes
+    # (a native container such as WAV is passed through untouched).
+    assert inputs[0] == audio
 
 
 @pytest.mark.unit
@@ -85,17 +88,18 @@ def test_prepare_inputs_chatterbox_embedding_accepts_embed_request():
     from harmonyspeech.task_handler.inputs import prepare_inputs
 
     config = _make_chatterbox_embedding_config()
+    audio = tiny_wav_bytes()
     embed_input = SpeechEmbeddingRequestInput(
         request_id="embed-test-001",
         requested_model="chatterbox",
         model="cb-embed",
-        input_audio=base64.b64encode(b"embed_audio").decode(),
+        input_audio=base64.b64encode(audio).decode(),
     )
     engine_req = _make_engine_request(embed_input)
 
     inputs = prepare_inputs(config, [engine_req])
     assert len(inputs) == 1
-    assert inputs[0] == b"embed_audio"
+    assert inputs[0] == audio
 
 
 @pytest.mark.unit

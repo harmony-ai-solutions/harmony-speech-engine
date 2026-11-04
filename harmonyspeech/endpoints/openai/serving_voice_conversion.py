@@ -7,6 +7,7 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import VoiceConversionRequestInput
 from harmonyspeech.common.outputs import RequestOutput, VoiceConversionRequestOutput
 from harmonyspeech.common.utils import random_uuid
+from harmonyspeech.endpoints.openai.output_encoding import apply_output_options, validate_output_options
 from harmonyspeech.endpoints.openai.protocol import (
     ErrorResponse,
     ModelCard,
@@ -42,6 +43,10 @@ class OpenAIServingVoiceConversion(OpenAIServing):
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
+
+        error_check_options = validate_output_options(request.output_options)
+        if error_check_options is not None:
+            return self.create_error_response(error_check_options)
 
         # TODO: Basic checks for Embedding Generate request
 
@@ -83,6 +88,13 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             return self.create_error_response(final_res.error or "Internal inference error")
         assert isinstance(final_res, VoiceConversionRequestOutput)
 
-        response = VoiceConversionResponse(id=request_id, created=created_time, model=model_name, data=final_res.output)
+        encoded = apply_output_options(final_res.output, request.output_options)
+        response = VoiceConversionResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            data=encoded.data,
+            sample_rate=encoded.sample_rate,
+        )
 
         return response

@@ -6,6 +6,7 @@ that every handler restores the baseline snapshot afterwards and that a request
 without conditioning fails loudly instead of inheriting the previous voice.
 """
 
+import base64
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,11 @@ from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput, VoiceConversionRequestInput
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
+from tests.audio_fixtures import tiny_wav_bytes
+
+#: Real WAV payload: the boundary decoder normalises reference audio.
+CLONING_AUDIO = tiny_wav_bytes(16000, 0.10)
+CLONING_AUDIO_B64 = base64.b64encode(CLONING_AUDIO).decode()
 
 
 class StubChatterboxModel:
@@ -102,11 +108,11 @@ def test_tts_restores_none_baseline_after_audio_cloning_request():
     runner._capture_baseline_state()
     assert runner.model.conds is None
 
-    results = runner._execute_chatterbox_tts([_tts_params()], [_tts_request(input_audio="dm9pY2UtYQ==")])
+    results = runner._execute_chatterbox_tts([_tts_params()], [_tts_request(input_audio=CLONING_AUDIO_B64)])
 
     assert results[0].result_data.finish_reason == "stop"
     # The request's own audio was prepared...
-    assert runner.model.prepared_audio == [b"voice-a"]
+    assert runner.model.prepared_audio == [CLONING_AUDIO]
     # ...and the baseline (no conditionals) was restored afterwards.
     assert runner.model.conds is None
 
@@ -119,7 +125,7 @@ def test_tts_restores_non_none_baseline_after_request():
     runner = _make_runner(model)
     runner._capture_baseline_state()
 
-    runner._execute_chatterbox_tts([_tts_params()], [_tts_request(input_audio="dm9pY2UtYQ==")])
+    runner._execute_chatterbox_tts([_tts_params()], [_tts_request(input_audio=CLONING_AUDIO_B64)])
 
     # The baseline is a deep copy, so it is restored by value (not identity).
     assert runner.model.conds == baseline
@@ -174,7 +180,7 @@ def test_turbo_and_multilingual_restore_state(handler_name, model_type, params_b
     runner._capture_baseline_state()
     handler = getattr(runner, handler_name)
 
-    results = handler([params_builder(None)], [_tts_request(input_audio="dm9pY2UtYQ==")])
+    results = handler([params_builder(None)], [_tts_request(input_audio=CLONING_AUDIO_B64)])
 
     assert results[0].result_data.finish_reason == "stop"
     assert runner.model.conds is None

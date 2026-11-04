@@ -82,6 +82,8 @@ pytest -k "vad" tests/e2e/ --device=cpu --dtype=float32
 
 > **Tip:** E2E tests require internet access on first run to download model weights. Weights are cached in a temporary directory per test session.
 
+> **Wire-contract tests:** `tests/e2e/wire_contract/` exercises the HTTP transport and audio format matrix against a boundary-decoding fake engine, so it needs **no** model downloads and is safe in CI. The few cases that use real weights are skipped unless `HSE_E2E_MODEL_TESTS=1` is set. ffmpeg-dependent cases skip automatically when ffmpeg is not on `PATH`.
+
 ---
 
 ## Coverage Reports

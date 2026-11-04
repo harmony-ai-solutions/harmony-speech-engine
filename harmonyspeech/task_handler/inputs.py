@@ -5,13 +5,17 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from tempfile import NamedTemporaryFile
 
-import librosa
 import numpy as np
 import torch
 from chatterbox.tts import Conditionals
 from loguru import logger
 from pydub import AudioSegment
 
+from harmonyspeech.common.audio_codec import (
+    AudioDecodeError,
+    decode_audio,
+    ensure_librosa_readable_bytes,
+)
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import (
     AudioConversionRequestInput,
@@ -52,6 +56,44 @@ def _load_conditionals_payload(payload: str, field_name: str):
         return Conditionals.load(io.BytesIO(embedding_bytes), map_location="cpu")
     except Exception as e:
         raise ValueError(f"Unsupported {field_name} payload: {_CONDITIONALS_PAYLOAD_HELP}. Details: {e}") from e
+
+
+def _decode_audio_field(payload: str | None, field_name: str, target_sr: int | None = None) -> tuple[np.ndarray, int]:
+    """Decode a base64 audio request field through the boundary codec.
+
+    Any base64 or codec failure becomes a ``ValueError`` naming the request
+    field, which the engine turns into a 400-style per-request error result
+    instead of crashing the pipeline.
+    """
+    if not payload:
+        raise ValueError(f"{field_name}: missing audio payload")
+    try:
+        raw = base64.b64decode(payload)
+    except Exception as exc:
+        raise ValueError(f"{field_name}: invalid base64 audio payload: {exc}") from exc
+    try:
+        return decode_audio(raw, target_sr=target_sr)
+    except AudioDecodeError as exc:
+        raise ValueError(f"{field_name}: {exc}") from exc
+
+
+def _normalize_audio_bytes(payload: str | None, field_name: str) -> bytes:
+    """Return WAV bytes for components that decode their own (file-like) input.
+
+    Containers libsndfile understands are handed over untouched; AAC/MP4/etc.
+    are decoded once here and re-wrapped as WAV so the same input formats work
+    for every model family, including Chatterbox.
+    """
+    if not payload:
+        raise ValueError(f"{field_name}: missing audio payload")
+    try:
+        raw = base64.b64decode(payload)
+    except Exception as exc:
+        raise ValueError(f"{field_name}: invalid base64 audio payload: {exc}") from exc
+    try:
+        return ensure_librosa_readable_bytes(raw)
+    except AudioDecodeError as exc:
+        raise ValueError(f"{field_name}: {exc}") from exc
 
 
 def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
@@ -269,9 +311,9 @@ def prepare_harmonyspeech_encoder_inputs(
 ):
     # We're expecting audio in waveform format in the requests
     def prepare(request):
-        # Make sure Audio is decoded from Base64
-        input_audio = base64.b64decode(request.input_audio)
-        preprocessed_audio = preprocess_wav(input_audio)
+        # Decode the boundary audio once (any supported container/codec)
+        audio, source_sr = _decode_audio_field(request.input_audio, "input_audio")
+        preprocessed_audio = preprocess_wav(audio, source_sr=source_sr)
         input_frames = get_input_frames(preprocessed_audio)
         # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
         return input_frames
@@ -289,12 +331,8 @@ def prepare_voicefixer_restorer_inputs(requests_to_batch: list[AudioConversionRe
     """
 
     def prepare(request):
-        # Make sure Audio is decoded from Base64
-        input_audio = base64.b64decode(request.source_audio)
-        input_audio_ref = io.BytesIO(input_audio)
-
-        # Load audio using librosa at VoiceFixer's expected sample rate (44100 Hz)
-        audio_data, _ = librosa.load(input_audio_ref, sr=44100)
+        # Decode the boundary audio once at VoiceFixer's expected sample rate (44100 Hz)
+        audio_data, _ = _decode_audio_field(request.source_audio, "source_audio", target_sr=44100)
 
         # Convert to tensor format expected by VoiceFixerRestorer
         # The model expects [batch, channels, samples] format
@@ -411,15 +449,14 @@ def prepare_openvoice_tone_converter_encoder_inputs(
     # Based on VAD Data we're processing the Audio file provided
     # TODO: This expects Whisper VAD input, needs rework to be compatible with Silero VAD
     def prepare(request):
-        # Make sure Audio is decoded from Base64
-        input_audio = base64.b64decode(request.input_audio)
+        # Decode the boundary audio once (base64 + any supported container)
+        audio_data, _ = _decode_audio_field(
+            request.input_audio, "input_audio", target_sr=hf_config.data.sampling_rate
+        )
         input_vad_data = json.loads(request.input_vad_data)
         segments = input_vad_data["segments"] if "segments" in input_vad_data else []
         info = input_vad_data["info"] if "info" in input_vad_data else None
 
-        # Load Audio from BytesIO
-        bytes_pointer = io.BytesIO(input_audio)
-        audio_data, _ = librosa.load(bytes_pointer, sr=hf_config.data.sampling_rate)
         # convert from float to uint16
         # https://stackoverflow.com/questions/58810035/converting-audio-files-between-pydub-and-librosa
         audio_data = np.array(audio_data * (1 << 15), dtype=np.int16)
@@ -457,7 +494,10 @@ def prepare_openvoice_tone_converter_encoder_inputs(
                 tmp_file = NamedTemporaryFile(delete=False, suffix=".ove")
                 try:
                     audio_seg.export(tmp_file, format="wav")
-                    audio_seg_bytes, _ = librosa.load(tmp_file.name, sr=hf_config.data.sampling_rate)
+                    with open(tmp_file.name, "rb") as exported:
+                        audio_seg_bytes, _ = decode_audio(
+                            exported.read(), target_sr=hf_config.data.sampling_rate
+                        )
                     vad_audio_segments.append(audio_seg_bytes)
                 except Exception as e:
                     logger.error(str(e))
@@ -496,19 +536,19 @@ def prepare_openvoice_tone_converter_inputs(
         # For TextToSpeechRequestInput: input_audio, input_embedding
         if hasattr(request, "source_audio"):
             # VoiceConversionRequestInput
+            audio_field = "source_audio"
             audio_data = request.source_audio
             embedding_data = request.target_embedding
         else:
             # TextToSpeechRequestInput
+            audio_field = "input_audio"
             audio_data = request.input_audio
             embedding_data = request.input_embedding
 
         # Make sure Audio and Embedding are decoded from Base64
-        input_audio = base64.b64decode(audio_data.encode("utf-8"))
+        audio_ref, _ = _decode_audio_field(audio_data, audio_field, target_sr=hf_config.data.sampling_rate)
         input_embedding = base64.b64decode(embedding_data.encode("utf-8"))
-        input_audio_ref = io.BytesIO(input_audio)
         input_embedding_ref = io.BytesIO(input_embedding)
-        audio_ref, _ = librosa.load(input_audio_ref, sr=hf_config.data.sampling_rate)
 
         # For voice conversion, use target embedding directly
         # For voice cloning via TTS, get source embedding from repo
@@ -539,10 +579,8 @@ def prepare_faster_whisper_inputs(
     requests_to_batch: list[TextToSpeechRequestInput | SpeechTranscribeRequestInput | DetectVoiceActivityRequestInput],
 ):
     def prepare(request):
-        # Make sure Audio data is decoded from Base64
-        input_audio = base64.b64decode(request.input_audio)
-        input_audio_ref = io.BytesIO(input_audio)
-        audio_ref, _ = librosa.load(input_audio_ref, sr=16000)
+        # Decode the boundary audio once (any supported container) at 16 kHz
+        audio_ref, _ = _decode_audio_field(request.input_audio, "input_audio", target_sr=16000)
         # input_frames_tensors = torch.from_numpy(input_frames).to(self.device)
         return audio_ref
 
@@ -616,12 +654,9 @@ def prepare_silero_vad_inputs(requests_to_batch: list[DetectVoiceActivityRequest
     """
 
     def prepare(request):
-        # Decode base64 audio
-        input_audio = base64.b64decode(request.input_audio)
-        input_audio_ref = io.BytesIO(input_audio)
-
-        # Load audio at 16kHz (Silero's expected sample rate)
-        audio_ref, _ = librosa.load(input_audio_ref, sr=16000)
+        # Decode the boundary audio once (any supported container) at 16 kHz
+        # (Silero's expected sample rate)
+        audio_ref, _ = _decode_audio_field(request.input_audio, "input_audio", target_sr=16000)
 
         # Convert to tensor format expected by Silero VAD
         audio_tensor = torch.FloatTensor(audio_ref)
@@ -840,13 +875,15 @@ def prepare_chatterbox_embedding_inputs(requests_to_batch: list[SpeechEmbeddingR
     """
     Prepare inputs for ChatterboxEmbedding model.
 
-    Returns list of raw audio bytes (base64-decoded, no filesystem I/O).
+    Returns list of audio bytes. The bytes are already base64-decoded and
+    normalised at the engine boundary: containers libsndfile can read are
+    passed through untouched, while AAC/MP4/etc. are decoded once and
+    re-wrapped as WAV so Chatterbox reference audio accepts every format the
+    engine advertises.
     """
 
     def prepare(request):
-        # Decode base64 audio to raw bytes
-        audio_bytes = base64.b64decode(request.input_audio)
-        return audio_bytes
+        return _normalize_audio_bytes(request.input_audio, "input_audio")
 
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
@@ -875,8 +912,8 @@ def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestI
         if target_audio is None and target_embedding is None:
             raise ValueError("ChatterboxVC requires either target_audio or target_embedding.")
 
-        # Decode source audio
-        source_bytes = base64.b64decode(request.source_audio)
+        # Decode source audio through the boundary codec (any accepted format)
+        source_bytes = _normalize_audio_bytes(request.source_audio, "source_audio")
 
         # Process target
         target_conditionals = None
@@ -886,8 +923,8 @@ def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestI
             # Deserialize pre-computed Conditionals (safe: weights_only=True)
             target_conditionals = _load_conditionals_payload(target_embedding, "target_embedding")
         else:
-            # Decode target audio bytes
-            target_audio_bytes = base64.b64decode(target_audio)
+            # Decode target audio through the boundary codec as well
+            target_audio_bytes = _normalize_audio_bytes(target_audio, "target_audio")
 
         return source_bytes, target_conditionals, target_audio_bytes
 

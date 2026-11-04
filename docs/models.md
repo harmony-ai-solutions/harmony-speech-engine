@@ -38,6 +38,27 @@ processing time and the precision isn't as good. Reason for this is because they
 but try to actually understand what is being said, which sometimes can also cause hallucinations (e.g. "understanding
 words" in audio which has no speech in it; for example, breathing into a microphone) 
 
+### Native rates and the resample contract
+
+Every model pipeline decodes input audio once at the API boundary and hands the
+model the rate it expects (16 kHz for Faster-Whisper/Silero VAD and the Harmony
+Speech encoder, 44.1 kHz for VoiceFixer, the model's `sampling_rate` for
+OpenVoice/MeloTTS, 24 kHz for Chatterbox). Output audio is produced at the
+model's native rate:
+
+| Model / toolchain | Native output rate |
+|---|---|
+| KittenTTS (all variants) | 24 kHz |
+| Chatterbox TTS / Turbo / Multilingual / VC | 24 kHz |
+| MeloTTS & OpenVoice V2 synthesizer | model config `sampling_rate` |
+| OpenVoice V1 synthesizer | model config `sampling_rate` |
+| Harmony Speech V1 | model config `sampling_rate` |
+| VoiceFixer | 44.1 kHz |
+
+Clients that need a specific rate should set `output_options.sample_rate` (one of
+8000, 16000, 22050, 24000, 32000, 44100, 48000); the engine resamples once with
+SoXR at the API boundary. See the [Audio I/O contract](audio-io-contract.md).
+
 ### Model Types
 - **Native** / **Third-Party** Models: build on top of other Repositories. This is the preferred way of adding new
   models or frameworks to Harmony Speech Engine, since it minimizes implementation effort.

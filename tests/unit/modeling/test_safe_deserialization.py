@@ -28,6 +28,7 @@ from harmonyspeech.common.inputs import (
 )
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.hf_downloader import ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, load_or_download_model
+from tests.audio_fixtures import tiny_wav_bytes
 from harmonyspeech.task_handler.inputs import (
     _load_conditionals_payload,
     prepare_chatterbox_tts_inputs,
@@ -219,7 +220,7 @@ def test_hostile_conditionals_rejected_for_chatterbox_vc(tmp_path):
         request_id="cb-hostile-vc",
         requested_model="chatterbox_vc",
         model="chatterbox_vc",
-        source_audio=_b64(b"source"),
+        source_audio=_b64(tiny_wav_bytes(16000, 0.10)),
         target_audio=None,
         target_embedding=_b64(_hostile_pickle(marker)),
         generation_options=None,

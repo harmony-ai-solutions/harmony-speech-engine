@@ -22,6 +22,12 @@ from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput, TextToSpeec
 from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
+from tests.audio_fixtures import tiny_wav_bytes
+
+# Real (distinct) audio containers: the boundary decoder normalises every
+# reference-audio field, so placeholder bytes would be rejected.
+AUDIO_A = tiny_wav_bytes(16000, 0.10)
+AUDIO_B = tiny_wav_bytes(16000, 0.20)
 
 
 class PairingModel:
@@ -103,8 +109,8 @@ def _tts_params(request: EngineRequest) -> tuple:
 def test_pairs_each_request_with_its_own_audio():
     runner = _make_runner()
     requests = [
-        _tts_request("pair-1", "text-A", b"audio-A"),
-        _tts_request("pair-2", "text-B", b"audio-B"),
+        _tts_request("pair-1", "text-A", AUDIO_A),
+        _tts_request("pair-2", "text-B", AUDIO_B),
     ]
     inputs = [_tts_params(request) for request in requests]
 
@@ -114,22 +120,22 @@ def test_pairs_each_request_with_its_own_audio():
     assert all(r.result_data.finish_reason == "stop" for r in results)
     # The text from the prepared input and the audio from the request must
     # belong to the same iteration/request.
-    assert runner.model.calls == [("text-A", b"audio-A"), ("text-B", b"audio-B")]
+    assert runner.model.calls == [("text-A", AUDIO_A), ("text-B", AUDIO_B)]
 
 
 @pytest.mark.unit
 def test_pairs_each_request_with_its_own_audio_in_shuffled_order():
     runner = _make_runner()
     requests = [
-        _tts_request("pair-2", "text-B", b"audio-B"),
-        _tts_request("pair-1", "text-A", b"audio-A"),
+        _tts_request("pair-2", "text-B", AUDIO_B),
+        _tts_request("pair-1", "text-A", AUDIO_A),
     ]
     inputs = [_tts_params(request) for request in requests]
 
     results = runner._execute_chatterbox_tts(inputs, requests)
 
     assert [r.request_id for r in results] == ["pair-2", "pair-1"]
-    assert runner.model.calls == [("text-B", b"audio-B"), ("text-A", b"audio-A")]
+    assert runner.model.calls == [("text-B", AUDIO_B), ("text-A", AUDIO_A)]
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +146,8 @@ def test_pairs_each_request_with_its_own_audio_in_shuffled_order():
 @pytest.mark.unit
 def test_mixed_embedding_and_tts_batch_dispatches_both_types():
     runner = _make_runner()
-    embed_request = _embed_request("mixed-embed", b"reference")
-    tts_request = _tts_request("mixed-tts", "hello", b"reference")
+    embed_request = _embed_request("mixed-embed", AUDIO_A)
+    tts_request = _tts_request("mixed-tts", "hello", AUDIO_A)
 
     results = runner.execute_model([embed_request, tts_request])
 
@@ -159,8 +165,8 @@ def test_mixed_embedding_and_tts_batch_dispatches_both_types():
 def test_mixed_batch_dispatch_order_is_type_grouped_but_complete():
     """Reversed input order still yields every request exactly once."""
     runner = _make_runner()
-    embed_request = _embed_request("mixed-embed", b"reference")
-    tts_request = _tts_request("mixed-tts", "hello", b"reference")
+    embed_request = _embed_request("mixed-embed", AUDIO_A)
+    tts_request = _tts_request("mixed-tts", "hello", AUDIO_A)
 
     results = runner.execute_model([tts_request, embed_request])
 
@@ -175,7 +181,7 @@ def test_mixed_batch_dispatch_order_is_type_grouped_but_complete():
 @pytest.mark.unit
 def test_handler_rejects_misaligned_inputs():
     runner = _make_runner()
-    request = _tts_request("align-1", "hello", b"audio")
+    request = _tts_request("align-1", "hello", AUDIO_A)
 
     with pytest.raises(AssertionError, match="2 inputs vs 1 requests"):
         runner._execute_chatterbox_tts([_tts_params(request), _tts_params(request)], [request])
@@ -186,8 +192,8 @@ def test_execute_model_converts_misalignment_to_typed_errors():
     """A prepare stage that returns the wrong number of inputs fails closed."""
     runner = _make_runner()
     requests = [
-        _tts_request("align-2", "text-A", b"audio-A"),
-        _tts_request("align-3", "text-B", b"audio-B"),
+        _tts_request("align-2", "text-A", AUDIO_A),
+        _tts_request("align-3", "text-B", AUDIO_B),
     ]
 
     with patch(

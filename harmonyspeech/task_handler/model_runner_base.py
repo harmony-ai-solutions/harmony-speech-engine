@@ -31,6 +31,7 @@ from faster_whisper import BatchedInferencePipeline
 from loguru import logger
 from silero_vad import get_speech_timestamps
 
+from harmonyspeech.common.audio_codec import ensure_librosa_readable_bytes
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import (
@@ -881,7 +882,7 @@ class ModelRunnerBase:
                 self.model.conds = conditionals.to(self.device)
             elif request_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = base64.b64decode(request_audio)
+                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
             else:
@@ -930,7 +931,7 @@ class ModelRunnerBase:
                 self.model.conds = conditionals.to(self.device)
             elif request_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = base64.b64decode(request_audio)
+                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, norm_loudness=norm_loudness)
             else:
@@ -978,7 +979,7 @@ class ModelRunnerBase:
             if conditionals is not None:
                 self.model.conds = conditionals.to(self.device)
             elif request_audio:
-                audio_bytes = base64.b64decode(request_audio)
+                audio_bytes = ensure_librosa_readable_bytes(base64.b64decode(request_audio))
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
             else:

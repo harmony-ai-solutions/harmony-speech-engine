@@ -76,11 +76,23 @@ Update the API docs (`docs/`) for every affected endpoint: `output_options.forma
 
 ## Checklist
 
-- [ ] `encode_audio`/`apply_output_options` implemented with capability-aware whitelist
-- [ ] All audio-returning endpoints validate at admission and convert at response
-- [ ] Default behavior byte-identical (no options = no change)
-- [ ] `pcm` layout + `sample_rate` echo defined and documented
-- [ ] Format matrix tests (incl. ffmpeg-gated skips) passing
-- [ ] API docs updated for all affected endpoints
-- [ ] `CHANGELOG.md` entry (user-visible feature)
-- [ ] `summary.md` Implementation Status updated
+- [x] `encode_audio`/`apply_output_options` implemented with capability-aware whitelist
+- [x] All audio-returning endpoints validate at admission and convert at response
+- [x] Default behavior byte-identical (no options = no change)
+- [x] `pcm` layout + `sample_rate` echo defined and documented
+- [x] Format matrix tests (incl. ffmpeg-gated skips) passing
+- [x] API docs updated for all affected endpoints
+- [x] `CHANGELOG.md` entry (user-visible feature)
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- `harmonyspeech/endpoints/openai/output_encoding.py` holds `validate_output_options()` (returns a message or `None`) and `apply_output_options()` (returns `EncodedAudio(data, format, sample_rate)`).
+- **Capability probe**: `audio_codec.SUPPORTED_OUTPUT_FORMATS` is computed at import from `soundfile.check_format()` plus `FFMPEG_AVAILABLE`; `refresh_output_formats()` re-probes and the API server logs the effective input/output set once at startup. Validation reads the module attribute at call time, so the whitelist is always the runtime truth (and testable by monkeypatching).
+- **Whitelist policy**: `SUPPORTED_SAMPLE_RATES = {8000, 16000, 22050, 24000, 32000, 44100, 48000}` (documented as a policy list, not "anything SoXR accepts"). `format` is matched case-insensitively; `None`/absent means `wav`.
+- **Passthrough**: `opts is None` or (`format` == wav and no `sample_rate`) returns the executor string unchanged (`is` comparison in tests) — no decode, no re-encode.
+- **`pcm`**: base64 of raw mono s16le at the effective rate; the response `sample_rate` field is always set for pcm (explicit rate, otherwise the model rate).
+- **Responses**: `AudioDataResponse` gained `sample_rate: int | None` (additive, optional) — inherited by TTS/VC/AC/synthesis/vocode responses. Non-audio responses are unchanged (asserted).
+- **Admission**: `_check_model` → `validate_output_options` → (TTS) `stream` rejection → `engine.generate`. `stream=true` moved before generation so no synthesis is queued for it.
+- **aac** is only in the whitelist when ffmpeg is present; `encode_audio()` re-checks `FFMPEG_AVAILABLE` and raises a clear `ValueError` otherwise.
+- **Tests**: `tests/unit/wire_contract/test_output_encoding.py` (unit) and endpoint-level cases in `test_multipart.py` (passthrough identity, conversions, pcm, 400-at-admission with engine-not-called assertion), plus the e2e matrix.

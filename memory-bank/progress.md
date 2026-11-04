@@ -6,6 +6,19 @@
 **Overall Completion**: ~75%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 1 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 1 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **1-1 Boundary audio decoder** — `harmonyspeech/common/audio_codec.py` sniffs → decodes with libsndfile → falls back to an optional ffmpeg subprocess → raises typed `AudioDecodeError`. Every `librosa.load` boundary decode in `task_handler/inputs.py` now goes through it, and Chatterbox reference audio accepts mp3/aac too. SoXR resampling (`soxr` pinned).
+- ✅ **1-2 Output format & sample rate** — `output_options` is validated at admission (400 before synthesis) and applied once at the response boundary; default path is byte-identical WAV passthrough. `pcm` (raw s16le) and `aac` (ffmpeg-only) supported; responses echo the effective `sample_rate`.
+- ✅ **1-3 Binary input envelope** — every audio-input endpoint accepts OpenAI-style `multipart/form-data` uploads on the same path via content-type dispatch, JSON stays primary for `/v1/audio/speech`; configurable upload limit returns 413.
+- ✅ **1-4 Wire-contract tests & docs** — parametrized contract matrix (input × transport × output), `docs/audio-io-contract.md`, README/CHANGELOG/CONCERNS updates.
+
+**Verification**: 281 unit + 23 integration green; wire-contract e2e matrix (38 passed / 3 skipped without model weights). Real-model e2e remains manual (`HSE_E2E_MODEL_TESTS=1`).
+
+**Next**: Phase 2 — artifact bus (typed intermediates, decode once per request).
+
 ## Engine Modernization — Phase 0 (COMPLETE, 2026-11-04)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 0 of a 6-phase modernization; `summary.md` tracks all phases)
@@ -17,7 +30,7 @@
 - ✅ **0-5 Timeouts & health** — per-request deadlines (`request_timeout_s`), recoverable loop watchdog with consecutive-trip escalation, structured `check_health` payload.
 - ✅ **0-6 Exit review** — unit (162) and integration (23) suites green; E2E (39) collects but requires model downloads (manual verification outstanding).
 
-**Next**: Phase 1 — wire contract (boundary audio decoder, output format/sample-rate honoring, binary input envelope).
+**Next**: Phase 2 — artifact bus (typed intermediates between pipeline steps).
 
 ## Core System Components
 

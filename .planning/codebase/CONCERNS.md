@@ -238,9 +238,10 @@ The engine hosts every model in a YAML config as a permanently resident executor
 ### Base64 JSON Transport Overhead
 
 - **Problem:** Every audio field is a base64 string inside JSON: inputs (`input_audio`, `source_audio`, `target_audio`, `input_mel_spectrogram`, `input_embedding`) and outputs (`data`). Each direction costs ~33% size inflation plus JSON escaping, a full string copy in Pydantic, a decode to `bytes`, a `BytesIO` wrapper, and often a `librosa.load` into float32. WAV is written to `BytesIO` and re-encoded to base64 for every response.
-- **Files:** `harmonyspeech/endpoints/openai/protocol.py:156-182,191-197`, `harmonyspeech/task_handler/inputs.py:245-523,827-876`, `harmonyspeech/task_handler/model_runner_base.py:658-663,702-707,744-749,788-793,868-873`, `harmonyspeech/endpoints/openai/api_server.py:144-153`
+- **Status (Phase 1, 2026-11-04):** all audio-input endpoints now accept `multipart/form-data` file uploads on the same path (content-type dispatch) and requests are size-limited (413). The decoder is centralized (`common/audio_codec.py`) so a `from_wire()`/`to_wire()` seam already exists. Remaining: the in-process base64 round-trip for multipart bodies and the base64 JSON responses (both removed by the Phase 2 artifact bus / binary responses).
+- **Files:** `harmonyspeech/endpoints/openai/protocol.py`, `harmonyspeech/endpoints/openai/request_envelope.py`, `harmonyspeech/common/audio_codec.py`, `harmonyspeech/task_handler/inputs.py`
 - **Impact:** Higher latency and memory per request, no ability to stream or range-request, and no zero-copy path between HTTP and model. Long-form audio (minutes) produces multi-megabyte JSON responses.
-- **Improvement path:** Accept `multipart/form-data` or raw `application/octet-stream` for inputs and return `audio/wav` (or negotiated format) with `Content-Disposition`; keep base64 only as a compatibility mode.
+- **Improvement path:** Return `audio/wav` (or negotiated format) with `Content-Disposition`, and pass typed artifacts between steps (Phase 2); keep base64 only as a compatibility mode.
 
 ### GIL and Threading Model
 
@@ -383,11 +384,11 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Files:** `harmonyspeech/endpoints/openai/serving_text_to_speech.py:60-64`, `harmonyspeech/endpoints/openai/api_server.py:150-153,191-194,210-213,229-232,248-251`
 - **Blocks:** Real-time voice agents, low time-to-first-audio, and playback before full synthesis. Chatterbox and MeloTTS must finish the entire utterance first.
 
-### Output Format and Sample Rate Selection
+### Output Format and Sample Rate Selection (RESOLVED — Phase 1)
 
-- **Problem:** `output_options.format` (`wav`, `mp3`, `flac`) and `output_options.sample_rate` are accepted and documented but never read. Every response is a model-native-rate WAV encoded as base64; `docs/api.md:74-80` explicitly promises format and resampling.
-- **Files:** `harmonyspeech/endpoints/openai/protocol.py:92-95`, `harmonyspeech/common/inputs.py:38-41`, `harmonyspeech/task_handler/model_runner_base.py` (all `sf.write(..., format="WAV")` sites)
-- **Blocks:** Bandwidth-sensitive clients, browser playback of non-WAV formats, consistent sample rates across models.
+- **Former problem:** `output_options.format` and `output_options.sample_rate` were accepted and documented but never read.
+- **Status (Phase 1, 2026-11-04):** implemented at the API boundary. `output_options` is validated at admission (400 before synthesis) and applied once at response time (`harmonyspeech/endpoints/openai/output_encoding.py`). Supported: `wav` (byte-identical passthrough), `flac`, `ogg`, `mp3`, `opus`, `pcm` (raw s16le) and `aac` when ffmpeg is present; sample rates 8000–48000. `docs/audio-io-contract.md` documents the contract. Covered by `tests/unit/wire_contract/` and `tests/e2e/wire_contract/test_contract_matrix.py`.
+- **Remaining:** `stream=true` is still rejected (see "TTS Streaming").
 
 ### Pre-/Post-Processing Filters
 
@@ -431,7 +432,7 @@ The suite has 224 test functions (162 unit, 23 integration, 39 E2E) and runs CPU
 | Voice state leakage | Sequential voice-cloning → `single_speaker_tts` requests on one model — **covered by `tests/unit/inference_flow/test_chatterbox_state_isolation.py`** (Phase 0-2) | `harmonyspeech/task_handler/model_runner_base.py:683-700` | Wrong speaker audio, privacy issue | High |
 | Auth and rate limiting | `auth/apikeys.py` middleware, cache expiry, `ENDPOINT_URL` unset/empty | `auth/apikeys.py`, `harmonyspeech/endpoints/openai/api_server.py:304-348` | Bypass or 500s in production | High |
 | Streaming/rejection contract | No test sends `stream=true`; the 400 path is unverified | `serving_text_to_speech.py:60-64` | Feature gaps untracked | Medium |
-| Output options | `format`/`sample_rate` ignored; no test asserts behavior or rejects unsupported values | `protocol.py`, `model_runner_base.py` | Silent contract violation | Medium |
+| Output options | `format`/`sample_rate` now validated at admission and applied at response — **covered by `tests/unit/wire_contract/` and `tests/e2e/wire_contract/test_contract_matrix.py`** (Phase 1) | `harmonyspeech/endpoints/openai/output_encoding.py` | Silent contract violation | Medium |
 | Scheduler edge cases | Unknown model → infinite wait; budget accounting; abort during forward — **unknown-model hang covered by `tests/unit/error_handling/test_unresolvable_routing.py`** (Phase 0-4); abort-during-forward still untested | `harmonyspeech/processing/scheduler.py`, `harmonyspeech/engine/harmonyspeech_engine.py:363-506` | Stuck requests, leaked slots | Medium |
 | Engine timeout/death | `ENGINE_ITERATION_TIMEOUT_S` path, `AsyncEngineDeadError` recovery — **covered by `tests/unit/error_handling/test_request_timeouts.py`** (Phase 0-5) | `harmonyspeech/engine/async_harmonyspeech.py:375-383` | Full outage from one slow request | Medium |
 | Chatterbox compatibility patches | `torch.load` patch, watermark fallback, dtype patches | `harmonyspeech/modeling/models/chatterbox/chatterbox.py:28-189` | Silent behavior drift on dependency upgrade | Medium |
@@ -462,9 +463,9 @@ Also untested by design: E2E suites download real weights and are split across s
 
 11. **Implement real batching or stop advertising it.** Either batch tensors per model or force `max_batch_size: 1` and expose concurrency; delete the stale `gpu_model_runner.py` CUDA-graph block.
 12. **Add TTS streaming** (chunked audio over `StreamingResponse` or SSE) and make `stream=true` meaningful.
-13. **Honor or reject `format`/`sample_rate`/filters** — no silent acceptance (`protocol.py:92-95,177-182`).
-14. **Add binary/multipart audio transport** alongside base64 to cut 33% overhead and copies.
-15. **Add request size and duration limits** to protect memory.
+13. ~~**Honor or reject `format`/`sample_rate`/filters** — no silent acceptance.~~ **Done (Phase 1)** for `format`/`sample_rate`; filters are still ahead (pre/post-processing workstream).
+14. ~~**Add binary/multipart audio transport** alongside base64 to cut 33% overhead and copies.~~ **Done (Phase 1)** for inputs on all audio endpoints.
+15. ~~**Add request size and duration limits** to protect memory.~~ **Done (Phase 1)** for upload size (`--max-upload-size-mb`, 413); audio *duration* limits remain open.
 
 ### Priority 4 — Dependency and Test Hygiene
 

@@ -16,6 +16,7 @@ import pytest
 from harmonyspeech.common.inputs import TextToSpeechGenerationOptions
 from harmonyspeech.endpoints.openai.protocol import GenerationOptions
 from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
+from tests.audio_fixtures import tiny_wav_bytes
 
 # --- Prepare function imports (available after Plan 02) ---
 try:
@@ -258,12 +259,13 @@ def test_multilingual_rejects_top_k():
 
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_embedding_inputs_returns_bytes():
-    """prepare_chatterbox_embedding_inputs returns raw audio bytes (base64-decoded)."""
-    raw_audio = b"fake_wav_data"
+    """prepare_chatterbox_embedding_inputs returns boundary-normalised audio bytes."""
+    raw_audio = tiny_wav_bytes()
     encoded = base64.b64encode(raw_audio).decode()
     req = _make_embedding_request(input_audio=encoded)
     results = prepare_chatterbox_embedding_inputs([req])
     assert len(results) == 1
+    # A native container (WAV) is passed through untouched.
     assert results[0] == raw_audio
 
 
@@ -293,8 +295,8 @@ def test_vc_conflict_neither():
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_vc_with_target_audio_returns_correct_tuple():
     """prepare_chatterbox_vc_inputs returns (source_bytes, None, target_bytes) when target_audio provided."""
-    source = b"source_audio"
-    target = b"target_audio"
+    source = tiny_wav_bytes(16000, 0.10)
+    target = tiny_wav_bytes(16000, 0.20)
     req = _make_vc_request(
         source_audio=base64.b64encode(source).decode(),
         target_audio=base64.b64encode(target).decode(),

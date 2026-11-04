@@ -20,6 +20,7 @@ import harmonyspeech
 
 # Harmony Auth
 from auth.apikeys import ApiKeyCacheManager
+from harmonyspeech.common import audio_codec
 from harmonyspeech.common.config import EngineConfig
 from harmonyspeech.common.logger import UVICORN_LOG_CONFIG
 from harmonyspeech.endpoints.openai.args import make_arg_parser
@@ -45,6 +46,12 @@ from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingT
 from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
+from harmonyspeech.endpoints.openai.request_envelope import (
+    UploadTooLargeError,
+    dual_body_openapi,
+    parse_dual_request,
+    resolve_max_upload_bytes,
+)
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -63,6 +70,30 @@ openai_serving_vad: OpenAIServingVoiceActivityDetection = None
 openai_serving_ac: OpenAIServingAudioConversion = None
 
 router = APIRouter()
+
+# Upload part names accepted per request-model field, in priority order. The
+# first entry is the canonical/documented name; the aliases keep OpenAI-style
+# `curl -F file=@audio.mp3` clients working without a second route.
+_TTS_UPLOAD_FIELDS = {"input_audio": ("input_audio", "file", "audio")}
+_AUDIO_UPLOAD_FIELDS = {"input_audio": ("file", "audio", "input_audio")}
+_VC_UPLOAD_FIELDS = {
+    "source_audio": ("source_audio", "file", "audio"),
+    "target_audio": ("target_audio",),
+}
+_AC_UPLOAD_FIELDS = {"source_audio": ("source_audio", "file", "audio")}
+
+_REFERENCE_AUDIO_DOC = "Reference audio file (wav/flac/ogg/mp3/aac…), sent as a file part"
+_SOURCE_AUDIO_DOC = "Source audio file (wav/flac/ogg/mp3/aac…), sent as a file part"
+
+_TTS_UPLOAD_DOCS = {"input_audio": _REFERENCE_AUDIO_DOC, "file": "Alias for `input_audio`"}
+_AUDIO_UPLOAD_DOCS = {"input_audio": _SOURCE_AUDIO_DOC, "file": "Alias for `input_audio`", "audio": "Alias for `input_audio`"}
+_VC_UPLOAD_DOCS = {
+    "source_audio": _SOURCE_AUDIO_DOC,
+    "file": "Alias for `source_audio`",
+    "audio": "Alias for `source_audio`",
+    "target_audio": _REFERENCE_AUDIO_DOC,
+}
+_AC_UPLOAD_DOCS = {"source_audio": _SOURCE_AUDIO_DOC, "file": "Alias for `source_audio`", "audio": "Alias for `source_audio`"}
 
 
 @asynccontextmanager
@@ -161,9 +192,19 @@ async def show_version(x_api_key: str | None = Header(None)):
 
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createSpeech
-@router.post("/v1/audio/speech", response_model=TextToSpeechResponse)
-async def create_speech(request: TextToSpeechRequest, raw_request: Request, x_api_key: str | None = Header(None)):
-    """Generate speech Audio from text."""
+@router.post(
+    "/v1/audio/speech",
+    response_model=TextToSpeechResponse,
+    openapi_extra=dual_body_openapi(TextToSpeechRequest, _TTS_UPLOAD_DOCS),
+)
+async def create_speech(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Generate speech Audio from text.
+
+    Accepts a JSON body (primary, OpenAI-style) or a multipart/form-data body
+    for voice cloning, where the reference audio is uploaded as a file part
+    instead of base64 inside JSON.
+    """
+    request = await parse_dual_request(raw_request, TextToSpeechRequest, upload_fields=_TTS_UPLOAD_FIELDS)
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -180,9 +221,17 @@ async def show_available_speech_models(x_api_key: str | None = Header(None)):
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/embed/speaker", response_model=EmbedSpeakerResponse)
-async def create_embedding(request: EmbedSpeakerRequest, raw_request: Request, x_api_key: str | None = Header(None)):
-    """Create a speaker embedding."""
+@router.post(
+    "/v1/embed/speaker",
+    response_model=EmbedSpeakerResponse,
+    openapi_extra=dual_body_openapi(EmbedSpeakerRequest, _AUDIO_UPLOAD_DOCS),
+)
+async def create_embedding(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Create a speaker embedding.
+
+    Accepts a JSON body or a multipart/form-data upload (`file`/`audio`/`input_audio`).
+    """
+    request = await parse_dual_request(raw_request, EmbedSpeakerRequest, upload_fields=_AUDIO_UPLOAD_FIELDS)
     generator = await openai_serving_embedding.create_voice_embedding(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -200,11 +249,18 @@ async def show_available_embedding_models(x_api_key: str | None = Header(None)):
 
 
 # Based on: https://platform.openai.com/docs/api-reference/audio/createTranscription
-@router.post("/v1/audio/transcriptions", response_model=SpeechToTextResponse)
-async def create_transcription(
-    request: SpeechTranscribeRequest, raw_request: Request, x_api_key: str | None = Header(None)
-):
-    """Create a transcription from audio."""
+@router.post(
+    "/v1/audio/transcriptions",
+    response_model=SpeechToTextResponse,
+    openapi_extra=dual_body_openapi(SpeechTranscribeRequest, _AUDIO_UPLOAD_DOCS),
+)
+async def create_transcription(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Create a transcription from audio.
+
+    Accepts the OpenAI-style multipart upload (`file=@audio.mp3`) or a JSON body
+    with base64 `input_audio` (legacy alternative).
+    """
+    request = await parse_dual_request(raw_request, SpeechTranscribeRequest, upload_fields=_AUDIO_UPLOAD_FIELDS)
     generator = await openai_serving_stt.create_transcription(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -221,9 +277,18 @@ async def show_available_transcription_models(x_api_key: str | None = Header(Non
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/voice/convert", response_model=VoiceConversionResponse)
-async def convert_voice(request: VoiceConversionRequest, raw_request: Request, x_api_key: str | None = Header(None)):
-    """Convert the voice in an audio file or stream to a desired target voice."""
+@router.post(
+    "/v1/voice/convert",
+    response_model=VoiceConversionResponse,
+    openapi_extra=dual_body_openapi(VoiceConversionRequest, _VC_UPLOAD_DOCS),
+)
+async def convert_voice(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Convert the voice in an audio file or stream to a desired target voice.
+
+    Accepts multipart uploads (`source_audio`/`file` plus optional
+    `target_audio`) or a JSON body with base64 audio fields.
+    """
+    request = await parse_dual_request(raw_request, VoiceConversionRequest, upload_fields=_VC_UPLOAD_FIELDS)
     generator = await openai_serving_vc.convert_voice(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -240,9 +305,17 @@ async def show_available_voice_conversion_models(x_api_key: str | None = Header(
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/audio/vad", response_model=DetectVoiceActivityResponse)
-async def create_vad(request: DetectVoiceActivityRequest, raw_request: Request, x_api_key: str | None = Header(None)):
-    """Create a vad from audio."""
+@router.post(
+    "/v1/audio/vad",
+    response_model=DetectVoiceActivityResponse,
+    openapi_extra=dual_body_openapi(DetectVoiceActivityRequest, _AUDIO_UPLOAD_DOCS),
+)
+async def create_vad(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Detect voice activity in audio.
+
+    Accepts a multipart upload (`file`/`audio`/`input_audio`) or a JSON body.
+    """
+    request = await parse_dual_request(raw_request, DetectVoiceActivityRequest, upload_fields=_AUDIO_UPLOAD_FIELDS)
     generator = await openai_serving_vad.check_voice_activity(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -259,9 +332,17 @@ async def show_available_vad_models(x_api_key: str | None = Header(None)):
     return JSONResponse(content=models.model_dump())
 
 
-@router.post("/v1/audio/convert", response_model=AudioConversionResponse)
-async def convert_audio(request: AudioConversionRequest, raw_request: Request, x_api_key: str | None = Header(None)):
-    """Create a vad from audio."""
+@router.post(
+    "/v1/audio/convert",
+    response_model=AudioConversionResponse,
+    openapi_extra=dual_body_openapi(AudioConversionRequest, _AC_UPLOAD_DOCS),
+)
+async def convert_audio(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Convert/restore audio.
+
+    Accepts a multipart upload (`source_audio`/`file`) or a JSON body.
+    """
+    request = await parse_dual_request(raw_request, AudioConversionRequest, upload_fields=_AC_UPLOAD_FIELDS)
     generator = await openai_serving_ac.convert_audio(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
@@ -294,6 +375,16 @@ def build_app(args):
     app.include_router(router)
     app.root_path = args.root_path
 
+    # Upload/request size guard for multipart audio uploads (and any oversized
+    # JSON body). Configurable per deployment.
+    max_upload_mb = getattr(args, "max_upload_size_mb", None)
+    if max_upload_mb is None:
+        try:
+            max_upload_mb = int(os.environ.get("HARMONYSPEECH_MAX_UPLOAD_MB", 50))
+        except ValueError:
+            max_upload_mb = 50
+    app.state.max_upload_bytes = int(max_upload_mb) * 1024 * 1024
+
     # Custom OpenAPI schema generation for Official clients
     default_schema = app.openapi
 
@@ -320,6 +411,37 @@ def build_app(args):
     async def validation_exception_handler(_, exc):
         err = openai_serving_tts.create_error_response(message=str(exc))
         return JSONResponse(err.model_dump(), status_code=HTTPStatus.BAD_REQUEST)
+
+    @app.exception_handler(UploadTooLargeError)
+    async def upload_too_large_handler(_, exc):
+        err = ErrorResponse(
+            message=str(exc),
+            type="PayloadTooLargeError",
+            code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE.value,
+        )
+        return JSONResponse(err.model_dump(), status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+
+    @app.middleware("http")
+    async def enforce_upload_size(request: Request, call_next):
+        if request.method in ("POST", "PUT", "PATCH"):
+            limit = resolve_max_upload_bytes(request.app)
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    declared = int(content_length)
+                except ValueError:
+                    declared = 0
+                if declared > limit:
+                    err = ErrorResponse(
+                        message=(
+                            f"Request body of {declared} bytes exceeds the maximum upload size "
+                            f"of {limit // (1024 * 1024)} MiB."
+                        ),
+                        type="PayloadTooLargeError",
+                        code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE.value,
+                    )
+                    return JSONResponse(err.model_dump(), status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        return await call_next(request)
 
     if token := os.environ.get("HARMONYSPEECH_API_KEY") or args.api_keys:
         admin_key = os.environ.get("HARMONYSPEECH_ADMIN_KEY") or args.admin_key
@@ -423,6 +545,14 @@ def run_server(args):
         engine, OpenAIServingAudioConversion.models_from_config(engine_config.model_configs)
     )
     # TODO: Init other Endpoint serving classes here
+
+    audio_codec.refresh_output_formats()
+    logger.info(
+        "Audio I/O contract — input formats: {} (ffmpeg fallback: {}); output formats: {}",
+        ", ".join(sorted(audio_codec.SUPPORTED_INPUT_FORMATS)),
+        "available" if audio_codec.FFMPEG_AVAILABLE else "unavailable",
+        ", ".join(sorted(audio_codec.SUPPORTED_OUTPUT_FORMATS)),
+    )
 
     try:
         uvicorn.run(

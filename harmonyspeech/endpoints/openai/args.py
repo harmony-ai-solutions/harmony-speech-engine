@@ -37,6 +37,13 @@ def make_arg_parser(parser=None):
         "--root-path", type=str, default=None, help="FastAPI root_path when app is behind a path based routing proxy"
     )
     parser.add_argument(
+        "--max-upload-size-mb",
+        type=int,
+        default=None,
+        help="Maximum accepted request/upload size in MiB (default: 50, or HARMONYSPEECH_MAX_UPLOAD_MB). "
+        "Larger multipart audio uploads are rejected with HTTP 413.",
+    )
+    parser.add_argument(
         "--middleware",
         type=str,
         action="append",

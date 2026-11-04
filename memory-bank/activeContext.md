@@ -8,6 +8,17 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 1 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phase 0 (correctness & security) and Phase 1 (wire contract) are complete; Phases 2–6 are queued per `summary.md`.
+
+- Centralized boundary decoder (`common/audio_codec.py`): sniff → libsndfile → optional ffmpeg → typed `AudioDecodeError`; SoXR resample; all `inputs.py` decode sites migrated; Chatterbox reference audio accepts mp3/aac.
+- `output_options.format`/`sample_rate` are now real: admission-time 400, response-time conversion, byte-identical default passthrough, `pcm` s16le and ffmpeg-gated `aac`, `sample_rate` echo field.
+- Multipart uploads on all six audio-input endpoints (content-type dispatch on the same path), JSON remains primary for `/v1/audio/speech`, configurable size limit → 413.
+- Docs: `docs/audio-io-contract.md`; contract-matrix tests in `tests/e2e/wire_contract/` plus unit coverage in `tests/unit/wire_contract/`.
+
+Next up when work resumes: Phase 2 — artifact bus (typed intermediates between pipeline steps).
+
 ### Engine Modernization — Phase 0 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization of the engine internals. Phase 0 (Correctness & security foundation) is complete; Phases 1–5 are queued per `summary.md`.
@@ -18,7 +29,7 @@
 - Declarative model-toolchain registry with startup validation; unresolvable routing now resolves as an error instead of hanging.
 - Per-request deadlines, a recoverable engine-loop watchdog, and a structured health payload.
 
-Next up when work resumes: Phase 1 — wire contract (input decode & output formats).
+Next up when work resumes: Phase 2 — artifact bus (typed intermediates between pipeline steps).
 
 ### Chatterbox TTS Integration (MAJOR FEATURE - COMPLETE)
 

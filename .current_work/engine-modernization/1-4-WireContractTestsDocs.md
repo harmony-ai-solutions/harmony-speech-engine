@@ -43,8 +43,53 @@ Assert: HTTP status, decodable output at expected format/rate, error cases (400 
 
 ## Checklist
 
-- [ ] Contract-matrix e2e test exists and passes (with documented ffmpeg-gated skips)
-- [ ] "Audio I/O contract" docs page written and linked
-- [ ] README + CHANGELOG updated
-- [ ] memory-bank + CONCERNS updated
-- [ ] Full suite recorded; Phase 1 ticked in summary.md
+- [x] Contract-matrix e2e test exists and passes (with documented ffmpeg-gated skips)
+- [x] "Audio I/O contract" docs page written and linked
+- [x] README + CHANGELOG updated
+- [x] memory-bank + CONCERNS updated
+- [x] Full suite recorded; Phase 1 ticked in summary.md
+
+## Implementation notes & test record (2026-11-04)
+
+### Contract matrix
+
+`tests/e2e/wire_contract/test_contract_matrix.py` runs against the real FastAPI app with a
+boundary-decoding FakeEngine (`tests/wire_contract_support.py`), so transports/codecs/formats are
+verified without model downloads:
+
+- input formats {wav, flac, mp3, aac*} × transports {json, multipart} × {transcriptions, speech cloning}
+- output formats {default, wav, flac, ogg, mp3, pcm, aac*} × sample rates {none, 16000, 44100, 24000}
+  for `/v1/audio/speech`, plus {flac, mp3, pcm}@16k for `/v1/voice/convert` and `/v1/audio/convert`
+- errors: 400 on unsupported format/sample rate, 400 on garbage audio over both transports, 413 on oversized uploads
+- aac cases are gated on `audio_codec.FFMPEG_AVAILABLE` (`*`) and skip cleanly without ffmpeg
+
+Real-weight cases (`NEEDS_MODELS`, e.g. FasterWhisper on mp3/aac and KittenTTS flac@16k) are
+`skipif`-guarded behind `HSE_E2E_MODEL_TESTS=1` and did **not** run here (no model downloads in this
+task); they remain manual verification.
+
+### Results on this machine (ffmpeg 8.0 on PATH)
+
+| Suite | Result |
+|---|---|
+| `pytest tests/unit -q` | **281 passed** (162 baseline + 119 new) |
+| `pytest tests/integration -q` | **23 passed** |
+| `pytest tests/e2e/wire_contract -q` | **38 passed, 3 skipped** (skips = real-model cases) |
+
+### Documentation
+
+- New `docs/audio-io-contract.md` (transports, curl examples, input format matrix, output options,
+  `pcm` layout, sample-rate policy, error behavior), linked from `docs/api.md`.
+- `docs/api.md`: AudioOutputOptions rewritten, transport/format sections added, multipart examples
+  for all six audio endpoints.
+- `docs/models.md`: native output rates section.
+- `README.md`: audio I/O feature note. `CHANGELOG.md`: user-facing entries.
+- `memory-bank/{progress,activeContext}.md` updated; `CONCERNS.md` retired the "output options
+  ignored" finding and marked multipart/size-limit items done.
+
+### Deviations
+
+- The full e2e suite still requires model downloads, so it was not executed here; only the new
+  wire-contract e2e module (transport/format logic with mocked responses) plus the unit/integration
+  suites were run. Real-model contract cases are skipped by default.
+- Garbage-audio typed errors are asserted through the boundary-decoding FakeEngine (unit level);
+  with model weights available the same path is exercised by the `NEEDS_MODELS` cases.

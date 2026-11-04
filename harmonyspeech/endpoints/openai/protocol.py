@@ -90,8 +90,20 @@ class GenerationOptions(BaseModel):
 
 
 class AudioOutputOptions(BaseModel):
-    format: str | None = "wav"
-    sample_rate: int | None = None
+    format: str | None = Field(
+        default="wav",
+        description=(
+            "Output audio container/codec: wav (default), flac, ogg, mp3, opus, pcm (raw s16le) "
+            "or aac (only when ffmpeg is available on the server). Unsupported values are rejected with HTTP 400."
+        ),
+    )
+    sample_rate: int | None = Field(
+        default=None,
+        description=(
+            "Resample the output to this rate in Hz. Supported: 8000, 16000, 22050, 24000, 32000, 44100, 48000. "
+            "When omitted the model's native rate is kept."
+        ),
+    )
     stream: bool | None = False
 
 
@@ -195,6 +207,13 @@ class AudioDataResponse(BaseResponse):
     """
 
     data: str = Field(default="", description="Audio Bytes in requested format of the initial request")
+    sample_rate: int | None = Field(
+        default=None,
+        description=(
+            "Effective sample rate of `data` in Hz. Set when the engine re-encoded or resampled the output "
+            "(for example `pcm` output, or any explicit sample_rate); omitted for unchanged WAV passthrough."
+        ),
+    )
 
 
 class TextToSpeechResponse(AudioDataResponse):

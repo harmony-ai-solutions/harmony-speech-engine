@@ -6,6 +6,8 @@ torchlibrosa
 pydantic
 fastapi
 uvicorn
+# Required by FastAPI/Starlette to parse multipart/form-data audio uploads
+python-multipart
 loguru
 prometheus_client
 psutil
@@ -38,6 +40,8 @@ unidic-lite
 pykakasi
 unidecode
 soundfile
+# High-quality, fast resampling at the audio boundary (see harmonyspeech/common/audio_codec.py)
+soxr
 faster-whisper>=1.1.0
 eng_to_ipa
 fugashi

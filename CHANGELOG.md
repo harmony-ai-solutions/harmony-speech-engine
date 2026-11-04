@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### New Features
+
+*   **Output format and sample rate are now honored**: `output_options.format` (`wav`, `flac`, `ogg`, `mp3`, `opus`, `pcm`, and `aac` when ffmpeg is installed) and `output_options.sample_rate` are applied at the API boundary for speech, voice-conversion and audio-conversion endpoints. Invalid values are rejected before synthesis instead of being silently ignored. Responses now report the effective `sample_rate` when the audio was converted.
+*   **Raw PCM output**: `format: "pcm"` returns base64-encoded signed 16-bit little-endian mono samples for clients that decode audio themselves.
+*   **Broader audio input support**: WAV, FLAC, OGG and MP3 are decoded natively, and AAC/M4A/WebM/AMR are accepted when ffmpeg is available. This applies to every audio input, including Chatterbox voice-cloning reference audio.
+*   **Multipart audio uploads**: every audio-input endpoint now also accepts `multipart/form-data` file uploads (OpenAI-style `file=@audio.mp3`) on the same path, alongside the existing JSON/base64 bodies. Oversized requests are rejected with HTTP 413, configurable via `--max-upload-size-mb` or `HARMONYSPEECH_MAX_UPLOAD_MB` (default 50 MiB).
+*   **Clear decode errors**: undecodable audio now produces a descriptive HTTP 400 naming the request field, the detected container and the supported formats.
+
 ### Security
 
 *   **Hardened payload deserialization**:

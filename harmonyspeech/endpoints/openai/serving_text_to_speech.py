@@ -8,6 +8,7 @@ from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechSynthesisRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.utils import random_uuid
+from harmonyspeech.endpoints.openai.output_encoding import apply_output_options, validate_output_options
 from harmonyspeech.endpoints.openai.protocol import ErrorResponse, ModelCard, TextToSpeechRequest, TextToSpeechResponse
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
@@ -48,6 +49,18 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         if error_check_model is not None:
             return error_check_model
 
+        # Validate output_options at admission: never start synthesis for a
+        # format/sample-rate combination this runtime cannot produce.
+        error_check_options = validate_output_options(request.output_options)
+        if error_check_options is not None:
+            return self.create_error_response(error_check_options)
+
+        if request.output_options and request.output_options.stream:
+            # TODO: Add Stream Output
+            error = "Stream output is not yet supported"
+            logger.error(error)
+            return self.create_error_response(error)
+
         # TODO: Basic checks for TTS Generate request
 
         request_id = f"tts-{random_uuid()}"
@@ -57,17 +70,11 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             request_data=TextToSpeechRequestInput.from_openai(request_id=request_id, request=request),
         )
 
-        if request.output_options and request.output_options.stream:
-            # TODO: Add Stream Output
-            error = "Stream output is not yet supported"
-            logger.error(error)
-            return self.create_error_response(error)
-        else:
-            try:
-                return await self.text_to_speech_full_generator(request, raw_request, result_generator, request_id)
-            except ValueError as e:
-                # TODO: Use an aphrodite-specific Validation Error
-                return self.create_error_response(str(e))
+        try:
+            return await self.text_to_speech_full_generator(request, raw_request, result_generator, request_id)
+        except ValueError as e:
+            # TODO: Use an aphrodite-specific Validation Error
+            return self.create_error_response(str(e))
 
     async def text_to_speech_full_generator(
         self,
@@ -101,6 +108,13 @@ class OpenAIServingTextToSpeech(OpenAIServing):
                 f"Expected TextToSpeechRequestOutput or SpeechSynthesisRequestOutput, got {type(final_res).__name__}"
             )
 
-        response = TextToSpeechResponse(id=request_id, created=created_time, model=model_name, data=audio_data)
+        encoded = apply_output_options(audio_data, request.output_options)
+        response = TextToSpeechResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            data=encoded.data,
+            sample_rate=encoded.sample_rate,
+        )
 
         return response

@@ -40,11 +40,11 @@ Track the completion of each phase as implementation progresses:
   - [x] Startup validation & no-hang guarantees — [0-4-StartupValidationNoHang.md](0-4-StartupValidationNoHang.md)
   - [x] Timeouts & health — [0-5-TimeoutsAndHealth.md](0-5-TimeoutsAndHealth.md)
   - [x] Phase 0 exit review — [0-6-Phase0ExitReview.md](0-6-Phase0ExitReview.md)
-- [ ] **Phase 1: Wire contract — input decode & output formats**
-  - [ ] Boundary audio decoder — [1-1-BoundaryAudioDecoder.md](1-1-BoundaryAudioDecoder.md)
-  - [ ] Output format & sample-rate honoring — [1-2-OutputFormatSampleRate.md](1-2-OutputFormatSampleRate.md)
-  - [ ] Binary input envelope (multipart) — [1-3-BinaryInputEnvelope.md](1-3-BinaryInputEnvelope.md)
-  - [ ] Wire-contract tests & docs — [1-4-WireContractTestsDocs.md](1-4-WireContractTestsDocs.md)
+- [x] **Phase 1: Wire contract — input decode & output formats** — **COMPLETE 2026-11-04** (unit 281 / integration 23 green; wire-contract e2e 38 passed / 3 skipped without model weights; real-model e2e run outstanding).
+  - [x] Boundary audio decoder — [1-1-BoundaryAudioDecoder.md](1-1-BoundaryAudioDecoder.md)
+  - [x] Output format & sample-rate honoring — [1-2-OutputFormatSampleRate.md](1-2-OutputFormatSampleRate.md)
+  - [x] Binary input envelope (multipart) — [1-3-BinaryInputEnvelope.md](1-3-BinaryInputEnvelope.md)
+  - [x] Wire-contract tests & docs — [1-4-WireContractTestsDocs.md](1-4-WireContractTestsDocs.md)
 - [ ] **Phase 2: Artifact bus**
   - [ ] Artifact type system — [2-1-ArtifactTypeSystem.md](2-1-ArtifactTypeSystem.md)
   - [ ] Artifact fields & prepare_inputs — [2-2-ArtifactFieldsAndPrepareInputs.md](2-2-ArtifactFieldsAndPrepareInputs.md)

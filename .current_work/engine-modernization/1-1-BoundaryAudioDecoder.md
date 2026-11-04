@@ -97,10 +97,19 @@ For the Chatterbox raw-bytes path (`:827-876`): decode via `decode_audio` (no ta
 
 ## Checklist
 
-- [ ] `audio_codec.py` implemented with sniff → soundfile → ffmpeg → typed error chain
-- [ ] All `inputs.py` boundary decodes replaced; per-step semantics otherwise unchanged
-- [ ] Chatterbox reference audio accepts mp3/aac via the same path
-- [ ] soxr/dependency decision made and pinned
-- [ ] Fixtures + unit tests added; ffmpeg-optional tests skip cleanly
-- [ ] Input-format contract documented
-- [ ] `summary.md` Implementation Status updated
+- [x] `audio_codec.py` implemented with sniff → soundfile → ffmpeg → typed error chain
+- [x] All `inputs.py` boundary decodes replaced; per-step semantics otherwise unchanged
+- [x] Chatterbox reference audio accepts mp3/aac via the same path
+- [x] soxr/dependency decision made and pinned
+- [x] Fixtures + unit tests added; ffmpeg-optional tests skip cleanly
+- [x] Input-format contract documented
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- **`soxr` chosen and pinned** in `requirements-common.txt` (`soxr` 1.0.0 in the dev env). `resample()` uses `soxr.resample(..., quality="HQ")`; `librosa.resample(..., res_type="soxr_hq")` remains an import-time fallback only.
+- **Decode sites migrated** (line numbers had drifted after Phase 0): encoder prep (`preprocess_wav(audio, source_sr=...)`), VoiceFixer restorer, OpenVoice TCE (decode once, then pydub segments — the per-segment re-read still goes through `decode_audio`, not librosa), OpenVoice tone converter, FasterWhisper, Silero VAD, Chatterbox embedding/VC inputs.
+- **Chatterbox TTS/Turbo/Multilingual** read reference audio from the request in `model_runner_base.py`, not from prepared inputs; those three sites now run `ensure_librosa_readable_bytes()` (native containers pass through untouched, AAC/MP4 are transcoded to WAV in memory) so upstream `librosa.load` never sees an unsupported container.
+- **Fixtures** committed under `tests/test-data/samples/`: `codec_tone.{wav,flac,ogg,mp3,aac}` (1 s 440/660 Hz tone; ffmpeg-generated, ~130 KB total).
+- **Tests**: `tests/unit/wire_contract/test_audio_codec.py`, `tests/unit/wire_contract/test_inputs_decode.py`. ffmpeg-dependent cases use `skipif(not FFMPEG_AVAILABLE)`; ffmpeg is installed on the dev machine, so they ran here.
+- **Deviations**: `preprocess_wav()` itself was left unchanged (it still accepts bytes for other callers); only its boundary caller passes a decoded waveform. `base64.b64decode` remains only for non-audio fields (embeddings/mel). Phase 0 tests that used placeholder bytes were switched to `tests/audio_fixtures.tiny_wav_bytes()` because the new decoder correctly rejects them.
