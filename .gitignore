@@ -192,3 +192,5 @@ frontend/
 /models/myshell-ai/openvoice/
 /models/myshell-ai/openvoice_v2/
 .gitnexus
+
+/out
