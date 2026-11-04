@@ -86,9 +86,31 @@ Existing per-item `try/except` → `_build_error_result(initial_request, e)` is 
 
 ## Checklist
 
-- [ ] All 11+ handler loops pass the request explicitly (no closure reads)
-- [ ] `execute_model` splits mixed-type batches and dispatches per partition
-- [ ] Alignment asserts in place at handler entry
-- [ ] Pairing unit tests (including reorder + mixed batch) added and passing
+- [x] All 11+ handler loops pass the request explicitly (no closure reads)
+- [x] `execute_model` splits mixed-type batches and dispatches per partition
+- [x] Alignment asserts in place at handler entry
+- [x] Pairing unit tests (including reorder + mixed batch) added and passing
 - [ ] Existing e2e suites still green
-- [ ] `summary.md` Implementation Status updated
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- All 15 handler loops pass `initial_request` as an explicit parameter to the
+  worker helper; no worker reads the enclosing loop variable any more.
+- `execute_model` partitions `requests_to_batch` by `type(request.request_data)`
+  before calling `prepare_inputs`, logs a debug line when a split happens, then
+  dispatches each partition to its handler and concatenates the results. This
+  fixes the mixed Chatterbox embed + TTS batch that used to drop TTS requests.
+- Every handler starts with `_require_aligned(...)`, which raises
+  `AssertionError(f"{handler}: N inputs vs M requests")`. `execute_model` also
+  validates the prepare result and converts a mismatch into per-request typed
+  error results, so the engine loop cannot be killed by a broken invariant.
+  Documented choice: handlers assert; the engine path fails closed per request.
+- Deviation: the `prepare_chatterbox_*` tuple contract was left unchanged
+  (audio bytes are still read from the explicitly-passed request inside the
+  worker). Moving them into `input_params` is a Phase 2 artifact-bus concern;
+  doing it here would churn the tuple shapes consumed by existing tests without
+  improving pairing, which is now guaranteed by explicit request passing.
+- `tests/e2e/*` was **not** executed: those suites download real model weights.
+  Collection is green (39 tests collected) and the new pairing tests use stubs;
+  manual e2e verification remains outstanding for the owner.

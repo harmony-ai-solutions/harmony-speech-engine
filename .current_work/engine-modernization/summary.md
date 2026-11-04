@@ -33,13 +33,13 @@ The architectural targets are taken verbatim from the research document (§6 roa
 
 Track the completion of each phase as implementation progresses:
 
-- [ ] **Phase 0: Correctness & security foundation**
-  - [ ] Safe deserialization — [0-1-SafeDeserialization.md](0-1-SafeDeserialization.md)
-  - [ ] Per-request state isolation — [0-2-PerRequestStateIsolation.md](0-2-PerRequestStateIsolation.md)
-  - [ ] Batch pairing correctness — [0-3-BatchPairingCorrectness.md](0-3-BatchPairingCorrectness.md)
-  - [ ] Startup validation & no-hang guarantees — [0-4-StartupValidationNoHang.md](0-4-StartupValidationNoHang.md)
-  - [ ] Timeouts & health — [0-5-TimeoutsAndHealth.md](0-5-TimeoutsAndHealth.md)
-  - [ ] Phase 0 exit review — [0-6-Phase0ExitReview.md](0-6-Phase0ExitReview.md)
+- [x] **Phase 0: Correctness & security foundation** — **COMPLETE 2026-11-04** (unit 162 / integration 23 green; E2E 39 collected, model-download run outstanding). **Gate for Phases 1–5 is open.**
+  - [x] Safe deserialization — [0-1-SafeDeserialization.md](0-1-SafeDeserialization.md)
+  - [x] Per-request state isolation — [0-2-PerRequestStateIsolation.md](0-2-PerRequestStateIsolation.md)
+  - [x] Batch pairing correctness — [0-3-BatchPairingCorrectness.md](0-3-BatchPairingCorrectness.md)
+  - [x] Startup validation & no-hang guarantees — [0-4-StartupValidationNoHang.md](0-4-StartupValidationNoHang.md)
+  - [x] Timeouts & health — [0-5-TimeoutsAndHealth.md](0-5-TimeoutsAndHealth.md)
+  - [x] Phase 0 exit review — [0-6-Phase0ExitReview.md](0-6-Phase0ExitReview.md)
 - [ ] **Phase 1: Wire contract — input decode & output formats**
   - [ ] Boundary audio decoder — [1-1-BoundaryAudioDecoder.md](1-1-BoundaryAudioDecoder.md)
   - [ ] Output format & sample-rate honoring — [1-2-OutputFormatSampleRate.md](1-2-OutputFormatSampleRate.md)

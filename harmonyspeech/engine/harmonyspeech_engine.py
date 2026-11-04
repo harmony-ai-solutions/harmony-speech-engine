@@ -29,6 +29,11 @@ from harmonyspeech.common.outputs import (
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import StatLogger, Stats
+from harmonyspeech.processing.pipeline_registry import (
+    FAMILY_REQUIREMENTS,
+    missing_family_requirements,
+    validate_families,
+)
 from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
@@ -40,9 +45,20 @@ class HarmonySpeechEngine:
 
     """
 
-    def __init__(self, model_configs: list[ModelConfig] | None, log_stats: bool):
+    def __init__(
+        self,
+        model_configs: list[ModelConfig] | None,
+        log_stats: bool,
+        request_timeout_s: float | None = 120.0,
+    ):
         self.model_configs = model_configs
         self.log_stats = log_stats
+        # Per-request deadline (seconds); 0/None disables deadline enforcement.
+        self.request_timeout_s = request_timeout_s
+        # Requests rejected before ever entering the scheduler (unresolvable
+        # routing, expired deadlines). Drained into the next step's outputs so
+        # their HTTP call resolves with an error instead of hanging.
+        self._pending_error_outputs: list[RequestOutput] = []
         self._verify_args()
 
         logger.info(
@@ -59,12 +75,35 @@ class HarmonySpeechEngine:
         self.model_executors = {}
         self.init_custom_executors()
 
+        # Startup validation: which declared toolchains are complete?
+        self.available_families: list[str] = self._validate_family_configuration()
+
         # Initialize Scheduler for requests across models
         self.scheduler = Scheduler(model_configs=self.model_configs)
 
         # Metric Logging.
         if self.log_stats:
             self.stat_logger = StatLogger(local_interval=_LOCAL_LOGGING_INTERVAL_SEC, labels=dict())
+
+    def _validate_family_configuration(self) -> list[str]:
+        """Log incomplete toolchains and return the complete family ids.
+
+        A family is complete when every required ``model_type`` is configured.
+        Boot does not fail on incomplete families (operators may run subsets),
+        but the serving layer only advertises complete ones.
+        """
+        complete_families = validate_families(self.model_configs)
+        for family, missing_types in missing_family_requirements(self.model_configs).items():
+            logger.warning(
+                f"Model toolchain '{family}' is not fully configured — missing model_type(s): "
+                f"{', '.join(missing_types)}. Requests routed to '{family}' will fail with an error and "
+                f"the toolchain is not advertised on /v1/models."
+            )
+        logger.info(
+            "Complete model toolchains: "
+            f"{', '.join(complete_families) if complete_families else 'none (no family fully configured)'}"
+        )
+        return complete_families
 
     def init_custom_executors(self) -> None:
         """
@@ -505,6 +544,73 @@ class HarmonySpeechEngine:
 
         return new_status, forwarding_request
 
+    def _pending_errors(self) -> list[RequestOutput]:
+        """Return the pre-step error queue, creating it for shell instances."""
+        pending = getattr(self, "_pending_error_outputs", None)
+        if pending is None:
+            pending = []
+            self._pending_error_outputs = pending
+        return pending
+
+    def _queue_pending_errors(self, outputs: list[RequestOutput]) -> None:
+        self._pending_errors().extend(outputs)
+
+    def _drain_pending_errors(self) -> list[RequestOutput]:
+        pending = self._pending_errors()
+        drained = list(pending)
+        pending.clear()
+        return drained
+
+    def _unresolvable_model_error(self, request_data: RequestInput) -> str:
+        """Describe why a request cannot be routed to a configured executor."""
+        requested = getattr(request_data, "requested_model", None) or getattr(request_data, "model", "unknown")
+        required_types = FAMILY_REQUIREMENTS.get(requested)
+        if required_types is None:
+            return (
+                f"Request routed to unknown model '{getattr(request_data, 'model', 'unknown')}', "
+                f"which is not configured on this engine."
+            )
+        configured_types = {cfg.model_type for cfg in (self.model_configs or [])}
+        missing = [model_type for model_type in required_types if model_type not in configured_types]
+        detail = f"missing one of: {', '.join(missing)}" if missing else "no executor registered"
+        return (
+            f"Model family '{requested}' is not fully configured on this engine "
+            f"({detail})"
+        )
+
+    def _expire_overdue_requests(self) -> list[RequestOutput]:
+        """Resolve requests whose per-request deadline has passed as errors.
+
+        Requests are not cancelled mid-forward (that would corrupt CUDA state);
+        once control returns to the engine they resolve as typed timeout errors
+        instead of being rescheduled forever.
+        """
+        now = time.monotonic()
+        timeout_s = getattr(self, "request_timeout_s", None)
+        expired: list[RequestOutput] = []
+        for queue in (self.scheduler.waiting, self.scheduler.running):
+            for request in list(queue):
+                deadline = getattr(request, "deadline", None)
+                if deadline is None or deadline > now:
+                    continue
+                message = (
+                    f"request exceeded timeout of {timeout_s:g}s"
+                    if timeout_s
+                    else "request exceeded its deadline"
+                )
+                logger.error(f"Request {request.request_id} timed out: {message}")
+                request.metrics.finished_time = time.time()
+                self.scheduler.update_request_status(request.request_id, RequestStatus.FINISHED_ABORTED)
+                expired.append(
+                    RequestOutput(
+                        request_id=request.request_id,
+                        finish_reason="error",
+                        error=message,
+                        metrics=request.metrics,
+                    )
+                )
+        return expired
+
     def add_request(self, request_id: str, request_data: RequestInput, arrival_time: float | None = None) -> None:
         """Add a Text-to-Speech request to the engine's request pool.
 
@@ -520,6 +626,10 @@ class HarmonySpeechEngine:
 
         Details:
             - Set arrival_time to the current time if it is None.
+            - Stamp a per-request deadline (`request_timeout_s` from now).
+            - Reject requests that cannot be routed to a configured executor
+              immediately, as a typed error output instead of leaving them to
+              wait forever in the scheduler (Phase 0-4).
         """
 
         if arrival_time is None:
@@ -528,9 +638,26 @@ class HarmonySpeechEngine:
         # Route to correct model if necessary
         self.check_reroute_request_to_model(request=request_data)
 
+        model_executors = getattr(self, "model_executors", {})
+        if request_data.model not in model_executors:
+            error = self._unresolvable_model_error(request_data)
+            logger.error(f"Request {request_id} rejected: {error}")
+            self._queue_pending_errors(
+                [RequestOutput(request_id=request_id, finish_reason="error", error=error)]
+            )
+            return
+
+        timeout_s = getattr(self, "request_timeout_s", None)
+        deadline = time.monotonic() + timeout_s if timeout_s else None
+
         # Add the request to the scheduler.
         self.scheduler.add_request(
-            EngineRequest(request_id=request_id, request_data=request_data, arrival_time=arrival_time)
+            EngineRequest(
+                request_id=request_id,
+                request_data=request_data,
+                arrival_time=arrival_time,
+                deadline=deadline,
+            )
         )
 
     def abort_request(self, request_id: str | Iterable[str]) -> None:
@@ -572,8 +699,10 @@ class HarmonySpeechEngine:
         Returns RequestOutputs that can be returned to the client.
         """
 
-        # Forward Processing or create the outputs and update the requests
-        request_outputs: list[RequestOutput] = []
+        # Forward Processing or create the outputs and update the requests.
+        # Pre-step errors (unresolvable routing, expired deadlines) were never
+        # scheduled; resolve them first so the caller sees them immediately.
+        request_outputs: list[RequestOutput] = self._drain_pending_errors()
         forwarded_requests: list[RequestInput] = []
         for result in outputs:
             # Check for Re-Schedule conditions
@@ -587,9 +716,20 @@ class HarmonySpeechEngine:
         for request in ignored_requests:
             # Mark as Finished / Ignored
             self.scheduler.update_request_status(request.request_id, RequestStatus.FINISHED_IGNORED)
-            request_output = RequestOutput(
-                request_id=request.request_id, finish_reason=RequestStatus.get_finished_reason(request.status)
-            )
+            model_name = getattr(request.request_data, "model", None)
+            if model_name not in getattr(self, "model_executors", {}):
+                # Defence in depth: a request that reached the scheduler with an
+                # unknown model (e.g. a future routing path) must error out
+                # instead of being dropped silently.
+                request_output = RequestOutput(
+                    request_id=request.request_id,
+                    finish_reason="error",
+                    error=f"Request routed to unknown model '{model_name}', which is not configured on this engine.",
+                )
+            else:
+                request_output = RequestOutput(
+                    request_id=request.request_id, finish_reason=RequestStatus.get_finished_reason(request.status)
+                )
             request_outputs.append(request_output)
 
         # Free the finished requests.
@@ -648,6 +788,10 @@ class HarmonySpeechEngine:
             >>>     if not (engine.has_unfinished_requests() or example_inputs):
             >>>         break
         """
+        # Enforce per-request deadlines before scheduling another batch: an
+        # expired request must resolve as an error, never be rescheduled forever.
+        self._queue_pending_errors(self._expire_overdue_requests())
+
         scheduler_outputs = self.scheduler.schedule()
 
         output = []
@@ -694,9 +838,26 @@ class HarmonySpeechEngine:
 
         return Stats(now=now, num_running=num_running, num_waiting=num_waiting)
 
-    def check_health(self) -> None:
-        for model_executor in self.model_executors:
-            model_executor.check_health()
+    def check_health(self) -> dict:
+        """Probe every model executor and return a structured health payload.
+
+        Returns ``{"healthy": bool, "models": {<executor name>: {"healthy": bool,
+        "model_type": str, "error": str | None}}}``. Per-model detail is the
+        extension point for Phase 4-5 VRAM reporting.
+        """
+        models: dict[str, dict] = {}
+        healthy = True
+        for name, model_executor in getattr(self, "model_executors", {}).items():
+            model_config = getattr(model_executor, "model_config", None)
+            detail: dict = {"model_type": getattr(model_config, "model_type", None), "healthy": True}
+            try:
+                model_executor.check_health()
+            except Exception as e:  # noqa: BLE001 - health probes must not raise
+                healthy = False
+                detail["healthy"] = False
+                detail["error"] = str(e)
+            models[name] = detail
+        return {"healthy": healthy, "models": models}
 
 
 setup_logger()

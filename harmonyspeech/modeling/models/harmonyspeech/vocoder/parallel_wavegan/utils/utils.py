@@ -312,7 +312,7 @@ def load_model(checkpoint, config=None, stats=None):
         k.replace("upsample_kernal_sizes", "upsample_kernel_sizes"): v for k, v in config["generator_params"].items()
     }
     model = model_class(**generator_params)
-    model.load_state_dict(torch.load(checkpoint, map_location="cpu")["model"]["generator"])
+    model.load_state_dict(torch.load(checkpoint, map_location="cpu", weights_only=True)["model"]["generator"])
 
     # check stats existence
     if stats is None:

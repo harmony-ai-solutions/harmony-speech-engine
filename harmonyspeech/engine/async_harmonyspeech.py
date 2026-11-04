@@ -13,6 +13,14 @@ from harmonyspeech.common.outputs import RequestOutput
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 
 ENGINE_ITERATION_TIMEOUT_S = int(os.environ.get("HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S", "120"))
+# The engine-step watchdog is a last-resort safety net, NOT the primary timeout:
+# per-request deadlines (EngineRequest.deadline) resolve slow requests without
+# touching the loop. A timeout here means the step machinery itself is stuck;
+# it is tolerated a few times before the engine is considered dead, so one slow
+# step cannot kill the server (Phase 0-5).
+ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS = int(
+    os.environ.get("HARMONYSPEECH_ENGINE_MAX_CONSECUTIVE_TIMEOUTS", "3")
+)
 
 
 class AsyncEngineDeadError(RuntimeError):
@@ -183,6 +191,10 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         and updates the scheduler with the model outputs. Finally, it decodes
         the sequences and returns the newly generated results.
         """
+        # Enforce per-request deadlines before scheduling: expired requests
+        # resolve as typed errors instead of being rescheduled forever.
+        self._queue_pending_errors(self._expire_overdue_requests())
+
         scheduler_outputs = self.scheduler.schedule()
 
         outputs = []
@@ -211,9 +223,9 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
 
         return self.add_request(request_id, request_data=request_data, arrival_time=arrival_time)
 
-    async def check_health_async(self) -> None:
-        for model_executor in self.model_executors.values():
-            model_executor.check_health()
+    async def check_health_async(self) -> dict:
+        """Probe every model executor and return the structured health payload."""
+        return self.check_health()
 
 
 class AsyncHarmonySpeech:
@@ -363,8 +375,32 @@ class AsyncHarmonySpeech:
     async def _engine_abort(self, request_ids: Iterable[str]):
         self.engine.abort_request(request_ids)
 
+    def _fail_in_flight_requests(self, exception: Exception) -> None:
+        """Resolve every in-flight request as errored and reset scheduler state.
+
+        Used when the engine-step watchdog trips: the step is assumed wedged, so
+        the requests it was serving can never complete. They are reported to
+        their streams and removed from the scheduler, leaving the loop usable.
+        """
+        in_flight_ids = [request.request_id for request in self.engine.scheduler.running]
+        for request_id in in_flight_ids:
+            if request_id in self._request_tracker:
+                self._request_tracker.process_exception(request_id, exception, verbose=self.log_requests)
+            else:
+                logger.warning(f"Engine step failure for untracked request {request_id}: {exception}")
+        if in_flight_ids:
+            self.engine.abort_request(in_flight_ids)
+        free_finished = getattr(self.engine.scheduler, "free_finished_requests", None)
+        if callable(free_finished):
+            free_finished()
+
+    async def _run_engine_iteration(self) -> bool:
+        """Run one engine step under the iteration watchdog."""
+        return await asyncio.wait_for(self.engine_step(), ENGINE_ITERATION_TIMEOUT_S)
+
     async def run_engine_loop(self):
         has_requests_in_progress = False
+        consecutive_timeouts = 0
         try:
             while True:
                 if not has_requests_in_progress:
@@ -372,14 +408,29 @@ class AsyncHarmonySpeech:
                     await self._request_tracker.wait_for_new_requests()
                     logger.debug("Got new requests!")
 
-                # Abort if iteration takes too long due to unrecoverable errors
-                # (eg. NCCL timeouts).
                 try:
-                    has_requests_in_progress = await asyncio.wait_for(self.engine_step(), ENGINE_ITERATION_TIMEOUT_S)
+                    has_requests_in_progress = await self._run_engine_iteration()
+                    consecutive_timeouts = 0
                 except TimeoutError as exc:
-                    logger.error("Engine iteration timed out. This should never happen!")
-                    self.set_errored(exc)
-                    raise
+                    # Demoted to a recoverable safety net: report the failure to
+                    # every in-flight request, reset the step state, and keep
+                    # serving. Only repeated consecutive trips mark the engine
+                    # as dead (matching the old last-resort semantics).
+                    consecutive_timeouts += 1
+                    logger.critical(
+                        f"Engine iteration exceeded the {ENGINE_ITERATION_TIMEOUT_S}s watchdog "
+                        f"({consecutive_timeouts}/{ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS}); "
+                        f"failing in-flight requests and continuing."
+                    )
+                    self._fail_in_flight_requests(exc)
+                    has_requests_in_progress = False
+                    if consecutive_timeouts >= ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS:
+                        logger.critical(
+                            f"Engine iteration watchdog tripped {consecutive_timeouts} times in a row — "
+                            f"marking the engine as errored."
+                        )
+                        self.set_errored(exc)
+                        raise
                 await asyncio.sleep(0)
         except KeyboardInterrupt:
             logger.info("Engine loop interrupted. Exiting gracefully.")

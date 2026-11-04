@@ -96,36 +96,56 @@ async def health() -> JSONResponse:
 
     status_code = http.HTTPStatus.OK
     try:
-        await openai_serving_tts.engine.check_health()
-        health_status["text_to_speech"] = "healthy"
+        result = await openai_serving_tts.engine.check_health()
+        if isinstance(result, dict) and not result.get("healthy", True):
+            health_status["text_to_speech"] = f"unhealthy: {result}"
+            status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        else:
+            health_status["text_to_speech"] = "healthy"
     except Exception as e:
         health_status["text_to_speech"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
-        await openai_serving_stt.engine.check_health()
-        health_status["speech_to_text"] = "healthy"
+        result = await openai_serving_stt.engine.check_health()
+        if isinstance(result, dict) and not result.get("healthy", True):
+            health_status["speech_to_text"] = f"unhealthy: {result}"
+            status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        else:
+            health_status["speech_to_text"] = "healthy"
     except Exception as e:
         health_status["speech_to_text"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
-        await openai_serving_vc.engine.check_health()
-        health_status["voice_conversion"] = "healthy"
+        result = await openai_serving_vc.engine.check_health()
+        if isinstance(result, dict) and not result.get("healthy", True):
+            health_status["voice_conversion"] = f"unhealthy: {result}"
+            status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        else:
+            health_status["voice_conversion"] = "healthy"
     except Exception as e:
         health_status["voice_conversion"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
-        await openai_serving_embedding.engine.check_health()
-        health_status["voice_embedding"] = "healthy"
+        result = await openai_serving_embedding.engine.check_health()
+        if isinstance(result, dict) and not result.get("healthy", True):
+            health_status["voice_embedding"] = f"unhealthy: {result}"
+            status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        else:
+            health_status["voice_embedding"] = "healthy"
     except Exception as e:
         health_status["voice_embedding"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
-        await openai_serving_vad.engine.check_health()
-        health_status["voice_activity_detection"] = "healthy"
+        result = await openai_serving_vad.engine.check_health()
+        if isinstance(result, dict) and not result.get("healthy", True):
+            health_status["voice_activity_detection"] = f"unhealthy: {result}"
+            status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
+        else:
+            health_status["voice_activity_detection"] = "healthy"
     except Exception as e:
         health_status["voice_activity_detection"] = f"unhealthy: {str(e)}"
         status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR

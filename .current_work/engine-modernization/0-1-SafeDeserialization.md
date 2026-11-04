@@ -68,10 +68,30 @@ Every hardened load site: on `pickle.UnpicklingError` / `RuntimeError` / `safete
 
 ## Checklist
 
-- [ ] All `torch.load`/`torch.save` sites audited and classified
-- [ ] `model_runner_base.py` request-controlled loads use `weights_only=True` and fail closed with typed errors
-- [ ] Chatterbox conditionals payload is tensor/primitive-only (or safetensors) and round-trips
-- [ ] `hf_downloader.py:163` hardened (+ optional escape hatch)
-- [ ] Hostile-payload unit tests added and passing
-- [ ] `CHANGELOG.md` entry (security fix, no internal details)
-- [ ] `summary.md` Implementation Status updated
+- [x] All `torch.load`/`torch.save` sites audited and classified
+- [x] `model_runner_base.py` request-controlled loads use `weights_only=True` and fail closed with typed errors
+- [x] Chatterbox conditionals payload is tensor/primitive-only (or safetensors) and round-trips
+- [x] `hf_downloader.py:163` hardened (+ optional escape hatch)
+- [x] Hostile-payload unit tests added and passing
+- [x] `CHANGELOG.md` entry (security fix, no internal details)
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+Audit result:
+
+| Site | Classification | Action |
+|---|---|---|
+| `model_runner_base.py` tone-converter embed load | request-controlled | `weights_only=True` + typed `ValueError` (`_load_embedding_tensor`) |
+| `model_runner_base.py` encoder embed save | internal-only | unchanged (already a bare tensor stack) |
+| `model_runner_base.py` Chatterbox conditionals save/load | request-controlled | payload restricted to tensors/primitives (`_conditionals_to_payload`); consumer loads via `Conditionals.load` (`weights_only=True`) wrapped in a typed `ValueError` (`_load_conditionals_payload`) |
+| `hf_downloader.load_or_download_model` | checkpoint | `weights_only=True`; `HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1` escape hatch with loud warning |
+| `melo/utils.py` `load_checkpoint`, `parallel_wavegan/utils/utils.py` | checkpoint (tooling) | explicit `weights_only=True` (already the torch>=2.6 default) |
+| `harmonyspeech.py` `torch.save` (training checkpoints) | internal-only | untouched |
+
+Deviations:
+
+- Chatterbox conditionals already round-trip with `weights_only=True` — `T3Cond` holds only tensors/primitives, so no safetensors fallback was needed. The payload schema is documented in `_conditionals_to_payload`.
+- `Conditionals.load` in the pinned `chatterbox-tts==0.1.6` already uses `weights_only=True`; the consumer-side wrapper adds the typed error contract and field naming.
+- The e2e hostile-payload case was **not** added: the e2e voice-clone suites download real Chatterbox weights, so the payload path is covered by unit tests with stubs (`tests/unit/modeling/test_safe_deserialization.py`).
+- No OpenVoice checkpoint fixture exists under `tests/test-data`; the checkpoint test builds a synthetic state dict and a synthetic hostile checkpoint instead.

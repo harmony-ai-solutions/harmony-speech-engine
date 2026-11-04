@@ -3,6 +3,8 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from loguru import logger
+
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.request import EngineRequest, RequestStatus
 
@@ -169,6 +171,17 @@ class Scheduler:
             # Remove from queue
             waiting_queue.popleft()
 
+            # Defence in depth (Phase 0-4): a request whose model is not part of
+            # the scheduling budget at all can never be scheduled. Surface it as
+            # an ignored request instead of requeueing it forever.
+            if model_name not in budget.request_per_model_budget:
+                logger.warning(
+                    f"Request {request.request_id} targets unknown model '{model_name}' — "
+                    f"marking it ignored instead of waiting forever."
+                )
+                ignored_requests.append(request)
+                continue
+
             # Do not schedule if there are already running requests for that model currently
             if budget.current_num_requests(model_name) > 0 and model_name not in new_scheduled_for_models:
                 leftover_waiting_requests.append(request)
@@ -227,7 +240,9 @@ class Scheduler:
         # Update running requests.
         self.running.extend(ready.requests)
 
-        return SchedulerOutputs(scheduled_requests_per_model=per_model_scheduled, ignored_requests=[])
+        return SchedulerOutputs(
+            scheduled_requests_per_model=per_model_scheduled, ignored_requests=ready.ignored_requests
+        )
 
     def _schedule(self) -> SchedulerOutputs:
         """Schedule queued requests."""

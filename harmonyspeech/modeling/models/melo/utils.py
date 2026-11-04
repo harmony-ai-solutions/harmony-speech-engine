@@ -59,7 +59,7 @@ def get_text_for_tts_infer(text, language_str, hps, device, symbol_to_id=None):
 
 def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False):
     assert os.path.isfile(checkpoint_path)
-    checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     iteration = checkpoint_dict.get("iteration", 0)
     learning_rate = checkpoint_dict.get("learning_rate", 0.0)
     if optimizer is not None and not skip_optimizer and checkpoint_dict["optimizer"] is not None:

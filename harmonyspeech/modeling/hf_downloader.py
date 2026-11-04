@@ -20,6 +20,15 @@ _harmony_filelocks_path = os.path.join(_xdg_cache_home, "harmony/locks/")
 _config_cache: dict[tuple, object] = {}
 _file_cache: dict[tuple, bytes] = {}
 
+# Escape hatch for checkpoints that genuinely require full unpickling (custom
+# classes embedded in the checkpoint). Off by default: enabling it removes the
+# deserialization hardening for model weights.
+ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV = "HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD"
+
+
+def _unsafe_checkpoint_load_enabled() -> bool:
+    return os.environ.get(ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _resolve_file_path(
     base_path: str, filename: str, revision: str | None = None
@@ -159,5 +168,27 @@ def load_or_download_config(model_name_or_path: str, config_filename: str = "con
 def load_or_download_model(
     model_name_or_path: str, device: str, ckpt_filename: str = "checkpoint.pth", revision: str = None
 ):
+    """Load a model checkpoint from disk/HuggingFace without executing pickle code.
+
+    Checkpoints are plain tensor state dicts, so ``weights_only=True`` is used.
+    If a checkpoint legitimately requires unpickling custom classes, it must be
+    opted into explicitly with ``HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1`` (only for
+    fully trusted checkpoints) — the load then emits a loud warning.
+    """
     ckpt_path = _resolve_file_path(model_name_or_path, ckpt_filename, revision)
-    return torch.load(ckpt_path, map_location=device, weights_only=False)
+    try:
+        return torch.load(ckpt_path, map_location=device, weights_only=True)
+    except Exception as e:
+        if _unsafe_checkpoint_load_enabled():
+            logger.warning(
+                f"Loading checkpoint '{ckpt_filename}' from '{model_name_or_path}' with "
+                f"weights_only=False because {ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV}=1. "
+                f"This executes pickle code from the checkpoint — only do this for trusted sources."
+            )
+            return torch.load(ckpt_path, map_location=device, weights_only=False)
+        raise ValueError(
+            f"Failed to load checkpoint '{ckpt_filename}' from '{model_name_or_path}' with safe loading "
+            f"(weights_only=True). Only plain tensor state dicts are supported. Set "
+            f"{ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV}=1 only for trusted checkpoints that need full pickle. "
+            f"Details: {e}"
+        ) from e

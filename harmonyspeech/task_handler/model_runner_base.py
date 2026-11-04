@@ -1,15 +1,34 @@
+"""Model runners that execute prepared inputs against a loaded model.
+
+Phase 0 invariants (engine modernization plan)
+----------------------------------------------
+* **No pickle execution for client payloads.** Every ``torch.load`` of request
+  data uses ``weights_only=True`` (see :func:`_load_embedding_tensor`) and
+  raises a typed ``ValueError`` on malformed/hostile payloads. The Chatterbox
+  conditionals payload is a plain dict of tensors/primitives
+  (:func:`_conditionals_to_payload`) and is read back through
+  ``Conditionals.load`` (which is ``weights_only=True`` as well).
+* **Per-request state isolation.** Chatterbox conditionals are still assigned
+  to the shared model instance (upstream reads them from ``self.model.conds`` /
+  ``self.model.ref_dict``), but every handler restores the baseline snapshot in
+  a ``finally`` block, so one request can never inherit another's voice.
+* **Batch pairing.** Every worker helper receives its ``EngineRequest`` as an
+  explicit argument (no closure over the loop variable) and every handler
+  asserts that inputs and requests are aligned.
+"""
+
 import base64
+import copy
 import io
 import json
 import time
 from dataclasses import asdict
 
-from loguru import logger
-
 import numpy as np
 import soundfile as sf
 import torch
 from faster_whisper import BatchedInferencePipeline
+from loguru import logger
 from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
@@ -30,6 +49,70 @@ from harmonyspeech.modeling.loader import get_model, get_model_config, get_model
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.inputs import prepare_inputs
 
+# Python primitives that are safe to carry inside a ``weights_only=True``
+# torch.save payload (no arbitrary classes, so no __reduce__ gadgets).
+_PICKLE_PRIMITIVES = (str, int, float, bool, bytes, type(None))
+
+_EMBEDDING_PAYLOAD_HELP = (
+    "only torch-saved tensors (weights_only=True compatible) are supported; "
+    "supply the payload produced by the encoder / embedding step"
+)
+
+
+def _load_embedding_tensor(payload, field_name: str = "embedding") -> torch.Tensor:
+    """Load a client-supplied embedding blob without executing pickle code.
+
+    ``weights_only=True`` restricts the unpickler to tensors and primitives, so
+    a crafted ``__reduce__`` gadget fails to load instead of running inside the
+    server process.
+
+    Raises:
+        ValueError: if the payload is not a single torch tensor produced by
+            ``torch.save``.
+    """
+    try:
+        loaded = torch.load(payload, map_location="cpu", weights_only=True)
+    except Exception as e:
+        raise ValueError(f"Unsupported {field_name} payload: {_EMBEDDING_PAYLOAD_HELP}. Details: {e}") from e
+    if not torch.is_tensor(loaded):
+        raise ValueError(
+            f"Unsupported {field_name} payload: expected a single tensor, got {type(loaded).__name__}. "
+            f"{_EMBEDDING_PAYLOAD_HELP}."
+        )
+    return loaded
+
+
+def _conditionals_to_payload(conditionals) -> dict:
+    """Convert a Chatterbox ``Conditionals`` object into a pickle-safe dict.
+
+    Schema (mirrors ``chatterbox.tts.Conditionals.save()``)::
+
+        {"t3":  {<T3Cond field>: tensor | primitive},   # speaker_emb, clap_emb, ...
+         "gen": {<S3Gen ref field>: tensor | primitive}}  # prompt_token, prompt_feat, ...
+
+    Only tensors and Python primitives are kept, so the payload round-trips
+    through ``torch.save`` / ``Conditionals.load`` with ``weights_only=True``.
+    """
+    t3_state = {
+        key: value
+        for key, value in vars(conditionals.t3).items()
+        if torch.is_tensor(value) or isinstance(value, _PICKLE_PRIMITIVES)
+    }
+    gen_state = {
+        key: value
+        for key, value in dict(conditionals.gen).items()
+        if torch.is_tensor(value) or isinstance(value, _PICKLE_PRIMITIVES)
+    }
+    return {"t3": t3_state, "gen": gen_state}
+
+
+def _require_aligned(inputs, requests_to_batch, handler_name: str) -> None:
+    """Assert that prepared inputs and requests are positionally aligned."""
+    if len(inputs) != len(requests_to_batch):
+        raise AssertionError(
+            f"{handler_name}: {len(inputs)} inputs vs {len(requests_to_batch)} requests"
+        )
+
 
 class ModelRunnerBase:
     def __init__(
@@ -44,8 +127,49 @@ class ModelRunnerBase:
         self.model = None
         self.model_memory_usage = 0
 
+        # Baseline Chatterbox conditioning state, captured right after the
+        # model is loaded (see `_capture_baseline_state`). None means "not
+        # captured yet"; `_restore_chatterbox_state` then treats the baseline
+        # as "no conditionals".
+        self._baseline_state: dict | None = None
+
     def _load_model(self):
         return get_model(self.model_config, self.device_config)
+
+    def _snapshot_chatterbox_state(self) -> dict:
+        """Snapshot the model's conditionals so they can be restored later.
+
+        Only Chatterbox-family models expose ``conds`` / ``ref_dict``; other
+        models yield an empty snapshot and are never touched again.
+        """
+        state: dict = {}
+        model = self.model
+        if model is None:
+            return state
+        if hasattr(model, "conds"):
+            state["conds"] = copy.deepcopy(model.conds)
+        if hasattr(model, "ref_dict"):
+            state["ref_dict"] = copy.deepcopy(model.ref_dict)
+        return state
+
+    def _capture_baseline_state(self) -> None:
+        """Capture the post-load conditioning baseline (call after loading)."""
+        self._baseline_state = self._snapshot_chatterbox_state()
+
+    def _restore_chatterbox_state(self) -> None:
+        """Restore the conditioning baseline captured at model load.
+
+        This runs in a ``finally`` block of every Chatterbox handler, so a
+        request can never inherit the previous request's voice (Phase 0-2).
+        """
+        state = getattr(self, "_baseline_state", None) or {}
+        model = self.model
+        if model is None:
+            return
+        if hasattr(model, "conds"):
+            model.conds = state.get("conds")
+        if hasattr(model, "ref_dict"):
+            model.ref_dict = state.get("ref_dict")
 
     @torch.inference_mode()
     def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
@@ -54,6 +178,37 @@ class ModelRunnerBase:
         :param requests_to_batch:
         :return:
         """
+        if not requests_to_batch:
+            return []
+
+        # Split mixed-type batches before preparing inputs. Some prepare
+        # functions (e.g. the Chatterbox ones) return inputs for only one of
+        # the request types present, which used to drop or mispair the other
+        # requests in the batch (Phase 0-3).
+        partitions = self._partition_by_request_type(requests_to_batch)
+        if len(partitions) > 1:
+            model_type = getattr(self.model_config, "model_type", "?")
+            logger.debug(
+                f"Splitting mixed batch of {len(requests_to_batch)} requests for {model_type} into "
+                f"{len(partitions)} type-homogeneous batches: {[t.__name__ for t in partitions]}"
+            )
+            outputs: list[ExecutorResult] = []
+            for partition in partitions.values():
+                outputs.extend(self._execute_partition(partition))
+            return outputs
+
+        return self._execute_partition(requests_to_batch)
+
+    @staticmethod
+    def _partition_by_request_type(requests_to_batch: list[EngineRequest]) -> dict:
+        """Group requests by their request-input class, preserving order."""
+        partitions: dict = {}
+        for request in requests_to_batch:
+            partitions.setdefault(type(request.request_data), []).append(request)
+        return partitions
+
+    def _execute_partition(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
+        """Prepare inputs for one type-homogeneous batch and dispatch it."""
         # Wrap prepare_inputs so that input-validation failures (e.g. wrong
         # request type, bad base64, unsupported option) are converted to
         # per-request error results instead of raising an unhandled exception
@@ -66,57 +221,61 @@ class ModelRunnerBase:
                 f"{getattr(self.model_config, 'model_type', '?')}: {e}"
             )
             return [self._build_error_result(req, e) for req in requests_to_batch]
-        outputs = []
 
+        if len(inputs) != len(requests_to_batch):
+            error = AssertionError(
+                f"{getattr(self.model_config, 'model_type', '?')}: "
+                f"{len(inputs)} inputs vs {len(requests_to_batch)} requests"
+            )
+            logger.opt(exception=error).error("Batch alignment invariant violated during input preparation")
+            return [self._build_error_result(req, error) for req in requests_to_batch]
+
+        return self._dispatch_handler(inputs, requests_to_batch)
+
+    def _dispatch_handler(self, inputs, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
+        """Run the handler matching this executor's model type."""
         model_type = getattr(self.model_config, "model_type", None)
         if model_type == "HarmonySpeechEncoder":
-            outputs = self._execute_harmonyspeech_encoder(inputs, requests_to_batch)
+            return self._execute_harmonyspeech_encoder(inputs, requests_to_batch)
         elif model_type == "HarmonySpeechSynthesizer":
-            outputs = self._execute_harmonyspeech_synthesizer(inputs, requests_to_batch)
+            return self._execute_harmonyspeech_synthesizer(inputs, requests_to_batch)
         elif model_type == "HarmonySpeechVocoder":
-            outputs = self._execute_harmonyspeech_vocoder(inputs, requests_to_batch)
+            return self._execute_harmonyspeech_vocoder(inputs, requests_to_batch)
         elif model_type in ["OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"]:
-            outputs = self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
+            return self._execute_openvoice_tone_converter_encoder(inputs, requests_to_batch)
         elif model_type in ["OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"]:
-            outputs = self._execute_openvoice_tone_converter(inputs, requests_to_batch)
+            return self._execute_openvoice_tone_converter(inputs, requests_to_batch)
         elif model_type == "OpenVoiceV1Synthesizer":
-            outputs = self._execute_openvoice_synthesizer(inputs, requests_to_batch)
+            return self._execute_openvoice_synthesizer(inputs, requests_to_batch)
         elif model_type == "MeloTTSSynthesizer":
-            outputs = self._execute_melotts_synthesizer(inputs, requests_to_batch)
+            return self._execute_melotts_synthesizer(inputs, requests_to_batch)
         elif model_type == "FasterWhisper":
-            outputs = self._execute_faster_whisper(inputs, requests_to_batch)
+            return self._execute_faster_whisper(inputs, requests_to_batch)
         elif model_type == "VoiceFixerRestorer":
-            outputs = self._execute_voicefixer_restorer(inputs, requests_to_batch)
+            return self._execute_voicefixer_restorer(inputs, requests_to_batch)
         elif model_type == "VoiceFixerVocoder":
-            outputs = self._execute_voicefixer_vocoder(inputs, requests_to_batch)
+            return self._execute_voicefixer_vocoder(inputs, requests_to_batch)
         elif model_type == "SileroVAD":
-            outputs = self._execute_silero_vad(inputs, requests_to_batch)
+            return self._execute_silero_vad(inputs, requests_to_batch)
         elif model_type == "KittenTTSSynthesizer":
-            outputs = self._execute_kittentts_synthesizer(inputs, requests_to_batch)
-        elif model_type == "ChatterboxTTS":
-            # Check if this is an embedding request routed to the TTS model
+            return self._execute_kittentts_synthesizer(inputs, requests_to_batch)
+        elif model_type in ["ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"]:
+            # A single executor can serve both embedding and TTS requests.
+            # Batches are type-homogeneous here, so one check is sufficient.
             if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
-                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+                return self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            elif model_type == "ChatterboxTTS":
+                return self._execute_chatterbox_tts(inputs, requests_to_batch)
+            elif model_type == "ChatterboxTurboTTS":
+                return self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
             else:
-                outputs = self._execute_chatterbox_tts(inputs, requests_to_batch)
-        elif model_type == "ChatterboxTurboTTS":
-            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
-                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
-            else:
-                outputs = self._execute_chatterbox_turbo_tts(inputs, requests_to_batch)
-        elif model_type == "ChatterboxMultilingualTTS":
-            if requests_to_batch and isinstance(requests_to_batch[0].request_data, SpeechEmbeddingRequestInput):
-                outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
-            else:
-                outputs = self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
+                return self._execute_chatterbox_multilingual_tts(inputs, requests_to_batch)
         elif model_type == "ChatterboxEmbedding":
-            outputs = self._execute_chatterbox_embedding(inputs, requests_to_batch)
+            return self._execute_chatterbox_embedding(inputs, requests_to_batch)
         elif model_type == "ChatterboxVC":
-            outputs = self._execute_chatterbox_vc(inputs, requests_to_batch)
+            return self._execute_chatterbox_vc(inputs, requests_to_batch)
         else:
             raise NotImplementedError(f"Model {model_type} is not supported")
-
-        return outputs
 
     def _build_error_result(self, initial_request, exception: Exception):
         """Build an error ExecutorResult for a single request that failed during inference.
@@ -161,7 +320,9 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_encoder(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        def embed_utterance(utterances):
+        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_encoder")
+
+        def embed_utterance(utterances, initial_request):
             utterances_tensor = torch.from_numpy(utterances).to(self.device)
             kwargs = {"utterances": utterances_tensor}
             partial_embeds = self.model(**kwargs).detach().cpu().numpy()
@@ -175,7 +336,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = embed_utterance(x)
+                inference_result = embed_utterance(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -184,7 +345,9 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        def synthesize_text(input_params):
+        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_synthesizer")
+
+        def synthesize_text(input_params, initial_request):
             # Get inputs
             chars, speaker_embeddings, speed_modifier, pitch_function, energy_function = input_params
 
@@ -223,7 +386,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x)
+                inference_result = synthesize_text(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -232,7 +395,9 @@ class ModelRunnerBase:
 
     def _execute_harmonyspeech_vocoder(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
-        def vocode_mel(input_params):
+        _require_aligned(inputs, requests_to_batch, "_execute_harmonyspeech_vocoder")
+
+        def vocode_mel(input_params, initial_request):
             mel, breaks = input_params
             kwargs = {"c": mel.T}
             wav = self.model.inference(**kwargs).detach().cpu().numpy()
@@ -261,7 +426,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = vocode_mel(x)
+                inference_result = vocode_mel(x, initial_request)
                 result = self._build_result(initial_request, inference_result, VocodeRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -277,7 +442,9 @@ class ModelRunnerBase:
         )
 
         # FIXME: This is not properly batched
-        def run_converter_encoder(input_params):
+        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter_encoder")
+
+        def run_converter_encoder(input_params, initial_request):
             vad_audio_segments = input_params
 
             gs = []
@@ -309,7 +476,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_converter_encoder(x)
+                inference_result = run_converter_encoder(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -325,12 +492,19 @@ class ModelRunnerBase:
         )
 
         # FIXME: This is not properly batched
-        def run_converter_encoder(input_params):
+        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_tone_converter")
+
+        def run_converter_encoder(input_params, initial_request):
             audio_ref, input_embedding_ref, source_embedding_ref = input_params
 
-            # Prepare conversion
-            target_embedding = torch.load(input_embedding_ref, weights_only=False).to(self.device)
-            src_embedding = torch.load(source_embedding_ref, weights_only=False).to(self.device)
+            # Prepare conversion. Both blobs are client-controlled on
+            # /v1/voice/convert and on voice-cloning TTS requests, so they are
+            # loaded with weights_only=True: a hostile pickle fails closed here
+            # instead of executing code.
+            target_embedding = _load_embedding_tensor(
+                input_embedding_ref, "input_embedding/target_embedding"
+            ).to(self.device)
+            src_embedding = _load_embedding_tensor(source_embedding_ref, "source_embedding").to(self.device)
             audio = torch.tensor(audio_ref).float()
             y = torch.FloatTensor(audio).to(self.device)
             y = y.unsqueeze(0)
@@ -361,7 +535,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_converter_encoder(x)
+                inference_result = run_converter_encoder(x, initial_request)
                 result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -369,7 +543,9 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_faster_whisper(self, inputs, requests_to_batch):
-        def run_batched_transcribe(input_params):
+        _require_aligned(inputs, requests_to_batch, "_execute_faster_whisper")
+
+        def run_batched_transcribe(input_params, initial_request):
             audio_ref = input_params
             batched_model = BatchedInferencePipeline(model=self.model)
             segments, info = batched_model.transcribe(audio_ref, batch_size=16)
@@ -386,7 +562,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_batched_transcribe(x)
+                inference_result = run_batched_transcribe(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -395,6 +571,7 @@ class ModelRunnerBase:
 
     def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
+        _require_aligned(inputs, requests_to_batch, "_execute_openvoice_synthesizer")
         # Get model flavour if applicable
         flavour = get_model_flavour(self.model_config)
         # Load config
@@ -402,7 +579,7 @@ class ModelRunnerBase:
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
-        def synthesize_text(input_params):
+        def synthesize_text(input_params, initial_request):
             # Iterate over inputs and add data to list
             audio_segment_list = []
             text_normalized, speaker_id, speed_modifier = input_params
@@ -445,7 +622,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x)
+                inference_result = synthesize_text(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -454,6 +631,7 @@ class ModelRunnerBase:
 
     def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
         # FIXME: This is not properly batched
+        _require_aligned(inputs, requests_to_batch, "_execute_melotts_synthesizer")
         # Get model flavour if applicable
         flavour = get_model_flavour(self.model_config)
         # Load config
@@ -461,7 +639,7 @@ class ModelRunnerBase:
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
-        def synthesize_text(input_params):
+        def synthesize_text(input_params, initial_request):
             # Iterate over inputs and add data to list
             audio_segment_list = []
             inference_items, speaker_id, speed_modifier = input_params
@@ -518,7 +696,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x)
+                inference_result = synthesize_text(x, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechSynthesisRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -527,8 +705,9 @@ class ModelRunnerBase:
 
     def _execute_voicefixer_restorer(self, inputs, requests_to_batch):
         """Execute VoiceFixerRestorer model to enhance audio quality."""
+        _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_restorer")
 
-        def restore_audio(audio_tensor):
+        def restore_audio(audio_tensor, initial_request):
             # Ensure tensor has batch dimension: [channels, samples] -> [batch, channels, samples]
             if audio_tensor.dim() == 2:
                 audio_tensor = audio_tensor.unsqueeze(0)
@@ -552,7 +731,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = restore_audio(x)
+                inference_result = restore_audio(x, initial_request)
                 result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -561,8 +740,9 @@ class ModelRunnerBase:
 
     def _execute_voicefixer_vocoder(self, inputs, requests_to_batch):
         """Execute VoiceFixerVocoder model to convert mel spectrogram to audio."""
+        _require_aligned(inputs, requests_to_batch, "_execute_voicefixer_vocoder")
 
-        def vocode_mel(mel_tensor):
+        def vocode_mel(mel_tensor, initial_request):
             # Move tensor to device
             mel_tensor = mel_tensor.to(self.device)
 
@@ -590,7 +770,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = vocode_mel(x)
+                inference_result = vocode_mel(x, initial_request)
                 result = self._build_result(initial_request, inference_result, AudioConversionRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -599,8 +779,9 @@ class ModelRunnerBase:
 
     def _execute_silero_vad(self, inputs, requests_to_batch):
         """Execute Silero VAD model to detect voice activity."""
+        _require_aligned(inputs, requests_to_batch, "_execute_silero_vad")
 
-        def run_vad(input_params):
+        def run_vad(input_params, initial_request):
             audio_tensor, vad_params = input_params
 
             # Extract parameters from the input object
@@ -634,7 +815,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = run_vad(x)
+                inference_result = run_vad(x, initial_request)
                 result = self._build_result(initial_request, inference_result, DetectVoiceActivityRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
@@ -643,8 +824,9 @@ class ModelRunnerBase:
 
     def _execute_kittentts_synthesizer(self, inputs, requests_to_batch):
         """Execute KittenTTSSynthesizer to generate speech audio from text."""
+        _require_aligned(inputs, requests_to_batch, "_execute_kittentts_synthesizer")
 
-        def synthesize_text(input_params):
+        def synthesize_text(input_params, initial_request):
             input_text, voice, speed_modifier = input_params
 
             # Run KittenTTS generation
@@ -667,27 +849,43 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize_text(x)
+                inference_result = synthesize_text(x, initial_request)
                 result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
 
+    # ------------------------------------------------------------------
+    # Shared-weight invariant (Phase 4 dependency)
+    # ------------------------------------------------------------------
+    # Per-request state lives on the *wrapper executor object*
+    # (``self.model.conds`` / ``self.model.ref_dict``) — never on shared
+    # backbone submodules (S3Gen / VoiceEncoder). Executors that share backbones
+    # must keep distinct wrapper instances or distinct per-request state slots.
+    # Every handler below mutates the wrapper only, and restores the baseline
+    # captured at load time in a ``finally`` block so no request can ever
+    # inherit the previous request's voice.
+    # ------------------------------------------------------------------
+
     def _execute_chatterbox_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxTTS to generate speech audio from text."""
+        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_tts")
 
-        def synthesize(input_params):
+        def synthesize(input_params, initial_request):
             text, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
+            request_audio = getattr(initial_request.request_data, "input_audio", None)
 
             if conditionals is not None:
                 # Pre-computed Conditionals provided — move to device and assign
                 self.model.conds = conditionals.to(self.device)
-            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
+            elif request_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_bytes = base64.b64decode(request_audio)
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+            else:
+                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
 
             wav = self.model.generate(
                 text,
@@ -710,27 +908,33 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x)
+                inference_result = synthesize(x, initial_request)
                 result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
+            finally:
+                self._restore_chatterbox_state()
             outputs.append(result)
         return outputs
 
     def _execute_chatterbox_turbo_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxTurboTTS to generate speech audio from text."""
+        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_turbo_tts")
 
-        def synthesize(input_params):
+        def synthesize(input_params, initial_request):
             text, conditionals, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
+            request_audio = getattr(initial_request.request_data, "input_audio", None)
 
             if conditionals is not None:
                 # Pre-computed Conditionals provided — move to device and assign
                 self.model.conds = conditionals.to(self.device)
-            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
+            elif request_audio:
                 # No pre-computed Conditionals — use raw audio bytes from request
-                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+                audio_bytes = base64.b64decode(request_audio)
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, norm_loudness=norm_loudness)
+            else:
+                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
 
             wav = self.model.generate(
                 text,
@@ -752,27 +956,33 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x)
+                inference_result = synthesize(x, initial_request)
                 result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
+            finally:
+                self._restore_chatterbox_state()
             outputs.append(result)
         return outputs
 
     def _execute_chatterbox_multilingual_tts(self, inputs, requests_to_batch):
         """Execute ChatterboxMultilingualTTS to generate speech audio from text."""
+        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_multilingual_tts")
 
-        def synthesize(input_params):
+        def synthesize(input_params, initial_request):
             text, language_id, conditionals, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
                 input_params
             )
+            request_audio = getattr(initial_request.request_data, "input_audio", None)
 
             if conditionals is not None:
                 self.model.conds = conditionals.to(self.device)
-            elif hasattr(initial_request.request_data, "input_audio") and initial_request.request_data.input_audio:
-                audio_bytes = base64.b64decode(initial_request.request_data.input_audio)
+            elif request_audio:
+                audio_bytes = base64.b64decode(request_audio)
                 audio_buf = io.BytesIO(audio_bytes)
                 self.model.prepare_conditionals(audio_buf, exaggeration=exaggeration)
+            else:
+                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
 
             wav = self.model.generate(
                 text,
@@ -796,10 +1006,12 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = synthesize(x)
+                inference_result = synthesize(x, initial_request)
                 result = self._build_result(initial_request, inference_result, TextToSpeechRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
+            finally:
+                self._restore_chatterbox_state()
             outputs.append(result)
         return outputs
 
@@ -818,9 +1030,14 @@ class ModelRunnerBase:
         between the embed step completion and the TTS re-submission. No code changes required
         to this method to enable caching -- only the engine's forward-processing block needs
         a cache lookup before re-submitting the forwarding_request.
-        """
 
-        def compute_embedding(audio_bytes):
+        Payload format: ``{"t3": {<T3Cond fields>}, "gen": {<S3Gen ref fields>}}`` — a plain
+        dict of tensors/primitives (see ``_conditionals_to_payload``), so it can be reloaded
+        with ``weights_only=True`` on the consumer side.
+        """
+        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_embedding")
+
+        def compute_embedding(audio_bytes, initial_request):
             audio_buf = io.BytesIO(audio_bytes)
             try:
                 self.model.prepare_conditionals(audio_buf)
@@ -830,10 +1047,10 @@ class ModelRunnerBase:
                 raise ValueError(str(e)) from e
             conditionals = self.model.conds
 
-            # Serialize Conditionals to BytesIO using torch.save
+            # Serialize Conditionals to BytesIO using torch.save. Only tensors
+            # and primitives are written, never upstream classes.
             buf = io.BytesIO()
-            arg_dict = dict(t3=conditionals.t3.__dict__, gen=conditionals.gen)
-            torch.save(arg_dict, buf)
+            torch.save(_conditionals_to_payload(conditionals), buf)
             buf.seek(0)
             return base64.b64encode(buf.getvalue()).decode("utf-8")
 
@@ -841,17 +1058,20 @@ class ModelRunnerBase:
         for i, audio_bytes in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = compute_embedding(audio_bytes)
+                inference_result = compute_embedding(audio_bytes, initial_request)
                 result = self._build_result(initial_request, inference_result, SpeechEmbeddingRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
+            finally:
+                self._restore_chatterbox_state()
             outputs.append(result)
         return outputs
 
     def _execute_chatterbox_vc(self, inputs, requests_to_batch):
         """Execute ChatterboxVC to perform voice conversion."""
+        _require_aligned(inputs, requests_to_batch, "_execute_chatterbox_vc")
 
-        def convert(input_params):
+        def convert(input_params, initial_request):
             source_bytes, target_conditionals, target_audio_bytes = input_params
 
             if target_conditionals is not None:
@@ -861,6 +1081,8 @@ class ModelRunnerBase:
                 # Use target audio bytes to set target voice
                 target_buf = io.BytesIO(target_audio_bytes)
                 self.model.set_target_voice(target_buf)
+            else:
+                raise ValueError("voice conversion requires target_audio or target_embedding")
 
             source_buf = io.BytesIO(source_bytes)
             wav = self.model.generate(audio=source_buf)
@@ -876,9 +1098,11 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                inference_result = convert(x)
+                inference_result = convert(x, initial_request)
                 result = self._build_result(initial_request, inference_result, VoiceConversionRequestOutput)
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
+            finally:
+                self._restore_chatterbox_state()
             outputs.append(result)
         return outputs

@@ -6,6 +6,22 @@ routing chain of a framework.
 
 The following Models and Speech Frameworks are currently supported. YAML config examples are being provided below.
 
+### Startup validation of model toolchains
+
+A *model toolchain* (family) is only usable when every model type it needs is
+present in the configuration — for example `openvoice_v2` needs FasterWhisper,
+the OpenVoice V2 tone-converter encoder, MeloTTS and the OpenVoice V2 tone
+converter. On startup the engine checks each declared toolchain and:
+
+- logs a warning naming every incomplete toolchain and the missing model types,
+- exposes the list of complete toolchains as `available_families`,
+- advertises **only complete toolchains** on the model endpoints
+  (`/v1/audio/speech/models`, `/v1/embed/models`, …).
+
+Startup does not fail on an incomplete toolchain: operators may deliberately run
+a subset of the catalogue. Requests routed to an incomplete toolchain are
+rejected immediately with an error response instead of waiting in the queue.
+
 The following table should help with evaluating the requirements:
 
 | Model Toolchain   | Type         | Implementation | Embedding requires Whisper | CPU only Performance | Voice / Processing Quality | Storage & RAM / VRAM required |

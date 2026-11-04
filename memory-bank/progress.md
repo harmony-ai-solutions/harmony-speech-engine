@@ -6,6 +6,19 @@
 **Overall Completion**: ~75%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 0 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 0 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **0-1 Safe deserialization** — request embeddings and model checkpoints load without executing pickle code; unsupported/hostile payloads fail closed with a typed error.
+- ✅ **0-2 Per-request state isolation** — Chatterbox conditioning is restored to the post-load baseline after every request; requests without conditioning fail loudly instead of inheriting the previous voice.
+- ✅ **0-3 Batch pairing correctness** — mixed-type batches are partitioned before preparation, worker helpers receive their request explicitly, and alignment is asserted.
+- ✅ **0-4 Startup validation & no-hang** — declarative family registry, warnings for incomplete toolchains, immediate error on unresolvable routing, scheduler unknown-model safety net, only complete toolchains advertised.
+- ✅ **0-5 Timeouts & health** — per-request deadlines (`request_timeout_s`), recoverable loop watchdog with consecutive-trip escalation, structured `check_health` payload.
+- ✅ **0-6 Exit review** — unit (162) and integration (23) suites green; E2E (39) collects but requires model downloads (manual verification outstanding).
+
+**Next**: Phase 1 — wire contract (boundary audio decoder, output format/sample-rate honoring, binary input envelope).
+
 ## Core System Components
 
 ### ✅ Engine Architecture (COMPLETE)
@@ -195,9 +208,9 @@
 ## Testing and Quality Assurance
 
 ### ✅ Testing Infrastructure (ESTABLISHED)
-- ✅ 28 unit tests — config parsing, dtype resolution, engine init, model loader registry
-- ✅ 17 integration tests — all 7 HTTP endpoints via mocked serving layer
-- ✅ 35 e2e tests — full model pipelines for KittenTTS, MeloTTS, OpenVoice V1/V2, HarmonySpeech, FasterWhisper, SileroVAD, VoiceFixer
+- ✅ 162 unit tests — config parsing, dtype resolution, engine init, model loader registry, safe deserialization, state isolation, batch pairing, startup validation, routing/timeout resilience
+- ✅ 23 integration tests — all 7 HTTP endpoints via mocked serving layer
+- ✅ 39 e2e tests — full model pipelines for KittenTTS, MeloTTS, OpenVoice V1/V2, HarmonySpeech, FasterWhisper, SileroVAD, VoiceFixer (require model downloads)
 - ✅ 80% overall coverage
 - ❌ GPU executor path untested (gpu_model_runner.py, gpu_worker.py — 0% coverage)
 - ❌ Performance benchmarking suite

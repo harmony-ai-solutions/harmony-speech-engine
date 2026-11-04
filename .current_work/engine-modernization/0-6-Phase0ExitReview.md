@@ -27,8 +27,35 @@ Formally verify Phase 0's exit criteria before any Phase 1+ work starts, and upd
 ## Checklist
 
 - [ ] Full suite run recorded (pass/fail per suite)
-- [ ] Anti-pattern grep sweep clean
-- [ ] `CONCERNS.md` findings marked resolved
-- [ ] `memory-bank/progress.md` + `activeContext.md` updated
-- [ ] `CHANGELOG.md` / docs updated
-- [ ] `summary.md` Phase 0 fully ticked; gate for Phases 1–5 declared open
+- [x] Anti-pattern grep sweep clean
+- [x] `CONCERNS.md` findings marked resolved
+- [x] `memory-bank/progress.md` + `activeContext.md` updated
+- [x] `CHANGELOG.md` / docs updated
+- [x] `summary.md` Phase 0 fully ticked; gate for Phases 1–5 declared open
+
+## Exit review record (2026-11-04)
+
+**Suite results**
+
+| Suite | Result |
+|---|---|
+| `pytest tests/unit` | **162 passed** (baseline was 112 + 50 new) |
+| `pytest tests/integration` | **23 passed** (unchanged baseline) |
+| `pytest tests/e2e` | **not run** — 39 tests collect cleanly, but the suites download real model weights (Chatterbox/Melo/OpenVoice/VoiceFixer). CPU run remains a manual verification step for the owner. |
+
+**Anti-pattern sweep (clean)**
+
+- `weights_only=False`: only inside the explicit `HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD` escape hatch.
+- `initial_request` reads inside nested `def`s: none — every worker helper declares it as a parameter.
+- `self.model.conds =` / `self.model.ref_dict =`: only in the four Chatterbox handlers whose per-request loop restores the baseline in `finally`, plus the restore helper itself.
+
+**Test coverage added**
+
+- `tests/unit/modeling/test_safe_deserialization.py` (11)
+- `tests/unit/inference_flow/test_chatterbox_state_isolation.py` (9)
+- `tests/unit/inference_flow/test_batch_pairing.py` (6)
+- `tests/unit/initialization/test_startup_validation.py` (7)
+- `tests/unit/error_handling/test_unresolvable_routing.py` (7)
+- `tests/unit/error_handling/test_request_timeouts.py` (10)
+
+**Knowledge documents updated**: `.planning/codebase/CONCERNS.md` (resolved findings + coverage gaps), `memory-bank/progress.md`, `memory-bank/activeContext.md`, `CHANGELOG.md`, `docs/api.md`, `docs/models.md`, `README.md`.

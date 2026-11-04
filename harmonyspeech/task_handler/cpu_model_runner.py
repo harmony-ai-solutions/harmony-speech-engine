@@ -12,3 +12,6 @@ class CPUModelRunner(ModelRunnerBase):
 
     def load_model(self) -> None:
         self.model = self._load_model()
+        # Snapshot the conditioning baseline so per-request Chatterbox state can
+        # be restored after every execution (Phase 0-2).
+        self._capture_baseline_state()

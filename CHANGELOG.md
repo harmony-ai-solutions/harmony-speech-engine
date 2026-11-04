@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+*   **Hardened payload deserialization**:
+    *   Client-supplied voice embeddings are no longer interpreted with arbitrary code execution enabled; unsupported payloads are rejected with a clear error response instead of being executed.
+    *   Model checkpoints are loaded in the same restricted mode. A documented opt-in is available for trusted checkpoints that genuinely require the unrestricted format.
+
+### Fixes
+
+*   **Voice isolation between requests**: Speech conditioning is restored after every request, so a request can no longer be synthesized with the previous caller's voice.
+*   **Missing conditioning is rejected**: Voice-cloning requests without reference audio or a precomputed embedding now fail with a clear error instead of reusing earlier state.
+*   **Correct batch pairing**: Mixed embedding and speech requests in one batch are executed by the right handler, and each result is always paired with its own request data.
+*   **No hanging requests**: Requests for a model toolchain that is missing a configured member, or that exceeds its timeout, resolve with an error instead of waiting indefinitely.
+*   **Per-request timeouts**: A slow request no longer stops the background processing loop; only the affected request errors out.
+*   **Health reporting**: The health check now queries every loaded model and reports per-model detail.
+*   **Startup toolchain validation**: Incomplete model toolchains are logged at startup and are no longer advertised by the model endpoints.
+
 ## v0.2.0
 
 ### New Features

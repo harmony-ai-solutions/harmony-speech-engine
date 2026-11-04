@@ -77,6 +77,8 @@ npm install
 
 #### 2. Check `config.yml` is correctly set up for the models you want to use (See [Models](docs/models.md)).
 
+On startup the engine validates each model toolchain and only advertises complete ones. An incomplete toolchain (e.g. an OpenVoice V2 setup without its tone converter) logs a warning listing the missing model types and rejects requests routed to it with an error, instead of leaving them waiting.
+
 #### 3. Run Harmony Speech Engine from repo base directory:
 ```
 python harmonyspeech/endpoints/cli.py run --host 0.0.0.0 --port 12080

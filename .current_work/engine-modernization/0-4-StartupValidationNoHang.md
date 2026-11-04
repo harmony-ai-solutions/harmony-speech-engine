@@ -94,10 +94,34 @@ Optional but cheap: in `Scheduler._schedule_waiting_requests` (`scheduler.py:165
 
 ## Checklist
 
-- [ ] `pipeline_registry.py` with family requirements + validator created
-- [ ] Startup validation logs missing members per incomplete family; `available_families` exposed
-- [ ] Unresolvable routing produces an immediate typed error (no hang) — verified by test
-- [ ] Model cards only advertise complete families
-- [ ] Scheduler unknown-model safety net in place
-- [ ] `docs/models.md` / `README.md` note the validation behavior
-- [ ] `summary.md` Implementation Status updated
+- [x] `pipeline_registry.py` with family requirements + validator created
+- [x] Startup validation logs missing members per incomplete family; `available_families` exposed
+- [x] Unresolvable routing produces an immediate typed error (no hang) — verified by test
+- [x] Model cards only advertise complete families
+- [x] Scheduler unknown-model safety net in place
+- [x] `docs/models.md` / `README.md` note the validation behavior
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- `harmonyspeech/processing/pipeline_registry.py` holds `FAMILY_REQUIREMENTS`,
+  `validate_families()`, `missing_family_requirements()` and
+  `is_family_available()`. Phase 3 grows this module into `PipelineSpec`.
+- `HarmonySpeechEngine` logs one warning per incomplete family (naming the
+  missing `model_type`s) and exposes `available_families`.
+- Rejected routing: `add_request` builds a `finish_reason="error"` `RequestOutput`
+  when `request.model` is not a configured executor and queues it as a
+  *pre-step error*. Both `step()` and `step_async()` drain that queue through
+  `_process_model_outputs`, so the request resolves within one engine step via
+  the normal `_request_tracker.process_request_output` path (HTTP 400), without
+  ever entering the scheduler.
+- Model cards: `model_cards_from_config_groups` filters declared groups against
+  `validate_families(configured_models)`; groups whose name is not declared in
+  the registry keep the previous behaviour.
+- Scheduler: a request whose model has no entry in the scheduling budget is
+  appended to `ignored_requests` (propagated by `_schedule_default`) and becomes
+  an error output in `_process_model_outputs` — defence in depth for future
+  routing paths.
+- Deviation: filtering is computed inside the static card builder from the model
+  configs (equivalent to `engine.available_families`, but usable by the static
+  `models_from_config` helpers in `api_server` and the e2e fixtures).

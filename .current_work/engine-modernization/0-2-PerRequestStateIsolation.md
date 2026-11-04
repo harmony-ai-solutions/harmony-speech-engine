@@ -96,9 +96,29 @@ Add a module-level comment block in `model_runner_base.py` near the handlers:
 
 ## Checklist
 
-- [ ] Baseline snapshot/restore implemented for all Chatterbox handlers (try/finally)
-- [ ] Missing-conditioning requests fail with typed errors instead of inheriting state
-- [ ] Sharing invariant documented in code
-- [ ] Isolation unit tests added and passing
-- [ ] `CHANGELOG.md` entry
-- [ ] `summary.md` Implementation Status updated
+- [x] Baseline snapshot/restore implemented for all Chatterbox handlers (try/finally)
+- [x] Missing-conditioning requests fail with typed errors instead of inheriting state
+- [x] Sharing invariant documented in code
+- [x] Isolation unit tests added and passing
+- [x] `CHANGELOG.md` entry
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- Baseline capture lives in `ModelRunnerBase` (`_snapshot_chatterbox_state` /
+  `_capture_baseline_state` / `_restore_chatterbox_state`) and is invoked from
+  `GPUModelRunner.load_model` **and** `CPUModelRunner.load_model`, so CPU and GPU
+  configs are both covered.
+- Restore runs in the `finally` block of the per-request loop body in
+  `_execute_chatterbox_tts`, `_execute_chatterbox_turbo_tts`,
+  `_execute_chatterbox_multilingual_tts`, `_execute_chatterbox_embedding` and
+  `_execute_chatterbox_vc`.
+- The snapshot is a `copy.deepcopy`, so the restored value is equal to (not
+  identical to) the captured baseline; the tests assert equality and
+  non-identity. Per-request mutation therefore cannot corrupt the baseline.
+- Missing conditioning now raises
+  `ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")`
+  (VC: `"... target_audio or target_embedding"`), which becomes a 400-style
+  `finish_reason="error"` result via `_build_error_result`.
+- No GPU-only test was added: the isolation tests use a stub model and run on
+  CPU (matching the rest of the suite).

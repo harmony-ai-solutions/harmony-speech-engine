@@ -610,6 +610,19 @@ Common HTTP status codes:
 | 500 | Internal server error (model inference failure) |
 | 503 | Service unavailable (engine unhealthy) |
 
+### Rejected payloads and timeouts
+
+- **Unsupported embeddings.** `input_embedding` / `target_embedding` must be the
+  base64 embedding produced by the matching embedding step. Payloads that do not
+  deserialize to plain tensors are rejected with `400` — they are never
+  interpreted as executable code.
+- **Missing voice conditioning.** A Chatterbox TTS request in `voice_cloning`
+  mode must include `input_audio` or a precomputed `input_embedding`; otherwise
+  it fails with `400` instead of reusing another request's voice.
+- **Per-request timeout.** Requests that exceed the engine's `request_timeout_s`
+  (default 120 s, override with `--request-timeout-s` or the `request_timeout_s`
+  config key) resolve with an error mentioning the timeout instead of hanging.
+
 
 ## Voice Cloning Pipeline
 

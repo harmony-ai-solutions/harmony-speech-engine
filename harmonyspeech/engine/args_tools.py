@@ -10,6 +10,8 @@ class EngineArgs:
     """Arguments For HarmonySpeechEngine"""
 
     disable_log_stats: bool = False
+    # Overrides EngineConfig.request_timeout_s when set.
+    request_timeout_s: float | None = None
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -20,6 +22,12 @@ class EngineArgs:
 
         # Model arguments
         parser.add_argument("--disable-log-stats", action="store_true", help="disable logging statistics")
+        parser.add_argument(
+            "--request-timeout-s",
+            type=float,
+            default=None,
+            help="Per-request deadline in seconds, overriding the config file. 0 disables the deadline.",
+        )
         return parser
 
     @classmethod
@@ -32,6 +40,8 @@ class EngineArgs:
 
     def create_engine_config(self, base_config: EngineConfig) -> EngineConfig:
         # Use this method to inject cli args to override the base engine config if needed
+        if self.request_timeout_s is not None:
+            return dataclasses.replace(base_config, request_timeout_s=self.request_timeout_s)
         return base_config
 
 

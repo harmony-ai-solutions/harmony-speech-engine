@@ -49,11 +49,20 @@ class RequestStatus(enum.Enum):
 
 
 class EngineRequest:
-    def __init__(self, request_id: str, request_data: RequestInput, arrival_time: float) -> None:
+    def __init__(
+        self,
+        request_id: str,
+        request_data: RequestInput,
+        arrival_time: float,
+        deadline: float | None = None,
+    ) -> None:
         self.request_id = request_id
         self.request_data = request_data
         self.metrics = RequestMetrics(arrival_time=arrival_time, first_scheduled_time=None, time_in_queue=None)
         self.status = RequestStatus.WAITING
+        # Monotonic timestamp after which the engine resolves this request as a
+        # timeout error (None = no deadline).
+        self.deadline = deadline
 
     def is_waiting(self) -> bool:
         return RequestStatus.is_finished(self.status)

@@ -107,6 +107,9 @@ class EngineConfig:
     """
 
     model_configs: list[ModelConfig]
+    # Default per-request deadline (seconds). 0/None disables deadline
+    # enforcement; the engine-step watchdog remains as a last-resort safety net.
+    request_timeout_s: float | None = 120.0
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
@@ -127,7 +130,10 @@ class EngineConfig:
             del model_cfg["device_config"]
             model_configs.append(ModelConfig(device_config=device_config, **model_cfg))
 
-        return EngineConfig(model_configs=model_configs)
+        return EngineConfig(
+            model_configs=model_configs,
+            request_timeout_s=config_data.get("request_timeout_s", 120.0),
+        )
 
 
 _STR_DTYPE_TO_TORCH_DTYPE = {

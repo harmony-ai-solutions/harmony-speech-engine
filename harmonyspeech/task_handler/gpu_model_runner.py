@@ -34,6 +34,10 @@ class GPUModelRunner(ModelRunnerBase):
         with CudaMemoryProfiler() as m:
             self.model = self._load_model()
 
+        # Snapshot the conditioning baseline so per-request Chatterbox state can
+        # be restored after every execution (Phase 0-2).
+        self._capture_baseline_state()
+
         self.model_memory_usage = m.consumed_memory
         logger.info(
             f"Model weights loaded. Memory usage: {self.model_memory_usage / float(2**30):.2f} GiB = {self.model_memory_usage / float(2**30):.2f} GiB"

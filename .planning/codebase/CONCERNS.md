@@ -3,6 +3,25 @@
 
 **Analysis Date:** 2026-11-02
 
+## Phase 0 resolutions (2026-11-04)
+
+The following findings were fixed by the engine modernization Phase 0 plan
+(`.current_work/engine-modernization/`); each entry names the fixing subtask.
+
+| Finding | Status | Fix |
+|---|---|---|
+| API-supplied embedding deserialized with `weights_only=False` (critical RCE) | **RESOLVED** (0-1) | request embeddings load with `weights_only=True`; checkpoints hardened with an explicit trusted-only opt-in |
+| Checkpoint loading with full pickle (`hf_downloader.py:159-163`) | **RESOLVED** (0-1) | `weights_only=True` + typed `ValueError` + escape hatch |
+| Voice conditionals leak between requests | **RESOLVED** (0-2) | baseline snapshot/restore (`try/finally`) in all Chatterbox handlers; missing conditioning fails with 400 |
+| Mixed Chatterbox batch misattributes results / drops requests | **RESOLVED** (0-3) | type-partitioned batches, explicit request passing, alignment asserts |
+| Closure over the loop variable in `_execute_*` | **RESOLVED** (0-3) | every worker helper receives its request as a parameter |
+| Requests can hang forever when a group member is missing | **RESOLVED** (0-4) | startup toolchain validation, immediate error on unresolvable routing, scheduler unknown-model safety net |
+| Engine iteration timeout kills the server loop | **RESOLVED** (0-5) | per-request deadlines; watchdog demoted to recoverable safety net with consecutive-trip escalation |
+| Health check iterates dict keys | **RESOLVED** (0-5) | `check_health` iterates `.values()` via `.items()` and returns a structured payload |
+
+Still open after Phase 0: authentication/CORS/rate-limit hardening, request size
+limits, real batching/streaming, VRAM residency management, dependency hygiene.
+
 ## Overview
 
 The engine hosts every model in a YAML config as a permanently resident executor, executes batches request-by-request in Python loops, and transports all audio as base64 inside JSON. Three properties dominate the risk profile:
@@ -15,12 +34,12 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 | Severity | Concern | Primary location |
 |----------|---------|------------------|
-| Critical | `torch.load(..., weights_only=False)` on API-supplied embeddings (remote code execution) | `harmonyspeech/task_handler/model_runner_base.py:332` |
+| Critical | `torch.load(..., weights_only=False)` on API-supplied embeddings (remote code execution) — **resolved by 0-1** | `harmonyspeech/task_handler/model_runner_base.py:332` |
 | Critical | All CUDA models resident simultaneously on one GPU; no unload/eviction/memory cap | `harmonyspeech/engine/harmonyspeech_engine.py:69`, `config.gpu.yml` |
-| High | Mixed Chatterbox embed + TTS batch causes result misattribution and silently dropped requests | `harmonyspeech/task_handler/inputs.py:174-219`, `harmonyspeech/task_handler/model_runner_base.py:96-115` |
-| High | Voice conditionals persist on the shared model instance between requests | `harmonyspeech/task_handler/model_runner_base.py:683-700` |
+| High | Mixed Chatterbox embed + TTS batch causes result misattribution and silently dropped requests — **resolved by 0-3** | `harmonyspeech/task_handler/inputs.py:174-219`, `harmonyspeech/task_handler/model_runner_base.py:96-115` |
+| High | Voice conditionals persist on the shared model instance between requests — **resolved by 0-2** | `harmonyspeech/task_handler/model_runner_base.py:683-700` |
 | High | No TTS streaming; full synthesis must finish before any byte is returned | `harmonyspeech/endpoints/openai/serving_text_to_speech.py:60` |
-| High | Engine iteration hard timeout (120 s default) kills the whole background loop for slow CPU generations | `harmonyspeech/engine/async_harmonyspeech.py:15,378-383` |
+| High | Engine iteration hard timeout (120 s default) kills the whole background loop for slow CPU generations — **resolved by 0-5** | `harmonyspeech/engine/async_harmonyspeech.py:15,378-383` |
 | High | Chatterbox installed with `pip install --no-deps`; metadata pins bypassed permanently | `requirements-chatterbox.txt` |
 | Medium | Auth disabled unless configured; fail-open on empty `ENDPOINT_URL` | `harmonyspeech/endpoints/openai/api_server.py:304`, `auth/apikeys.py:107` |
 
@@ -91,7 +110,7 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ## Known Bugs
 
-### API-Supplied Embedding Is Deserialized With `weights_only=False`
+### API-Supplied Embedding Is Deserialized With `weights_only=False` — RESOLVED (Phase 0-1)
 
 - **Symptoms:** Any caller of `/v1/voice/convert` or a voice-cloning TTS request who supplies `input_embedding` / `target_embedding` controls bytes passed to `torch.load` with pickle execution enabled. A crafted payload executes arbitrary code in the server process.
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:332-333`, decode path `harmonyspeech/task_handler/inputs.py:484-508`, request fields `harmonyspeech/endpoints/openai/protocol.py:167-170,125-131`
@@ -99,21 +118,21 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Workaround:** Disable the embedding-input paths or require trusted clients only.
 - **Fix:** Load embeddings with `weights_only=True` (they are plain tensors/state dicts), or replace pickle with `safetensors`/`numpy` serialization. Apply the same treatment to model checkpoints in `harmonyspeech/modeling/hf_downloader.py:159-163`.
 
-### Mixed Chatterbox Batch Misattributes Results and Drops Requests
+### Mixed Chatterbox Batch Misattributes Results and Drops Requests — RESOLVED (Phase 0-3)
 
 - **Symptoms:** One executor serves both `/v1/embed/speaker` (`SpeechEmbeddingRequestInput`) and `/v1/audio/speech` (`TextToSpeechRequestInput`) when no dedicated `ChatterboxEmbedding` config exists. `prepare_inputs` collects both, then returns only the embedding-prepared list (`inputs.py:187-188`). `execute_model` dispatches on `requests_to_batch[0]` and calls `_execute_chatterbox_embedding`, whose loop zips the shorter `inputs` list to `requests_to_batch[i]`. TTS requests are never executed; their streams hang. If order differs, embedding/audio results are attached to the wrong request IDs.
 - **Files:** `harmonyspeech/task_handler/inputs.py:174-219`, `harmonyspeech/task_handler/model_runner_base.py:96-115`, `harmonyspeech/task_handler/model_runner_base.py:840-849`, `harmonyspeech/processing/scheduler.py:201-230`
 - **Trigger:** Default `config.yml` leaves `chatterbox_embedding` commented out; send one `/v1/embed/speaker` and one `/v1/audio/speech` to model `chatterbox` while both are queued in the same scheduling step.
 - **Fix:** Split mixed batches at the scheduler or executor into two calls; assert `len(inputs) == len(requests_to_batch)` and key results by request ID rather than index.
 
-### Voice Conditionals Leak Between Requests
+### Voice Conditionals Leak Between Requests — RESOLVED (Phase 0-2)
 
 - **Symptoms:** `_execute_chatterbox_tts` / `_execute_chatterbox_turbo_tts` / `_execute_chatterbox_multilingual_tts` assign `self.model.conds` only when a request provides `input_embedding` or `input_audio`. A later `single_speaker_tts` request without a reference reuses the previous request's conditionals, so audio is spoken in the previous caller's voice. `_execute_chatterbox_vc` behaves the same way with `self.model.ref_dict`.
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:683-700`, `harmonyspeech/task_handler/model_runner_base.py:726-742`, `harmonyspeech/task_handler/model_runner_base.py:770-786`, `harmonyspeech/task_handler/model_runner_base.py:857-863`
 - **Trigger:** Two sequential requests to the same Chatterbox model: first with `input_audio`, second with `mode=single_speaker_tts` and no reference.
 - **Fix:** Reset `self.model.conds`/`ref_dict` at the start of every execution, or hold conditionals per request and pass them explicitly instead of mutating the model.
 
-### Requests Can Hang Forever When a Group Member Is Missing
+### Requests Can Hang Forever When a Group Member Is Missing — RESOLVED (Phase 0-4)
 
 - **Symptoms:** If routing finds no matching `ModelConfig`, `request.model` stays at the sentinel (e.g. `"openvoice_v2"`). `SchedulingBudget.remaining_request_budget()` returns `0` for unknown models (`scheduler.py:27-30`), so the request is moved back to `waiting` every step and its async stream never completes. The HTTP request hangs until the client disconnects.
 - **Files:** `harmonyspeech/processing/scheduler.py:165-189`, `harmonyspeech/engine/harmonyspeech_engine.py:109-361`, `harmonyspeech/engine/async_harmonyspeech.py:418-446`
@@ -132,7 +151,7 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Files:** `auth/apikeys.py:107`, `auth/apikeys.py:135`
 - **Fix:** `if not ENDPOINT_URL: ...` and decide explicitly between fail-open and fail-closed.
 
-### Health Check Iterates Dict Keys
+### Health Check Iterates Dict Keys — RESOLVED (Phase 0-5)
 
 - **Symptoms:** `HarmonySpeechEngine.check_health` does `for model_executor in self.model_executors:` and then calls `.check_health()` on the string key.
 - **Files:** `harmonyspeech/engine/harmonyspeech_engine.py:697-699`
@@ -147,7 +166,7 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ## Security Considerations
 
-### Unauthenticated Deserialization of Request Data (Critical)
+### Unauthenticated Deserialization of Request Data (Critical) — RESOLVED (Phase 0-1)
 
 - **Risk:** Remote code execution via `torch.load(weights_only=False)` on base64 input from `/v1/voice/convert` and voice-cloning TTS. Also applies to model checkpoint loading (`harmonyspeech/modeling/hf_downloader.py:163`), where a malicious HF repo or local path executes code.
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:332-333`, `harmonyspeech/modeling/hf_downloader.py:159-163`
@@ -252,19 +271,20 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Why fragile:** `ChatterboxTTSModel.from_pretrained(device=device)` and friends never receive `model_config.model`. The Turbo wrapper hardcodes `ResembleAI/chatterbox-turbo` (`harmonyspeech/modeling/models/chatterbox/chatterbox.py:20,145-149`), and `ChatterboxEmbedding` picks a wrapper by substring-matching the configured repo id. Pointing a config at a local path, a fine-tune, or a mirror silently loads the upstream default instead.
 - **Safe modification:** Thread `model_config.model` through the wrappers; for embedding, choose the wrapper from an explicit config field rather than a repo-name heuristic.
 
-### Closure over the Loop Variable in `_execute_*`
+### Closure over the Loop Variable in `_execute_*` — RESOLVED (Phase 0-3)
 
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:680-707`, `723-749`, `765-793`, `854-873`
 - **Why fragile:** Inner `synthesize`/`convert` closures read `initial_request`, which is assigned in the enclosing loop after the function definition. It works only because the call happens in the same iteration and batches are executed sequentially. Any reordering, retry, or parallelization of the loop silently pairs audio with the wrong request.
 - **Safe modification:** Pass `initial_request` as an explicit argument; add an assertion that `len(inputs) == len(requests_to_batch)`.
 
-### Shared Mutable Model State
+### Shared Mutable Model State — PARTIALLY RESOLVED (Phase 0-2)
 
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:685,728,771,831,859`
 - **Why fragile:** `self.model.conds` and `self.model.ref_dict` are mutated per request on a process-wide model instance (the watermarker is likewise swapped at load time). Sequential execution prevents races today, but any parallel batch execution (the obvious next performance step) would corrupt voices across requests.
+- **Status (Phase 0-2):** every Chatterbox handler now restores the post-load baseline in a `finally` block, and a request without conditioning fails with a 400 instead of inheriting state. The model instance is still mutated *during* a request, so concurrent batch execution (Phase 5) must keep one wrapper instance per in-flight request or stop mutating the model entirely.
 - **Safe modification:** Treat the loaded model as read-only after load; carry per-request conditionals in the prepared input and pass them to `generate`.
 
-### Engine Iteration Timeout Kills the Server Loop
+### Engine Iteration Timeout Kills the Server Loop — RESOLVED (Phase 0-5)
 
 - **Files:** `harmonyspeech/engine/async_harmonyspeech.py:15,375-383`
 - **Why fragile:** `asyncio.wait_for(engine_step(), HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S)` defaults to 120 s. A single slow request (Chatterbox on CPU, long text, or a cold model) exceeds it; the handler logs "This should never happen!", calls `set_errored`, and re-raises, ending `run_engine_loop`. Subsequent requests receive `AsyncEngineDeadError` until restart.
@@ -401,21 +421,21 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ## Test Coverage Gaps
 
-The suite has 174 test functions (112 unit, 23 integration, 39 E2E) and runs CPU-only in CI. The `coverage.xml` present in the workspace is stale (generated 2026-03-15, 16.5% line rate) and does not reflect the current suite.
+The suite has 224 test functions (162 unit, 23 integration, 39 E2E) and runs CPU-only in CI. The `coverage.xml` present in the workspace is stale (generated 2026-03-15, 16.5% line rate) and does not reflect the current suite.
 
 | Gap | What is untested | Files | Risk | Priority |
 |-----|------------------|-------|------|----------|
 | GPU execution path | `GPUExecutor`, `GPUWorker`, `GPUModelRunner`, `torch.cuda` init, OOM behavior, multi-model residency | `harmonyspeech/executor/gpu_executor.py`, `harmonyspeech/task_handler/gpu_worker.py`, `harmonyspeech/task_handler/gpu_model_runner.py` | GPU-only regressions ship silently; every CI job is CPU | High |
 | Multi-model residency | Loading `config.gpu.yml` (20 CUDA models) on a real GPU; startup memory | `config.gpu.yml` | OOM at deploy, not in CI | High |
-| Mixed Chatterbox batches | embed + TTS in one scheduled batch, result attribution | `harmonyspeech/task_handler/inputs.py:174-219`, `model_runner_base.py:96-115` | Hanging requests / wrong audio returned | High |
-| Voice state leakage | Sequential voice-cloning → `single_speaker_tts` requests on one model | `harmonyspeech/task_handler/model_runner_base.py:683-700` | Wrong speaker audio, privacy issue | High |
+| Mixed Chatterbox batches | embed + TTS in one scheduled batch, result attribution — **covered by `tests/unit/inference_flow/test_batch_pairing.py`** (Phase 0-3) | `harmonyspeech/task_handler/inputs.py:174-219`, `model_runner_base.py:96-115` | Hanging requests / wrong audio returned | High |
+| Voice state leakage | Sequential voice-cloning → `single_speaker_tts` requests on one model — **covered by `tests/unit/inference_flow/test_chatterbox_state_isolation.py`** (Phase 0-2) | `harmonyspeech/task_handler/model_runner_base.py:683-700` | Wrong speaker audio, privacy issue | High |
 | Auth and rate limiting | `auth/apikeys.py` middleware, cache expiry, `ENDPOINT_URL` unset/empty | `auth/apikeys.py`, `harmonyspeech/endpoints/openai/api_server.py:304-348` | Bypass or 500s in production | High |
 | Streaming/rejection contract | No test sends `stream=true`; the 400 path is unverified | `serving_text_to_speech.py:60-64` | Feature gaps untracked | Medium |
 | Output options | `format`/`sample_rate` ignored; no test asserts behavior or rejects unsupported values | `protocol.py`, `model_runner_base.py` | Silent contract violation | Medium |
-| Scheduler edge cases | Unknown model → infinite wait; budget accounting; abort during forward | `harmonyspeech/processing/scheduler.py`, `harmonyspeech/engine/harmonyspeech_engine.py:363-506` | Stuck requests, leaked slots | Medium |
-| Engine timeout/death | `ENGINE_ITERATION_TIMEOUT_S` path, `AsyncEngineDeadError` recovery | `harmonyspeech/engine/async_harmonyspeech.py:375-383` | Full outage from one slow request | Medium |
+| Scheduler edge cases | Unknown model → infinite wait; budget accounting; abort during forward — **unknown-model hang covered by `tests/unit/error_handling/test_unresolvable_routing.py`** (Phase 0-4); abort-during-forward still untested | `harmonyspeech/processing/scheduler.py`, `harmonyspeech/engine/harmonyspeech_engine.py:363-506` | Stuck requests, leaked slots | Medium |
+| Engine timeout/death | `ENGINE_ITERATION_TIMEOUT_S` path, `AsyncEngineDeadError` recovery — **covered by `tests/unit/error_handling/test_request_timeouts.py`** (Phase 0-5) | `harmonyspeech/engine/async_harmonyspeech.py:375-383` | Full outage from one slow request | Medium |
 | Chatterbox compatibility patches | `torch.load` patch, watermark fallback, dtype patches | `harmonyspeech/modeling/models/chatterbox/chatterbox.py:28-189` | Silent behavior drift on dependency upgrade | Medium |
-| `check_health` | Base engine health iteration bug | `harmonyspeech/engine/harmonyspeech_engine.py:697-699` | Latent 500 if call path changes | Low |
+| `check_health` | Base engine health iteration bug — **covered by `tests/unit/error_handling/test_request_timeouts.py`** (Phase 0-5) | `harmonyspeech/engine/harmonyspeech_engine.py:697-699` | Latent 500 if call path changes | Low |
 | Frontend integration | No automated tests for the UI against a live engine | `frontend/` | UI regressions found manually | Low |
 
 Also untested by design: E2E suites download real weights and are split across separate CI jobs; none run on CUDA, and the CUDA OpenVoice/MeloTTS fixtures in `tests/e2e/conftest.py:173-210` are commented out.
@@ -424,10 +444,10 @@ Also untested by design: E2E suites download real weights and are split across s
 
 ### Priority 1 — Security and Correctness (before any new feature)
 
-1. **Remove pickle execution from request paths.** Replace `torch.load(..., weights_only=False)` with `weights_only=True` or `safetensors` for embeddings and checkpoints (`model_runner_base.py:332-333`, `hf_downloader.py:163`).
-2. **Fix Chatterbox voice leakage.** Reset `model.conds`/`ref_dict` per request or carry conditionals in the input (`model_runner_base.py:683-700`).
-3. **Reject or split mixed Chatterbox batches.** Assert `len(inputs) == len(requests_to_batch)` and dispatch on request type per item (`inputs.py:174-219`, `model_runner_base.py:96-115`).
-4. **Fail loudly on unresolvable routing.** Validate every advertised group at startup and return 400 instead of queueing forever (`scheduler.py`, `harmonyspeech_engine.py:508-534`).
+1. **Remove pickle execution from request paths.** *(Done — Phase 0-1)* Replace `torch.load(..., weights_only=False)` with `weights_only=True` or `safetensors` for embeddings and checkpoints (`model_runner_base.py:332-333`, `hf_downloader.py:163`).
+2. **Fix Chatterbox voice leakage.** *(Done — Phase 0-2)* Reset `model.conds`/`ref_dict` per request or carry conditionals in the input (`model_runner_base.py:683-700`).
+3. **Reject or split mixed Chatterbox batches.** *(Done — Phase 0-3)* Assert `len(inputs) == len(requests_to_batch)` and dispatch on request type per item (`inputs.py:174-219`, `model_runner_base.py:96-115`).
+4. **Fail loudly on unresolvable routing.** *(Done — Phase 0-4)* Validate every advertised group at startup and return 400 instead of queueing forever (`scheduler.py`, `harmonyspeech_engine.py:508-534`).
 5. **Make auth fail closed and fix the rate-limit math** (`api_server.py:304`, `apikeys.py:107,123`).
 
 ### Priority 2 — GPU Viability on a 16 GB Card

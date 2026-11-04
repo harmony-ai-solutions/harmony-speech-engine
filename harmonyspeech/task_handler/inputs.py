@@ -31,6 +31,28 @@ from harmonyspeech.modeling.models.harmonyspeech.synthesizer.inputs import prepa
 from harmonyspeech.modeling.models.melo.inputs import normalize_text_inputs as melo_normalize_inputs
 from harmonyspeech.modeling.models.openvoice.inputs import normalize_text_inputs as ov1_normalize_inputs
 
+_CONDITIONALS_PAYLOAD_HELP = (
+    "expected a base64-encoded Chatterbox conditionals blob produced by the embedding step "
+    "(a plain dict of tensors, loadable with weights_only=True)"
+)
+
+
+def _load_conditionals_payload(payload: str, field_name: str):
+    """Deserialize a Chatterbox conditionals blob without executing pickle code.
+
+    The payload is the base64 form of ``torch.save({"t3": {...}, "gen": {...}})``
+    written by the embedding step. ``Conditionals.load`` itself uses
+    ``torch.load(..., weights_only=True)``, so custom classes and
+    ``__reduce__`` gadgets are rejected instead of executed. Any failure is
+    surfaced as a typed ``ValueError`` naming the offending field, which the
+    engine turns into a 400-style error result.
+    """
+    try:
+        embedding_bytes = base64.b64decode(payload)
+        return Conditionals.load(io.BytesIO(embedding_bytes), map_location="cpu")
+    except Exception as e:
+        raise ValueError(f"Unsupported {field_name} payload: {_CONDITIONALS_PAYLOAD_HELP}. Details: {e}") from e
+
 
 def prepare_inputs(model_config: ModelConfig, requests_to_batch: list[EngineRequest]):
     """
@@ -679,9 +701,7 @@ def prepare_chatterbox_tts_inputs(requests_to_batch: list[TextToSpeechRequestInp
         # Deserialize pre-computed Conditionals if provided
         conditionals = None
         if getattr(request, "input_embedding", None) is not None:
-            embedding_bytes = base64.b64decode(request.input_embedding)
-            embedding_buf = io.BytesIO(embedding_bytes)
-            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
 
         # Apply model-specific defaults for ChatterboxTTS
         exaggeration = opts.exaggeration if opts is not None and opts.exaggeration is not None else 0.5
@@ -731,9 +751,7 @@ def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[TextToSpeechRequ
         # Deserialize pre-computed Conditionals if provided
         conditionals = None
         if getattr(request, "input_embedding", None) is not None:
-            embedding_bytes = base64.b64decode(request.input_embedding)
-            embedding_buf = io.BytesIO(embedding_bytes)
-            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
 
         # Apply Turbo-specific defaults
         temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
@@ -786,9 +804,7 @@ def prepare_chatterbox_multilingual_tts_inputs(
         # Deserialize pre-computed Conditionals if provided
         conditionals = None
         if getattr(request, "input_embedding", None) is not None:
-            embedding_bytes = base64.b64decode(request.input_embedding)
-            embedding_buf = io.BytesIO(embedding_bytes)
-            conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+            conditionals = _load_conditionals_payload(request.input_embedding, "input_embedding")
 
         # Default language_id to 'en' if not provided
         language_id = request.language_id if request.language_id is not None else "en"
@@ -867,10 +883,8 @@ def prepare_chatterbox_vc_inputs(requests_to_batch: list[VoiceConversionRequestI
         target_audio_bytes = None
 
         if target_embedding is not None:
-            # Deserialize pre-computed Conditionals
-            embedding_bytes = base64.b64decode(target_embedding)
-            embedding_buf = io.BytesIO(embedding_bytes)
-            target_conditionals = Conditionals.load(embedding_buf, map_location="cpu")
+            # Deserialize pre-computed Conditionals (safe: weights_only=True)
+            target_conditionals = _load_conditionals_payload(target_embedding, "target_embedding")
         else:
             # Decode target audio bytes
             target_audio_bytes = base64.b64decode(target_audio)

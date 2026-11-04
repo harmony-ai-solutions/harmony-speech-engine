@@ -13,6 +13,7 @@ from harmonyspeech.endpoints.openai.protocol import (
     VoiceOptions,
 )
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+from harmonyspeech.processing.pipeline_registry import FAMILY_REQUIREMENTS, validate_families
 
 
 class OpenAIServing:
@@ -221,6 +222,17 @@ class OpenAIServing:
     def model_cards_from_config_groups(configured_models, individual_model_types, model_groups):
         model_cards = []
         individual_model_ids = set()
+        # Only advertise toolchains that are fully configured. The per-serving
+        # group lists are narrower than the full pipeline (e.g. TTS only lists
+        # synthesizer + converter, not the VAD/encoder steps), so they are
+        # filtered against the declarative family requirements (Phase 0-4).
+        # Group names not declared in the registry are left untouched.
+        complete_families = set(validate_families(configured_models))
+        model_groups = {
+            group_name: required_types
+            for group_name, required_types in model_groups.items()
+            if group_name not in FAMILY_REQUIREMENTS or group_name in complete_families
+        }
         # create a copy of the model groups and remove each model_type of a group from it's list if an instance exits
         # only groups where all required model types to provide the API function exist will be enabled.
         check_dict = copy.deepcopy(model_groups)

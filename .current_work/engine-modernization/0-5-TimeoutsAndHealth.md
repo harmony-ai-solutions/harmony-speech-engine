@@ -62,10 +62,33 @@ In the step machinery (`harmonyspeech_engine.py` `step()`/`step_async()` and/or 
 
 ## Checklist
 
-- [ ] `EngineRequest.deadline` + default `request_timeout_s` implemented
-- [ ] Expired requests resolve as typed errors; never rescheduled forever
-- [ ] Watchdog no longer kills the loop on first trip (recoverable, with consecutive-failure escalation)
-- [ ] `check_health` fixed and returns structured per-model payload
-- [ ] Timeout unit/integration tests added and passing
-- [ ] `CHANGELOG.md` entry
-- [ ] `summary.md` Implementation Status updated
+- [x] `EngineRequest.deadline` + default `request_timeout_s` implemented
+- [x] Expired requests resolve as typed errors; never rescheduled forever
+- [x] Watchdog no longer kills the loop on first trip (recoverable, with consecutive-failure escalation)
+- [x] `check_health` fixed and returns structured per-model payload
+- [x] Timeout unit/integration tests added and passing
+- [x] `CHANGELOG.md` entry
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-04)
+
+- `EngineRequest.deadline` (monotonic) is stamped in `add_request` from
+  `HarmonySpeechEngine.request_timeout_s`. Sources: `EngineConfig.request_timeout_s`
+  (YAML key `request_timeout_s`, default 120 s) or `--request-timeout-s` on the
+  CLI (overrides the config). `0`/`None` disables the deadline.
+- `_expire_overdue_requests()` runs at the start of `step()` / `step_async()`,
+  scans both the waiting and running queues, produces
+  `RequestOutput(finish_reason="error", error="request exceeded timeout of Xs")`
+  and removes the request via `scheduler.update_request_status(FINISHED_ABORTED)`.
+- Watchdog: `run_engine_loop` keeps `asyncio.wait_for(...)`, but a trip now
+  fails in-flight requests (`_fail_in_flight_requests`), resets the step state
+  and continues; only `ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS` (default 3,
+  env `HARMONYSPEECH_ENGINE_MAX_CONSECUTIVE_TIMEOUTS`) consecutive trips mark the
+  engine errored and re-raise, matching the old last-resort semantics.
+- `check_health()` returns `{"healthy": bool, "models": {name: {...}}}` and no
+  longer iterates dict keys; `check_health_async()` delegates to it. `/health`
+  inspects the payload (mocks returning `None` keep the old behaviour).
+- Deviation: forwarded pipeline steps are re-added through `add_request` and
+  therefore receive a fresh per-step budget rather than inheriting the remaining
+  end-to-end budget. An end-to-end budget would need the deadline carried on
+  `RequestInput`; deferred (each stage is still bounded, so nothing can hang).

@@ -8,6 +8,18 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 0 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization of the engine internals. Phase 0 (Correctness & security foundation) is complete; Phases 1–5 are queued per `summary.md`.
+
+- Safe deserialization of request embeddings and checkpoints (no pickle code execution), typed 400-style rejections.
+- Chatterbox per-request conditioning restored to the post-load baseline after every request.
+- Type-partitioned batches, explicit request passing and alignment invariants in every executor handler.
+- Declarative model-toolchain registry with startup validation; unresolvable routing now resolves as an error instead of hanging.
+- Per-request deadlines, a recoverable engine-loop watchdog, and a structured health payload.
+
+Next up when work resumes: Phase 1 — wire contract (input decode & output formats).
+
 ### Chatterbox TTS Integration (MAJOR FEATURE - COMPLETE)
 
 **Overview**
