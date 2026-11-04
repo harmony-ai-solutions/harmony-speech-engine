@@ -8,6 +8,19 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 3 (COMPLETE, 2026-11-04)
+
+**Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phases 0–3 are complete; Phases 4–6 are queued per `summary.md`.
+
+- Routing is declarative: `harmonyspeech/processing/pipeline_registry.py` holds `PIPELINE_SPECS` (11 specs: 8 client-facing toolchains + 3 single-step executors). `next_step()` resolves the model for the request's `PipelineState`, `advance()` maps typed artifacts onto the next step. The `reroute_request_*` ladders and the output-class-sniffing forwarding branches were deleted (~250 lines).
+- Startup validation is spec-driven (`validate_registry`) and names the missing step; `--strict-pipelines` / `HSE_STRICT_PIPELINES=1` turns it into a boot error. `/v1/models` cards are generated from specs (capabilities, member executors, variant languages) — every per-serving-module hand list is gone; the advertised id set on `config.yml` is unchanged.
+- `input_vad_mode: "silero"` now selects Silero VAD for OpenVoice cloning (with a warning + Whisper fallback when it is not configured); Silero emits whisper-schema segments (seconds, empty text) and the encoder's text-length filter is backend aware.
+- `mode: "single_speaker_tts"` is an entry rule (start and stop at synthesis) — the field-coercion FIXME is gone. Forwarded requests carry their state and never re-resolve entry.
+- New routing suite `tests/unit/inference_flow/test_pipeline_routing.py`: 40-case parity table transcribed from the old ladders before deletion, artifact-flow assertions, per-step error/missing-artifact/disconnect cases, a registry-only toy toolchain, and strict-boot coverage.
+- Recorded deviation: without a dedicated Chatterbox embedding executor, a cloning request is a **single** TTS hop (the executor embeds inline) — the old engine behaved the same, the docs claimed two hops.
+
+Next up when work resumes: Phase 4 — VRAM (fp16 rollout + Chatterbox backbone dedup).
+
 ### Engine Modernization — Phase 2 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — foundation-first modernization. Phases 0 (correctness & security), 1 (wire contract) and 2 (artifact bus) are complete; Phases 3–6 are queued per `summary.md`.

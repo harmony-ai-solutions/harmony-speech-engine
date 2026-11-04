@@ -5,6 +5,11 @@
 ### New Features
 
 *   **Output format and sample rate are now honored**: `output_options.format` (`wav`, `flac`, `ogg`, `mp3`, `opus`, `pcm`, and `aac` when ffmpeg is installed) and `output_options.sample_rate` are applied at the API boundary for speech, voice-conversion and audio-conversion endpoints. Invalid values are rejected before synthesis instead of being silently ignored. Responses now report the effective `sample_rate` when the audio was converted.
+*   **Declarative pipeline routing**: every model toolchain is now described once, declaratively, and both request routing and step-to-step forwarding are driven by that description. Adding a new toolchain no longer requires editing routing code, model-advertisement lists and validation in several places, and the routing behaviour is covered by a transcribed parity test suite.
+*   **Selectable VAD backend for voice cloning**: `input_vad_mode: "silero"` now genuinely routes the OpenVoice reference-audio segmentation to Silero VAD (falling back to Faster-Whisper with a warning when no Silero model is configured). Previously the field had no effect.
+*   **Single-speaker TTS is a proper entry point**: `mode: "single_speaker_tts"` starts at the synthesis step and finishes there instead of relying on field coercion.
+*   **Strict pipeline validation**: `--strict-pipelines` (or `HSE_STRICT_PIPELINES=1`) turns "incomplete toolchain" startup warnings into a boot error. Incomplete toolchains are also reported with the exact missing step.
+*   **Richer model cards**: toolchain entries on the model endpoints now report their capabilities (speech, embedding, voice conversion, transcription, VAD, restoration), their member executors and the languages of the configured variants. Existing fields are unchanged.
 *   **Raw PCM output**: `format: "pcm"` returns base64-encoded signed 16-bit little-endian mono samples for clients that decode audio themselves.
 *   **Broader audio input support**: WAV, FLAC, OGG and MP3 are decoded natively, and AAC/M4A/WebM/AMR are accepted when ffmpeg is available. This applies to every audio input, including Chatterbox voice-cloning reference audio.
 *   **Multipart audio uploads**: every audio-input endpoint now also accepts `multipart/form-data` file uploads (OpenAI-style `file=@audio.mp3`) on the same path, alongside the existing JSON/base64 bodies. Oversized requests are rejected with HTTP 413, configurable via `--max-upload-size-mb` or `HARMONYSPEECH_MAX_UPLOAD_MB` (default 50 MiB).
@@ -27,6 +32,7 @@
 *   **Chatterbox default voice**: Text-to-speech requests without a reference now use the voice bundled with the model instead of failing.
 *   **Correct batch pairing**: Mixed embedding and speech requests in one batch are executed by the right handler, and each result is always paired with its own request data.
 *   **No hanging requests**: Requests for a model toolchain that is missing a configured member, or that exceeds its timeout, resolve with an error instead of waiting indefinitely.
+*   **Forwarded requests are released**: requests handled by a single explicit model (or an unknown one) are now marked finished, so they no longer linger in the scheduler's running set after their response was returned.
 *   **Per-request timeouts**: A slow request no longer stops the background processing loop; only the affected request errors out.
 *   **Health reporting**: The health check now queries every loaded model and reports per-model detail.
 *   **Startup toolchain validation**: Incomplete model toolchains are logged at startup and are no longer advertised by the model endpoints.

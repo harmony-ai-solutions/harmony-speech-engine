@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import json
 from http import HTTPStatus
 
@@ -13,7 +12,11 @@ from harmonyspeech.endpoints.openai.protocol import (
     VoiceOptions,
 )
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
-from harmonyspeech.processing.pipeline_registry import FAMILY_REQUIREMENTS, validate_families
+from harmonyspeech.processing.pipeline_registry import (
+    model_types_advertising,
+    specs_for_capabilities,
+    validate_families,
+)
 
 
 class OpenAIServing:
@@ -219,68 +222,72 @@ class OpenAIServing:
                         lang_option.voices.append(voice_option)
 
     @staticmethod
-    def model_cards_from_config_groups(configured_models, individual_model_types, model_groups):
-        model_cards = []
-        individual_model_ids = set()
-        # Only advertise toolchains that are fully configured. The per-serving
-        # group lists are narrower than the full pipeline (e.g. TTS only lists
-        # synthesizer + converter, not the VAD/encoder steps), so they are
-        # filtered against the declarative family requirements (Phase 0-4).
-        # Group names not declared in the registry are left untouched.
+    def _merge_model_card(card: ModelCard, source: ModelCard) -> None:
+        """Merge languages/voices of ``source`` into ``card`` (deduplicated)."""
+        for language_option in source.languages or []:
+            target = None
+            for option in card.languages or []:
+                if option.language == language_option.language:
+                    target = option
+                    break
+            if target is None:
+                target = LanguageOptions(language=language_option.language)
+                if card.languages is None:
+                    card.languages = []
+                card.languages.append(target)
+            for voice_option in language_option.voices or []:
+                if target.voices is None:
+                    target.voices = []
+                if all(option.voice != voice_option.voice for option in target.voices):
+                    target.voices.append(VoiceOptions(voice=voice_option.voice))
+
+    @staticmethod
+    def model_cards_from_specs(configured_models, capabilities):
+        """Generate ``/v1/models`` cards from the declarative pipeline registry.
+
+        Two kinds of card are produced, exactly as before the migration:
+
+        * one **individual** card per configured model whose ``model_type``
+          advertises one of ``capabilities`` (a step's ``advertises`` field);
+        * one **toolchain** card per *complete* multi-step pipeline offering one
+          of ``capabilities``, with the pipeline's languages merged from its
+          configured members and additive ``capabilities``/``models`` metadata.
+
+        Single-step pipelines only produce individual cards: they are not a
+        toolchain and their family id would be a duplicate of the model itself.
+        """
+        wanted = {capabilities} if isinstance(capabilities, str) else set(capabilities)
+        configured_models = list(configured_models or [])
         complete_families = set(validate_families(configured_models))
-        model_groups = {
-            group_name: required_types
-            for group_name, required_types in model_groups.items()
-            if group_name not in FAMILY_REQUIREMENTS or group_name in complete_families
-        }
-        # create a copy of the model groups and remove each model_type of a group from it's list if an instance exits
-        # only groups where all required model types to provide the API function exist will be enabled.
-        check_dict = copy.deepcopy(model_groups)
-        for m in configured_models:
-            if m.model_type in individual_model_types:
-                # Retrieve model card from card list if existing
-                model_card = None
-                for c in model_cards:
-                    if c.id == m.name:
-                        model_card = c
-                        break
+        individual_types = model_types_advertising(wanted)
 
-                if model_card is None:
-                    model_card = OpenAIServing.model_card_from_config(m)
-                    model_cards.append(model_card)
+        individual_cards: dict[str, ModelCard] = {}
+        for config in configured_models:
+            if config.model_type not in individual_types or config.name in individual_cards:
+                continue
+            individual_cards[config.name] = OpenAIServing.model_card_from_config(config)
 
-                individual_model_ids.add(m.name)
-
-            for group_name, remaining_models in check_dict.items():
-                # Create or extend card for group
-                if m.model_type in model_groups[group_name]:
-                    # Retrieve model card from card list if existing
-                    group_card = None
-                    for c in model_cards:
-                        if c.id == group_name:
-                            group_card = c
-                            break
-                    if group_card is None:
-                        group_card = OpenAIServing.model_card_from_config(m)
-                        group_card.id = group_name
-                        group_card.root = group_name
-                        group_card.object = "toolchain"
-                        model_cards.append(group_card)
-                    else:
-                        OpenAIServing.model_card_add_config(group_card, m)
-
-                # Check if group init models remaining and whether a model of this type is required for init
-                if len(remaining_models) == 0:
+        cards: list[ModelCard] = list(individual_cards.values())
+        for spec in specs_for_capabilities(wanted):
+            if not spec.advertise_toolchain or spec.id not in complete_families:
+                continue
+            # A family whose id equals a configured model name (the default
+            # ``chatterbox`` deployment) is advertised by that single card —
+            # exactly what the pre-migration group logic did, which looked the
+            # card up by id before creating one.
+            card = next((existing for existing in cards if existing.id == spec.id), None)
+            if card is None:
+                card = ModelCard(id=spec.id, root=spec.id, object="toolchain")
+                cards.append(card)
+            card.capabilities = sorted(spec.capabilities)
+            card.models = [
+                config.name for config in configured_models if config.model_type in spec.member_types
+            ]
+            for config in configured_models:
+                if config.model_type not in spec.member_types:
                     continue
-                if m.model_type in remaining_models:
-                    # Remove model from check dict
-                    remaining_models.remove(m.model_type)
-
-        # Safety check!
-        # Only allow model groups which have the required models initialized
-        # BUT: do not filter out models that were also registered as individual models
-        groups_with_remaining = [group_name for group_name, remaining_models in check_dict.items() if remaining_models]
-        model_cards = [
-            card for card in model_cards if card.id not in groups_with_remaining or card.id in individual_model_ids
-        ]
-        return model_cards
+                source = individual_cards.get(config.name)
+                if source is None:
+                    source = OpenAIServing.model_card_from_config(config)
+                OpenAIServing._merge_model_card(card, source)
+        return cards

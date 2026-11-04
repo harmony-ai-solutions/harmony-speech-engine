@@ -148,12 +148,10 @@ def test_model_cards_include_complete_family():
 
 
 @pytest.mark.unit
-def test_model_cards_leave_undeclared_groups_untouched():
-    """Groups not declared in the family registry keep the old behaviour."""
+def test_undeclared_model_type_is_not_advertised():
+    """A model type no pipeline declares produces no cards for any capability."""
     configs = [_cfg("custom-model", "CustomModelType")]
 
-    cards = OpenAIServing.model_cards_from_config_groups(
-        configs, individual_model_types=[], model_groups={"custom_toolchain": ["CustomModelType"]}
-    )
-
-    assert [card.id for card in cards] == ["custom_toolchain"]
+    for capability in ("tts", "embed", "vc", "stt", "vad", "restore"):
+        cards = OpenAIServing.model_cards_from_specs(configs, capability)
+        assert [card.id for card in cards] == []

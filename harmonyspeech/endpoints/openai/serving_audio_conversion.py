@@ -18,10 +18,8 @@ from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
-# Add new model classes which allow handling Embedding Requests here
+# Add new model classes which allow handling Audio Conversion Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
-_AUDIO_CONVERSION_MODEL_TYPES = []
-_AUDIO_CONVERSION_MODEL_GROUPS = {"voicefixer": ["VoiceFixerRestorer", "VoiceFixerVocoder"]}
 
 
 class OpenAIServingAudioConversion(OpenAIServing):
@@ -30,9 +28,8 @@ class OpenAIServingAudioConversion(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]):
-        return OpenAIServing.model_cards_from_config_groups(
-            configured_models, _AUDIO_CONVERSION_MODEL_TYPES, _AUDIO_CONVERSION_MODEL_GROUPS
-        )
+        # Advertised cards come from the pipeline registry (Phase 3-3).
+        return OpenAIServing.model_cards_from_specs(configured_models, "restore")
 
     async def convert_audio(
         self, request: AudioConversionRequest, raw_request: Request

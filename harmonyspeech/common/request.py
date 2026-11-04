@@ -1,11 +1,15 @@
 import enum
 import time
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from harmonyspeech.common.inputs import RequestInput
 from harmonyspeech.common.metrics import RequestMetrics
 from harmonyspeech.common.outputs import RequestOutput
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
+    from harmonyspeech.processing.pipeline_registry import PipelineState
 
 
 class RequestStatus(enum.Enum):
@@ -58,6 +62,7 @@ class EngineRequest:
         arrival_time: float,
         deadline: float | None = None,
         artifacts: dict[str, object] | None = None,
+        pipeline_state: "PipelineState | None" = None,
     ) -> None:
         self.request_id = request_id
         self.request_data = request_data
@@ -72,6 +77,11 @@ class EngineRequest:
         # request fields (Phase 2-2) and are released deterministically when the
         # request finishes (``clear_artifacts``).
         self.artifacts: dict[str, object] = artifacts if artifacts is not None else {}
+        # Declarative routing position (Phase 3). Resolved once from the
+        # pipeline's entry rules at admission and advanced by
+        # ``pipeline_registry.advance()`` on every forwarding hop, so the engine
+        # never has to infer the pipeline position from field presence.
+        self.pipeline_state = pipeline_state
 
     def get_artifact(self, field: str):
         """Return the artifact cached for ``field``, or ``None``."""

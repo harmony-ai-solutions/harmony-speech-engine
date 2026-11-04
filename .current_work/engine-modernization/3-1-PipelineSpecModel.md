@@ -86,9 +86,25 @@ Populate `PIPELINE_SPECS` with the seven families (definitions listed in 3-2; re
 
 ## Checklist
 
-- [ ] `Step`/`PipelineSpec`/`EntryRule`/`PipelineState` implemented
-- [ ] `next_step`/`advance` semantics (artifact-first `needs`, declared `produces`)
-- [ ] Registry populated with all families (definitions from 3-2 table)
-- [ ] EngineRequest carries pipeline state
-- [ ] Unit tests for resolution/advance
-- [ ] `summary.md` Implementation Status updated
+- [x] `Step`/`PipelineSpec`/`EntryRule`/`PipelineState` implemented
+- [x] `next_step`/`advance` semantics (artifact-first `needs`, declared `produces`)
+- [x] Registry populated with all families (definitions from 3-2 table)
+- [x] EngineRequest carries pipeline state
+- [x] Unit tests for resolution/advance (`tests/unit/inference_flow/test_pipeline_spec.py`)
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (recorded after implementation)
+
+- `produces` is a tuple of `(output attribute, request field)` pairs rather than a
+  plain key set, because 3-1 requires the declared mapping
+  (`"input_vad_data": "vad_artifact"`). Tuple form keeps the dataclass hashable/frozen.
+- `Step` gained four small, deliberately declarative fields beyond the sketch:
+  `clears` (fields the produced artifact supersedes — needed so a stale wire field
+  is never re-decoded, e.g. the reference audio after an embedding), `advertises`
+  (capabilities a step's model types are advertised for on `/v1/models`, used by
+  3-3), `language_matched`, and `preference_field`/`requires_by_preference` (the
+  `input_vad_mode` switch, used by 3-4).
+- `PipelineState` gained `stop_after` so an entry rule can finish early
+  (embedding-only requests) without registering a second spec.
+- `resolve_entry()` also takes the configured models, because one entry rule is
+  configuration dependent (Chatterbox embed start; see 3-2 deviations).

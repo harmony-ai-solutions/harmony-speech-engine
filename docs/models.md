@@ -8,19 +8,39 @@ The following Models and Speech Frameworks are currently supported. YAML config 
 
 ### Startup validation of model toolchains
 
-A *model toolchain* (family) is only usable when every model type it needs is
-present in the configuration — for example `openvoice_v2` needs FasterWhisper,
-the OpenVoice V2 tone-converter encoder, MeloTTS and the OpenVoice V2 tone
-converter. On startup the engine checks each declared toolchain and:
+A *model toolchain* (pipeline) is only usable when every mandatory step it needs
+can be resolved to a configured model — for example `openvoice_v2` needs a VAD
+model (Faster-Whisper or Silero VAD), the OpenVoice V2 tone-converter encoder,
+MeloTTS and the OpenVoice V2 tone converter. On startup the engine checks each
+declared pipeline and:
 
-- logs a warning naming every incomplete toolchain and the missing model types,
-- exposes the list of complete toolchains as `available_families`,
+- logs a warning naming every incomplete pipeline *and the missing step* (with
+  the model types that would satisfy it),
+- exposes the list of complete multi-step toolchains as `available_families`,
 - advertises **only complete toolchains** on the model endpoints
-  (`/v1/audio/speech/models`, `/v1/embed/models`, …).
+  (`/v1/audio/speech/models`, `/v1/embed/models`, …). Individual model cards are
+  still advertised for every configured executor, so a partially configured
+  deployment can still be addressed by concrete model name.
 
-Startup does not fail on an incomplete toolchain: operators may deliberately run
-a subset of the catalogue. Requests routed to an incomplete toolchain are
-rejected immediately with an error response instead of waiting in the queue.
+Startup does not fail on an incomplete toolchain by default: operators may
+deliberately run a subset of the catalogue. Requests routed to an incomplete
+toolchain are rejected immediately with an error response instead of waiting in
+the queue. Pass `--strict-pipelines` (or set `HSE_STRICT_PIPELINES=1`, or
+`strict_pipelines: true` in the config file) to turn those warnings into a boot
+error.
+
+Model cards are generated from the same declaration: each toolchain card lists
+its `capabilities` (`tts`, `embed`, `vc`, `stt`, `vad`, `restore`), its
+`models` (the configured member executors) and the languages of its configured
+variants (for example every configured MeloTTS language).
+
+#### `input_vad_mode`
+
+The OpenVoice pipelines accept `input_vad_mode: "whisper" | "silero"` to choose
+the VAD backend for the reference-audio segmentation. `"whisper"` (or omitting
+the field) uses Faster-Whisper; `"silero"` uses Silero VAD when one is
+configured and otherwise falls back to Faster-Whisper with a warning. See
+[Request routing](routing.md).
 
 The following table should help with evaluating the requirements:
 

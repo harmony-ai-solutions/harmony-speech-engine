@@ -51,12 +51,12 @@ Track the completion of each phase as implementation progresses:
   - [x] Executor artifact handlers — [2-3-ExecutorArtifactHandlers.md](2-3-ExecutorArtifactHandlers.md)
   - [x] Boundary serialization & compatibility — [2-4-BoundarySerializationCompat.md](2-4-BoundarySerializationCompat.md)
   - [x] Verification & benchmark — [2-5-ArtifactBusVerification.md](2-5-ArtifactBusVerification.md)
-- [ ] **Phase 3: Declarative PipelineSpec routing**
-  - [ ] PipelineSpec model & registry — [3-1-PipelineSpecModel.md](3-1-PipelineSpecModel.md)
-  - [ ] Family migration — [3-2-FamilyMigration.md](3-2-FamilyMigration.md)
-  - [ ] Startup validation & model cards — [3-3-StartupValidationModelCards.md](3-3-StartupValidationModelCards.md)
-  - [ ] VAD switch & entry points — [3-4-VadSwitchEntryPoints.md](3-4-VadSwitchEntryPoints.md)
-  - [ ] Routing tests — [3-5-RoutingTests.md](3-5-RoutingTests.md)
+- [x] **Phase 3: Declarative PipelineSpec routing** — **COMPLETE 2026-11-04** (unit 469 / integration 23 / wire-contract e2e 38 passed + 3 skipped; real-model e2e green on CPU for every TTS family, Whisper STT, Silero/Whisper VAD, VoiceFixer, plus the new Silero-VAD-in-pipeline cloning test).
+  - [x] PipelineSpec model & registry — [3-1-PipelineSpecModel.md](3-1-PipelineSpecModel.md)
+  - [x] Family migration — [3-2-FamilyMigration.md](3-2-FamilyMigration.md)
+  - [x] Startup validation & model cards — [3-3-StartupValidationModelCards.md](3-3-StartupValidationModelCards.md)
+  - [x] VAD switch & entry points — [3-4-VadSwitchEntryPoints.md](3-4-VadSwitchEntryPoints.md)
+  - [x] Routing tests — [3-5-RoutingTests.md](3-5-RoutingTests.md)
 - [ ] **Phase 4: VRAM — fp16 + Chatterbox weight dedup**
   - [ ] dtype plumbing & config flip — [4-1-DtypePlumbingConfigFlip.md](4-1-DtypePlumbingConfigFlip.md)
   - [ ] Audio regression gate — [4-2-AudioRegressionGate.md](4-2-AudioRegressionGate.md)

@@ -14,25 +14,6 @@ from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
-# Add new model classes which allow handling TTS Requests here
-# If multiple models need to be initialized to process request, add them as a group
-_TTS_MODEL_TYPES = [
-    "OpenVoiceV1Synthesizer",
-    "MeloTTSSynthesizer",
-    "KittenTTSSynthesizer",
-    "ChatterboxTTS",
-    "ChatterboxTurboTTS",
-    "ChatterboxMultilingualTTS",
-]
-_TTS_MODEL_GROUPS = {
-    "harmonyspeech": ["HarmonySpeechSynthesizer", "HarmonySpeechVocoder"],
-    "openvoice_v1": ["OpenVoiceV1Synthesizer", "OpenVoiceV1ToneConverter"],
-    "openvoice_v2": ["MeloTTSSynthesizer", "OpenVoiceV2ToneConverter"],
-    "chatterbox": ["ChatterboxTTS"],
-    "chatterbox_turbo": ["ChatterboxTurboTTS"],
-    "chatterbox_multilingual": ["ChatterboxMultilingualTTS"],
-}
-
 
 class OpenAIServingTextToSpeech(OpenAIServing):
     def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
@@ -40,7 +21,9 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]):
-        return OpenAIServing.model_cards_from_config_groups(configured_models, _TTS_MODEL_TYPES, _TTS_MODEL_GROUPS)
+        # Advertised cards come from the pipeline registry (Phase 3-3); this
+        # endpoint serves the "tts" capability.
+        return OpenAIServing.model_cards_from_specs(configured_models, "tts")
 
     async def create_text_to_speech(
         self, request: TextToSpeechRequest, raw_request: Request

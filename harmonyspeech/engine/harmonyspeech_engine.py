@@ -8,53 +8,31 @@ from loguru import logger
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import (
-    AudioConversionRequestInput,
     RequestInput,
-    SpeechEmbeddingRequestInput,
-    SpeechTranscribeRequestInput,
-    SynthesisRequestInput,
     TextToSpeechRequestInput,
-    VocodeRequestInput,
-    VoiceConversionRequestInput,
     prefill_audio_artifacts,
 )
 from harmonyspeech.common.logger import setup_logger
-from harmonyspeech.common.outputs import (
-    AudioConversionRequestOutput,
-    RequestOutput,
-    SpeechEmbeddingRequestOutput,
-    SpeechSynthesisRequestOutput,
-    SpeechTranscriptionRequestOutput,
-    TextToSpeechRequestOutput,
-)
+from harmonyspeech.common.outputs import RequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.metrics import StatLogger, Stats
 from harmonyspeech.processing.pipeline_registry import (
-    FAMILY_REQUIREMENTS,
-    missing_family_requirements,
+    PipelineExecution,
+    PipelineRoutingError,
+    PipelineSpec,
+    PipelineState,
+    advance,
+    completed_step_state,
+    get_spec,
+    next_step,
+    resolve_entry,
     validate_families,
+    validate_registry,
 )
 from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
-
-
-def _present(request, artifacts: dict | None, field: str) -> bool:
-    """True when ``field`` is supplied either as a legacy string or as an artifact.
-
-    Phase 2-3 forwards pipeline results as artifacts and deliberately leaves the
-    legacy string field ``None``; routing must therefore treat "artifact cached"
-    as "field present".
-    """
-    if getattr(request, field, None) is not None:
-        return True
-    return artifacts is not None and artifacts.get(field) is not None
-
-
-def _missing(request, artifacts: dict | None, field: str) -> bool:
-    return not _present(request, artifacts, field)
-
 
 
 class HarmonySpeechEngine:
@@ -68,11 +46,14 @@ class HarmonySpeechEngine:
         model_configs: list[ModelConfig] | None,
         log_stats: bool,
         request_timeout_s: float | None = 120.0,
+        strict_pipelines: bool = False,
     ):
         self.model_configs = model_configs
         self.log_stats = log_stats
         # Per-request deadline (seconds); 0/None disables deadline enforcement.
         self.request_timeout_s = request_timeout_s
+        # Turn "pipeline incomplete" startup warnings into a boot error.
+        self.strict_pipelines = strict_pipelines
         # Requests rejected before ever entering the scheduler (unresolvable
         # routing, expired deadlines). Drained into the next step's outputs so
         # their HTTP call resolves with an error instead of hanging.
@@ -106,21 +87,32 @@ class HarmonySpeechEngine:
     def _validate_family_configuration(self) -> list[str]:
         """Log incomplete toolchains and return the complete family ids.
 
-        A family is complete when every required ``model_type`` is configured.
-        Boot does not fail on incomplete families (operators may run subsets),
-        but the serving layer only advertises complete ones.
+        A pipeline is complete when every mandatory step can be resolved to at
+        least one configured model. Boot does not fail on an incomplete pipeline
+        (operators may run subsets), but the serving layer only advertises
+        complete ones — unless ``strict_pipelines`` is enabled, in which case the
+        same message becomes a boot error.
         """
-        complete_families = validate_families(self.model_configs)
-        for family, missing_types in missing_family_requirements(self.model_configs).items():
+        incomplete = validate_registry(self.model_configs)
+        for spec_id, missing_steps in incomplete.items():
             logger.warning(
-                f"Model toolchain '{family}' is not fully configured — missing model_type(s): "
-                f"{', '.join(missing_types)}. Requests routed to '{family}' will fail with an error and "
-                f"the toolchain is not advertised on /v1/models."
+                f"Pipeline '{spec_id}' incomplete — missing step(s): {', '.join(missing_steps)}. "
+                f"Requests routed to '{spec_id}' will fail with an error and the pipeline is not "
+                f"advertised on /v1/models."
             )
+        complete_families = validate_families(self.model_configs)
         logger.info(
             "Complete model toolchains: "
             f"{', '.join(complete_families) if complete_families else 'none (no family fully configured)'}"
         )
+        if getattr(self, "strict_pipelines", False) and incomplete:
+            raise RuntimeError(
+                "Pipeline configuration is incomplete and --strict-pipelines is enabled: "
+                + "; ".join(
+                    f"pipeline '{spec_id}' missing step(s): {', '.join(steps)}"
+                    for spec_id, steps in incomplete.items()
+                )
+            )
         return complete_families
 
     def init_custom_executors(self) -> None:
@@ -163,259 +155,101 @@ class HarmonySpeechEngine:
         #     model_cfg.verify_with_parallel_config(self.parallel_config)
         return None
 
-    def reroute_request_harmonyspeech(self, request: RequestInput, artifacts: dict | None = None):
-        if isinstance(request, SpeechEmbeddingRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _present(request, artifacts, "input_audio")  #
-            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "HarmonySpeechEncoder":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, SynthesisRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
-            and _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "HarmonySpeechSynthesizer":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, VocodeRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for vocoder
-            and _present(request, artifacts, "input_embedding")
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "HarmonySpeechVocoder":
-                    request.model = cfg.name
-                    break
+    # ------------------------------------------------------------------
+    # Declarative pipeline routing (Phase 3)
+    # ------------------------------------------------------------------
+    #
+    # Both former if/elif ladders are gone: routing is `next_step()` on the
+    # request's PipelineState, forwarding is `advance()` over the step's
+    # declared artifacts. Everything a pipeline can do is declared once in
+    # `harmonyspeech.processing.pipeline_registry.PIPELINE_SPECS`.
 
-    def reroute_request_openvoice_v1(self, request: RequestInput, artifacts: dict | None = None):
-        """
-        OpenVoice V1 uses a multi-step-embedding process for improving accuracy.
-        This process involves retrieving VAD information for the provided audio if that's not provided.
-        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
-        provided in the OpenVoice repo.
+    def _model_config_by_name(self, name: str | None):
+        """Return the configured model with ``name``, or ``None``."""
+        for config in self.model_configs or []:
+            if config.name == name:
+                return config
+        return None
 
-        When processing OpenVoice V2 Embedding or TTS requests, the routing rule is the following:
-        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
-        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
-        3. TTS using base Synthesizer model
-        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
-        """
-        if (
-            isinstance(request, SpeechTranscribeRequestInput)
-            or (
-                isinstance(request, TextToSpeechRequestInput)
-                and request.mode == "voice_cloning"  # Only required when voice cloning
-                and _present(request, artifacts, "input_audio")  #
-                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
-                and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
+    def _pipeline_incomplete_message(self, spec: PipelineSpec, state: PipelineState | None) -> str:
+        """Explain which step/model is missing for ``spec`` (typed routing error)."""
+        incomplete = validate_registry(self.model_configs)
+        step = spec.step_at(state.step_index) if state is not None else None
+        parts: list[str] = []
+        if step is not None:
+            parts.append(
+                f"step '{step.name}' has no matching model "
+                f"(missing one of: {', '.join(step.requires)})"
             )
-            or (
-                isinstance(request, SpeechEmbeddingRequestInput)
-                and _present(request, artifacts, "input_audio")  #
-                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
-            )
-        ):
-            for cfg in self.model_configs:
-                # TODO: add switch for silero here using request.input_vad_mode
-                if cfg.model_type == "FasterWhisper":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, SpeechEmbeddingRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and request.mode == "voice_cloning"  # Only required when voice cloning
-            and _present(request, artifacts, "input_audio")  #
-            and _present(request, artifacts, "input_vad_data")  # VAD Data set, key condition for Embedding Action
-            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "OpenVoiceV1ToneConverterEncoder":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, SynthesisRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
-            and (
-                _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-                or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
-            )
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "OpenVoiceV1Synthesizer" and cfg.language == request.language_id:
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, VoiceConversionRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and request.mode == "voice_cloning"  # Only required when voice cloning
-            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for voice converter
-            and _present(request, artifacts, "input_embedding")
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "OpenVoiceV1ToneConverter":
-                    request.model = cfg.name
-                    break
+        missing_steps = incomplete.get(spec.id, [])
+        if missing_steps:
+            parts.append(f"incomplete pipeline steps: {', '.join(missing_steps)}")
+        detail = "; ".join(parts) if parts else "no executor registered"
+        return f"Pipeline '{spec.id}' is not fully configured on this engine — {detail}"
 
-    def reroute_request_openvoice_v2(self, request: RequestInput, artifacts: dict | None = None):
+    def _unresolvable_model_error(self, request_data: RequestInput, state: PipelineState | None = None) -> str:
+        """Describe why a request cannot be routed to a configured executor."""
+        spec = get_spec(getattr(request_data, "requested_model", None))
+        if spec is None:
+            return (
+                f"Request routed to unknown model '{getattr(request_data, 'model', 'unknown')}', "
+                f"which is not configured on this engine."
+            )
+        return self._pipeline_incomplete_message(spec, state)
+
+    def _route_request(
+        self,
+        request_data: RequestInput,
+        artifacts: dict | None = None,
+        pipeline_state: PipelineState | None = None,
+    ) -> tuple[PipelineState | None, str | None]:
+        """Resolve ``request_data.model`` for the request's current step.
+
+        Returns ``(state, error_message)``. A forwarded request arrives with its
+        state and never re-resolves entry rules; a fresh request gets its state
+        from the pipeline's first matching :class:`EntryRule`.
+
+        ``(None, None)`` means "not a pipeline request" — a concrete model name
+        was requested directly (single-step semantics) or the name is unknown;
+        both are handled by the existing admission checks.
         """
-        OpenVoice V2 uses a multi-step-embedding process for improving accuracy.
-        This process involves retrieving VAD information for the provided audio if that's not provided.
-        The default variant is to use whisper for this Process; however there's also a SileroTTS variant
-        provided in the OpenVoice repo.
+        spec = get_spec(getattr(request_data, "requested_model", None))
+        if spec is None:
+            return None, None
 
-        When processing OpenVoice V2 Embedding or TTS requests, the routing rule is the following:
-        1. VAD using Whisper or Silero* (*not implemented yet) to get Audio segments
-        2. Embedding using ToneConverter in Encoder mode using Audio and Timestamp segments returned from VAD step.
-        3. TTS using Melo
-        4. Tone Conversion for Output of MeloTTS based on Speaker ID embedding
-        """
-        if (
-            isinstance(request, SpeechTranscribeRequestInput)
-            or (
-                isinstance(request, TextToSpeechRequestInput)
-                and request.mode == "voice_cloning"  # Only required when voice cloning
-                and _present(request, artifacts, "input_audio")  #
-                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
-                and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
+        state = pipeline_state
+        if state is None:
+            state = resolve_entry(spec, request_data, artifacts, self.model_configs)
+        if state is None:
+            return None, (
+                f"Request shape is not supported by pipeline '{spec.id}' "
+                f"(model '{getattr(request_data, 'requested_model', '')}')."
             )
-            or (
-                isinstance(request, SpeechEmbeddingRequestInput)
-                and _present(request, artifacts, "input_audio")  #
-                and _missing(request, artifacts, "input_vad_data")  # VAD Data not set, key condition for Transcribe Action
-            )
-        ):
-            for cfg in self.model_configs:
-                # TODO: add switch for silero here using request.input_vad_mode
-                if cfg.model_type == "FasterWhisper":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, SpeechEmbeddingRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and request.mode == "voice_cloning"  # Only required when voice cloning
-            and _present(request, artifacts, "input_audio")  #
-            and _present(request, artifacts, "input_vad_data")  # VAD Data set, key condition for Embedding Action
-            and _missing(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "OpenVoiceV2ToneConverterEncoder":
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, SynthesisRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _missing(request, artifacts, "input_audio")  # Removing Input audio after Embedding Step
-            and (
-                _present(request, artifacts, "input_embedding")  # Output of Embedding becomes input for synthesis
-                or request.mode == "single_speaker_tts"  # FIXME: This code needs refactor
-            )
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "MeloTTSSynthesizer" and cfg.language == request.language_id:
-                    request.model = cfg.name
-                    break
-        elif isinstance(request, VoiceConversionRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and request.mode == "voice_cloning"  # Only required when voice cloning
-            and _present(request, artifacts, "input_audio")  # Output of synthesis becomes Input for voice converter
-            and _present(request, artifacts, "input_embedding")
-        ):
-            for cfg in self.model_configs:
-                if cfg.model_type == "OpenVoiceV2ToneConverter":
-                    request.model = cfg.name
-                    break
 
-    def reroute_request_voicefixer(self, request: RequestInput, artifacts: dict | None = None):
+        try:
+            config = next_step(spec, state, request_data, self.model_configs, artifacts)
+        except PipelineRoutingError as exc:
+            return state, exc.message
+
+        if config is None:
+            return state, self._unresolvable_model_error(request_data, state)
+        request_data.model = config.name
+        return state, None
+
+    def check_reroute_request_to_model(
+        self,
+        request: RequestInput,
+        artifacts: dict | None = None,
+        pipeline_state: PipelineState | None = None,
+    ) -> PipelineState | None:
+        """Set ``request.model`` for the request's current pipeline step.
+
+        Thin wrapper around :meth:`_route_request` kept as the documented
+        routing entry point; the admission path calls ``_route_request``
+        directly so it can surface the typed error message.
         """
-        VoiceFixer uses a two-step process for audio restoration:
-        1. VoiceFixerRestorer: Audio → Enhanced Mel Spectrogram
-        2. VoiceFixerVocoder: Enhanced Mel Spectrogram → Restored Audio
-        """
-        if isinstance(request, AudioConversionRequestInput):
-            if _missing(request, artifacts, "input_mel_spectrogram"):
-                # Step 1: Route to Restorer (Audio → Mel)
-                for cfg in self.model_configs:
-                    if cfg.model_type == "VoiceFixerRestorer":
-                        request.model = cfg.name
-                        break
-            else:
-                # Step 2: Route to Vocoder (Mel → Audio)
-                for cfg in self.model_configs:
-                    if cfg.model_type == "VoiceFixerVocoder":
-                        request.model = cfg.name
-                        break
-
-    def reroute_request_chatterbox(self, request: RequestInput, artifacts: dict | None = None):
-        # Map sentinel name → TTS model_type
-        _CHATTERBOX_TTS_TYPE_MAP = {
-            "chatterbox": "ChatterboxTTS",
-            "chatterbox_turbo": "ChatterboxTurboTTS",
-            "chatterbox_multilingual": "ChatterboxMultilingualTTS",
-        }
-
-        if isinstance(request, SpeechEmbeddingRequestInput) or (
-            isinstance(request, TextToSpeechRequestInput)
-            and _present(request, artifacts, "input_audio")
-            and _missing(request, artifacts, "input_embedding")
-        ):
-            # Prefer dedicated ChatterboxEmbedding executor if configured
-            for cfg in self.model_configs:
-                if cfg.model_type == "ChatterboxEmbedding":
-                    request.model = cfg.name
-                    break
-            else:
-                # Fallback: route embedding request to the TTS model executor
-                # (ChatterboxTTS also has prepare_conditionals — no separate model needed)
-                tts_type = _CHATTERBOX_TTS_TYPE_MAP.get(request.requested_model, "ChatterboxTTS")
-                for cfg in self.model_configs:
-                    if cfg.model_type == tts_type:
-                        request.model = cfg.name
-                        break
-        elif (
-            isinstance(request, TextToSpeechRequestInput)
-            and _missing(request, artifacts, "input_audio")  # direct path or Step 2 after embedding
-        ):
-            # Route to the appropriate TTS variant
-            tts_type = _CHATTERBOX_TTS_TYPE_MAP.get(request.requested_model)
-            if tts_type:
-                for cfg in self.model_configs:
-                    if cfg.model_type == tts_type:
-                        request.model = cfg.name
-                        break
-
-    def reroute_request_chatterbox_vc(self, request: RequestInput, artifacts: dict | None = None):
-        if isinstance(request, VoiceConversionRequestInput):
-            for cfg in self.model_configs:
-                if cfg.model_type == "ChatterboxVC":
-                    request.model = cfg.name
-                    break
-
-    def check_reroute_request_to_model(self, request: RequestInput, artifacts: dict | None = None):
-        # Harmonyspeech TTS Processing
-        if request.requested_model == "harmonyspeech":
-            self.reroute_request_harmonyspeech(request, artifacts)
-        # OpenVoice V1 TTS & VC Processing
-        if request.requested_model == "openvoice_v1":
-            self.reroute_request_openvoice_v1(request, artifacts)
-        # OpenVoice V2 TTS & VC Processing
-        if request.requested_model == "openvoice_v2":
-            self.reroute_request_openvoice_v2(request, artifacts)
-        # VoiceFixer Audio Conversion Processing
-        if request.requested_model == "voicefixer":
-            self.reroute_request_voicefixer(request, artifacts)
-        # Chatterbox TTS (standard)
-        if request.requested_model == "chatterbox":
-            self.reroute_request_chatterbox(request, artifacts)
-        # Chatterbox Turbo TTS
-        if request.requested_model == "chatterbox_turbo":
-            self.reroute_request_chatterbox(request, artifacts)
-        # Chatterbox Multilingual TTS
-        if request.requested_model == "chatterbox_multilingual":
-            self.reroute_request_chatterbox(request, artifacts)
-        # Chatterbox Voice Conversion
-        if request.requested_model == "chatterbox_vc":
-            self.reroute_request_chatterbox_vc(request, artifacts)
+        state, _error = self._route_request(request, artifacts, pipeline_state)
+        return state
 
     def _find_engine_request(self, request_id: str):
         """Return the in-flight ``EngineRequest`` for ``request_id`` (or ``None``)."""
@@ -430,50 +264,30 @@ class HarmonySpeechEngine:
                     return request
         return None
 
-    def _forwarding_artifacts(self, request_id: str) -> dict:
-        """Snapshot the current request's artifact store before it is released.
+    def _finalize_pipeline_output(self, result: ExecutorResult, input_data: RequestInput) -> None:
+        """Map the final step's output onto the endpoint's response type.
 
-        The finished request's ``clear_artifacts()`` runs in
-        ``update_request_status``; copying the dict first hands the artifact
-        references (not copies of the tensors) to the next pipeline step.
+        Speech endpoints speak ``TextToSpeechRequestOutput``; every other
+        endpoint keeps the executor's own output class. This is the one
+        spec-independent conversion left in the forwarding path.
         """
-        engine_request = self._find_engine_request(request_id)
-        artifacts = getattr(engine_request, "artifacts", None)
-        return dict(artifacts) if isinstance(artifacts, dict) else {}
-
-    def _resubmit_forward(
-        self,
-        result: ExecutorResult,
-        forwarding_request: RequestInput,
-        artifacts: dict,
-        *,
-        artifact_field: str | None = None,
-        artifact=None,
-        legacy_field: str | None = None,
-        legacy_value=None,
-        clear_fields: tuple[str, ...] = (),
-    ):
-        """Hand a request to the next pipeline step with artifacts attached."""
-        if artifact is not None and artifact_field is not None:
-            artifacts[artifact_field] = artifact
-        for field in clear_fields:
-            setattr(forwarding_request, field, None)
-            artifacts.pop(field, None)
-        if legacy_field is not None:
-            setattr(forwarding_request, legacy_field, legacy_value)
-        self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_FORWARDED)
-        self.add_request(result.request_id, forwarding_request, artifacts=artifacts or None)
-        return RequestStatus.FINISHED_FORWARDED, forwarding_request
+        if not isinstance(input_data, TextToSpeechRequestInput):
+            return
+        if isinstance(result.result_data, TextToSpeechRequestOutput):
+            return
+        result.result_data = TextToSpeechRequestOutput(
+            request_id=result.request_id,
+            text=getattr(input_data, "input_text", "") or "",
+            output=result.result_data.output,
+            finish_reason=result.result_data.finish_reason,
+            metrics=result.result_data.metrics if result.result_data.metrics else None,
+            audio_artifact=getattr(result.result_data, "audio_artifact", None),
+        )
 
     def check_forward_processing(self, result: ExecutorResult):
-        new_status = RequestStatus.FINISHED_STOPPED
         input_data = result.input_data
-        returning_model_cfg = None
-        requested_model = input_data.requested_model
-        for cfg in self.model_configs:
-            if input_data.model == cfg.name:
-                returning_model_cfg = cfg
-                break
+        requested_model = getattr(input_data, "requested_model", None)
+        returning_model_cfg = self._model_config_by_name(getattr(input_data, "model", None))
 
         # If inference produced an error result (e.g. bad input, model failure),
         # do NOT attempt to forward it through the multi-step pipeline. Mark the
@@ -485,162 +299,57 @@ class HarmonySpeechEngine:
             self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
             return RequestStatus.FINISHED_STOPPED, None
 
-        # Explicit model selected, no forwarding needed
-        if returning_model_cfg == requested_model:
-            return new_status, None
+        # Explicit model selected (a concrete configured executor name equal to
+        # the requested model), no forwarding needed.
+        if returning_model_cfg is not None and returning_model_cfg.name == requested_model:
+            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
+            return RequestStatus.FINISHED_STOPPED, None
 
-        forwarding_request = None
+        spec = get_spec(requested_model)
+        if spec is None:
+            # Unknown pipeline / direct single-step executor: nothing to forward.
+            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
+            return RequestStatus.FINISHED_STOPPED, None
 
-        # Multi-Step Embedding Processing (OpenVoice)
-        if isinstance(input_data, SpeechEmbeddingRequestInput) and requested_model in ["openvoice_v1", "openvoice_v2"]:
-            forwarding_request = input_data
+        engine_request = self._find_engine_request(result.request_id)
+        context = engine_request if engine_request is not None else PipelineExecution(request_data=input_data)
+        if getattr(context, "pipeline_state", None) is None and returning_model_cfg is not None:
+            # Defensive fallback (the EngineRequest is normally found): the step
+            # that just ran is unambiguous from the returned model's type.
+            entry_state = resolve_entry(spec, input_data, getattr(context, "artifacts", None), self.model_configs)
+            context.pipeline_state = completed_step_state(
+                spec,
+                returning_model_cfg.model_type,
+                stop_after=entry_state.stop_after if entry_state is not None else None,
+            )
 
-            if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
-                # Transcription results used By:
-                # - OpenVoice V1
-                # - OpenVoice V2
-                artifacts = self._forwarding_artifacts(result.request_id)
-                vad_artifact = getattr(result.result_data, "vad_artifact", None)
-                if vad_artifact is not None:
-                    artifacts["input_vad_data"] = vad_artifact
-                # ``input_vad_data`` is plain JSON text (not a serialized audio
-                # intermediate) and remains the routing signal until Phase 3.
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    legacy_field="input_vad_data",
-                    legacy_value=result.result_data.output,
-                )
+        try:
+            done = advance(spec, context, result.result_data)
+        except PipelineRoutingError as exc:
+            # A step failed to produce its declared artifact: fail the request
+            # naming the step instead of forwarding a half-built state.
+            logger.error(f"Request {result.request_id} failed in pipeline '{spec.id}': {exc.message}")
+            result.result_data.finish_reason = "error"
+            result.result_data.error = exc.message
+            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
+            return RequestStatus.FINISHED_STOPPED, None
 
-        # Multi-Step TTS Processing (Harmonyspeech, OpenVoice)
-        if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
-            "harmonyspeech",
-            "openvoice_v1",
-            "openvoice_v2",
-        ]:
-            forwarding_request = input_data
+        if done:
+            self._finalize_pipeline_output(result, input_data)
+            self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_STOPPED)
+            return RequestStatus.FINISHED_STOPPED, None
 
-            if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
-                # Transcription results used By:
-                # - OpenVoice V1
-                # - OpenVoice V2
-                artifacts = self._forwarding_artifacts(result.request_id)
-                vad_artifact = getattr(result.result_data, "vad_artifact", None)
-                if vad_artifact is not None:
-                    artifacts["input_vad_data"] = vad_artifact
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    legacy_field="input_vad_data",
-                    legacy_value=result.result_data.output,
-                )
-            elif isinstance(result.result_data, SpeechEmbeddingRequestOutput):
-                # Embedding results used By:
-                # - OpenVoice V1
-                # - OpenVoice V2
-                # - Harmony Speech
-                artifacts = self._forwarding_artifacts(result.request_id)
-                embedding_artifact = getattr(result.result_data, "embedding_artifact", None)
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    artifact_field="input_embedding",
-                    artifact=embedding_artifact,
-                    legacy_field="input_embedding",
-                    legacy_value=None if embedding_artifact is not None else result.result_data.output,
-                    clear_fields=("input_audio",),
-                )
-            elif isinstance(result.result_data, SpeechSynthesisRequestOutput) and input_data.mode == "voice_cloning":
-                # Synthesis results used By:
-                # - OpenVoice V1
-                # - OpenVoice V2
-                # - Harmony Speech
-                artifacts = self._forwarding_artifacts(result.request_id)
-                audio_artifact = getattr(result.result_data, "audio_artifact", None)
-                mel_artifact = getattr(result.result_data, "mel_artifact", None)
-                pipeline_artifact = audio_artifact if audio_artifact is not None else mel_artifact
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    artifact_field="input_audio",
-                    artifact=pipeline_artifact,
-                    legacy_field="input_audio",
-                    legacy_value=None if pipeline_artifact is not None else result.result_data.output,
-                )
-            else:  # There should be only final processing results here...
-                # Vocoding / Voice Conversion / Single Speaker TTS results used By:
-                # - OpenVoice V1
-                # - OpenVoice V2
-                # - Harmony Speech
-
-                # Mark as finished in scheduler
-                new_status = RequestStatus.FINISHED_STOPPED
-                self.scheduler.update_request_status(result.request_id, new_status)
-                # Convert result to TTS output - Assuming VocodeRequestOutput
-                tts_result = TextToSpeechRequestOutput(
-                    request_id=result.request_id,
-                    text=input_data.input_text,
-                    output=result.result_data.output,
-                    finish_reason=result.result_data.finish_reason,
-                    metrics=result.result_data.metrics if result.result_data.metrics else None,
-                    audio_artifact=getattr(result.result_data, "audio_artifact", None),
-                )
-                result.result_data = tts_result
-
-        # Multi-step TTS Processing (Chatterbox — embed then synthesize)
-        if isinstance(input_data, TextToSpeechRequestInput) and requested_model in [
-            "chatterbox",
-            "chatterbox_turbo",
-            "chatterbox_multilingual",
-        ]:
-            forwarding_request = input_data
-
-            if isinstance(result.result_data, SpeechEmbeddingRequestOutput):
-                # Embedding step finished — forward to TTS synthesize step. The
-                # Conditionals object travels by reference (no pickle round trip).
-                artifacts = self._forwarding_artifacts(result.request_id)
-                embedding_artifact = getattr(result.result_data, "embedding_artifact", None)
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    artifact_field="input_embedding",
-                    artifact=embedding_artifact,
-                    legacy_field="input_embedding",
-                    legacy_value=None if embedding_artifact is not None else result.result_data.output,
-                    clear_fields=("input_audio",),
-                )
-
-        # Multi-Step Audio Conversion Processing (VoiceFixer)
-        if isinstance(input_data, AudioConversionRequestInput) and requested_model == "voicefixer":
-            forwarding_request = input_data
-            returning_model_type = getattr(returning_model_cfg, "model_type", None)
-
-            if isinstance(result.result_data, AudioConversionRequestOutput) and returning_model_type == "VoiceFixerRestorer":
-                # Restorer step finished, forward to Vocoder with the mel artifact
-                artifacts = self._forwarding_artifacts(result.request_id)
-                mel_artifact = getattr(result.result_data, "mel_artifact", None)
-                return self._resubmit_forward(
-                    result,
-                    forwarding_request,
-                    artifacts,
-                    artifact_field="input_mel_spectrogram",
-                    artifact=mel_artifact,
-                    legacy_field="input_mel_spectrogram",
-                    legacy_value=None if mel_artifact is not None else result.result_data.output,
-                )
-            else:
-                # Vocoder step finished, mark as completed
-                new_status = RequestStatus.FINISHED_STOPPED
-                self.scheduler.update_request_status(result.request_id, new_status)
-
-        # TODO: Post-Generation Processing
-
-        return new_status, forwarding_request
+        # Snapshot the artifact references before the finished request releases
+        # its store (``update_request_status`` -> ``clear_artifacts``).
+        artifacts = dict(getattr(context, "artifacts", None) or {})
+        self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_FORWARDED)
+        self.add_request(
+            result.request_id,
+            input_data,
+            artifacts=artifacts or None,
+            pipeline_state=context.pipeline_state,
+        )
+        return RequestStatus.FINISHED_FORWARDED, input_data
 
     def _pending_errors(self) -> list[RequestOutput]:
         """Return the pre-step error queue, creating it for shell instances."""
@@ -658,23 +367,6 @@ class HarmonySpeechEngine:
         drained = list(pending)
         pending.clear()
         return drained
-
-    def _unresolvable_model_error(self, request_data: RequestInput) -> str:
-        """Describe why a request cannot be routed to a configured executor."""
-        requested = getattr(request_data, "requested_model", None) or getattr(request_data, "model", "unknown")
-        required_types = FAMILY_REQUIREMENTS.get(requested)
-        if required_types is None:
-            return (
-                f"Request routed to unknown model '{getattr(request_data, 'model', 'unknown')}', "
-                f"which is not configured on this engine."
-            )
-        configured_types = {cfg.model_type for cfg in (self.model_configs or [])}
-        missing = [model_type for model_type in required_types if model_type not in configured_types]
-        detail = f"missing one of: {', '.join(missing)}" if missing else "no executor registered"
-        return (
-            f"Model family '{requested}' is not fully configured on this engine "
-            f"({detail})"
-        )
 
     def _expire_overdue_requests(self) -> list[RequestOutput]:
         """Resolve requests whose per-request deadline has passed as errors.
@@ -715,6 +407,7 @@ class HarmonySpeechEngine:
         request_data: RequestInput,
         arrival_time: float | None = None,
         artifacts: dict | None = None,
+        pipeline_state: PipelineState | None = None,
     ) -> None:
         """Add a Text-to-Speech request to the engine's request pool.
 
@@ -730,6 +423,10 @@ class HarmonySpeechEngine:
             artifacts: Typed in-process artifacts carried over from a forwarding
                 step (Phase 2-3). When None, inbound audio/VAD fields are decoded
                 once here (Phase 2-2 admission decode).
+            pipeline_state: Routing position carried over from a forwarding step.
+                When None, the pipeline's entry rules decide where this request
+                starts (Phase 3-4). Forwarded requests always pass it explicitly,
+                so they never re-resolve entry.
 
         Details:
             - Set arrival_time to the current time if it is None.
@@ -744,13 +441,14 @@ class HarmonySpeechEngine:
 
         artifact_store = dict(artifacts) if artifacts else {}
 
-        # Route to correct model if necessary. Routing treats a cached artifact as
-        # a present field, so forwarded steps need no legacy string sentinel.
-        self.check_reroute_request_to_model(request=request_data, artifacts=artifact_store)
+        # Route to correct model if necessary. The pipeline state decides the
+        # step; routing treats a cached artifact as a present field, so forwarded
+        # steps need no legacy string sentinel.
+        pipeline_state, routing_error = self._route_request(request_data, artifact_store, pipeline_state)
 
         model_executors = getattr(self, "model_executors", {})
-        if request_data.model not in model_executors:
-            error = self._unresolvable_model_error(request_data)
+        if routing_error is not None or request_data.model not in model_executors:
+            error = routing_error or self._unresolvable_model_error(request_data, pipeline_state)
             logger.error(f"Request {request_id} rejected: {error}")
             self._queue_pending_errors(
                 [RequestOutput(request_id=request_id, finish_reason="error", error=error)]
@@ -773,6 +471,7 @@ class HarmonySpeechEngine:
                 arrival_time=arrival_time,
                 deadline=deadline,
                 artifacts=artifact_store,
+                pipeline_state=pipeline_state,
             )
         )
 

@@ -20,8 +20,6 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling STT Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
-_STT_MODEL_TYPES = ["FasterWhisper"]
-_STT_MODEL_GROUPS = {}
 
 
 class OpenAIServingSpeechToText(OpenAIServing):
@@ -30,7 +28,8 @@ class OpenAIServingSpeechToText(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]) -> list[ModelCard]:
-        return OpenAIServing.model_cards_from_config_groups(configured_models, _STT_MODEL_TYPES, _STT_MODEL_GROUPS)
+        # Advertised cards come from the pipeline registry (Phase 3-3).
+        return OpenAIServing.model_cards_from_specs(configured_models, "stt")
 
     async def create_transcription(
         self, request: SpeechTranscribeRequest, raw_request: Request

@@ -62,10 +62,29 @@ Each `*.models_from_config()` delegates to the spec-based generator filtered by 
 
 ## Checklist
 
-- [ ] `validate_registry` replaces 0-4 internals; per-step missing messages
-- [ ] `--strict-pipelines` fail-fast option
-- [ ] Model cards generated from specs; hand lists deleted from all serving modules
-- [ ] `/v1/models` schema unchanged (+additive capability/language fields)
-- [ ] Tests incl. before/after card parity
-- [ ] `docs/models.md` + `CHANGELOG.md` updated
-- [ ] `summary.md` Implementation Status updated
+- [x] `validate_registry` replaces 0-4 internals; per-step missing messages
+- [x] `--strict-pipelines` fail-fast option
+- [x] Model cards generated from specs; hand lists deleted from all serving modules
+- [x] `/v1/models` schema unchanged (+additive capability/language fields)
+- [x] Tests incl. before/after card parity
+- [x] `docs/models.md` + `CHANGELOG.md` updated
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (recorded after implementation)
+
+- Deleted lists: `_TTS_MODEL_TYPES`/`_TTS_MODEL_GROUPS`,
+  `_EMBEDDING_MODEL_TYPES`/`_EMBEDDING_MODEL_GROUPS`,
+  `_STT_MODEL_TYPES`/`_STT_MODEL_GROUPS`, `_VAD_MODEL_TYPES`/`_VAD_MODEL_GROUPS`,
+  `_VOICE_CONVERSION_MODEL_TYPES`/`_VOICE_CONVERSION_MODEL_GROUPS`,
+  `_AUDIO_CONVERSION_MODEL_TYPES`/`_AUDIO_CONVERSION_MODEL_GROUPS`, and the generic
+  `model_cards_from_config_groups` they fed.
+- `FAMILY_REQUIREMENTS`, `validate_families`, `missing_family_requirements` and
+  `is_family_available` are kept as **derived** views over the registry (Phase 0-4
+  public surface); nothing is hand-maintained.
+- `--strict-pipelines` also honours `HSE_STRICT_PIPELINES=1` and a
+  `strict_pipelines: true` config key.
+- A family whose id equals a configured model name (the default `chatterbox`
+  deployment) is advertised by a single card, matching the pre-migration group
+  lookup; the additive metadata is still attached.
+- `openvoice_v1/v2` embed/TTS cards now also appear when Silero VAD replaces
+  Whisper (the VAD step accepts either backend). Improvement, not a schema change.

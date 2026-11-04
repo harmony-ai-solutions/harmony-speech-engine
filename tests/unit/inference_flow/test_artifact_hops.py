@@ -107,7 +107,8 @@ def test_embedding_forward_carries_speaker_artifact_by_reference():
 
 
 @pytest.mark.unit
-def test_embedding_forward_falls_back_to_legacy_string():
+def test_embedding_forward_without_artifact_is_a_typed_error():
+    """A step that does not produce its declared artifact fails naming the step."""
     input_data = TextToSpeechRequestInput(
         request_id="hop-2",
         requested_model="chatterbox",
@@ -117,7 +118,9 @@ def test_embedding_forward_falls_back_to_legacy_string():
         input_audio="legacy-audio",
     )
     engine_request = _engine_request(input_data)
-    engine = _engine_shell(_cfg("cb-embed", "ChatterboxEmbedding"), _cfg("cb-tts", "ChatterboxTTS"), requests=[engine_request])
+    engine = _engine_shell(
+        _cfg("cb-embed", "ChatterboxEmbedding"), _cfg("cb-tts", "ChatterboxTTS"), requests=[engine_request]
+    )
 
     result = ExecutorResult(
         request_id="hop-2",
@@ -125,9 +128,15 @@ def test_embedding_forward_falls_back_to_legacy_string():
         result_data=SpeechEmbeddingRequestOutput(request_id="hop-2", output="legacy-embedding"),
     )
 
-    engine.check_forward_processing(result)
+    status, forwarding = engine.check_forward_processing(result)
 
-    assert input_data.input_embedding == "legacy-embedding"
+    assert status == RequestStatus.FINISHED_STOPPED
+    assert forwarding is None
+    assert result.result_data.finish_reason == "error"
+    assert "chatterbox" in result.result_data.error
+    assert "embed" in result.result_data.error
+    assert "embedding_artifact" in result.result_data.error
+    engine.add_request.assert_not_called()
 
 
 @pytest.mark.unit
@@ -160,8 +169,10 @@ def test_vad_forward_carries_vad_artifact():
     assert status == RequestStatus.FINISHED_FORWARDED
     _, kwargs = engine.add_request.call_args
     assert kwargs["artifacts"]["input_vad_data"] is vad
-    # JSON text stays the routing signal until Phase 3.
-    assert input_data.input_vad_data == payload
+    # Phase 3: the routing signal is the pipeline state, so no legacy JSON
+    # string is written on the hop.
+    assert input_data.input_vad_data is None
+    assert kwargs["pipeline_state"].step_index == 1  # embed is next
 
 
 @pytest.mark.unit
@@ -279,9 +290,9 @@ def test_voicefixer_vocoder_completion_does_not_forward():
     status, forwarding = engine.check_forward_processing(result)
 
     assert status == RequestStatus.FINISHED_STOPPED
-    # The vocoder step is terminal; the request object is returned for counting
-    # only (matching the pre-Phase-2 behaviour) and is never re-submitted.
-    assert forwarding is input_data
+    # The vocoder step is terminal: nothing is re-submitted, and the pipeline
+    # state (not a returned request object) marks completion.
+    assert forwarding is None
     engine.add_request.assert_not_called()
     assert engine.scheduler.updates[-1][1] == RequestStatus.FINISHED_STOPPED
 

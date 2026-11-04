@@ -815,7 +815,12 @@ class ModelRunnerBase:
             else:
                 response = {"speech_activity": len(timestamps) > 0}
 
-            return json.dumps(response), VadArtifact(segments=timestamps if get_timestamps else [])
+            # The artifact always carries whisper-schema segments (Phase 3-4):
+            # the response shape stays request-dependent, but a pipeline VAD
+            # step needs the segments regardless of the endpoint's flags.
+            return json.dumps(response), VadArtifact.from_silero_timestamps(
+                timestamps, return_seconds=return_seconds
+            )
 
         outputs = []
         for i, x in enumerate(inputs):

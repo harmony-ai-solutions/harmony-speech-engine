@@ -110,6 +110,8 @@ class EngineConfig:
     # Default per-request deadline (seconds). 0/None disables deadline
     # enforcement; the engine-step watchdog remains as a last-resort safety net.
     request_timeout_s: float | None = 120.0
+    # Fail boot instead of warning when a declared pipeline is incomplete.
+    strict_pipelines: bool = False
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
@@ -133,6 +135,7 @@ class EngineConfig:
         return EngineConfig(
             model_configs=model_configs,
             request_timeout_s=config_data.get("request_timeout_s", 120.0),
+            strict_pipelines=bool(config_data.get("strict_pipelines", False)),
         )
 
 

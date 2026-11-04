@@ -15,7 +15,7 @@ The following findings were fixed by the engine modernization Phase 0 plan
 | Voice conditionals leak between requests | **RESOLVED** (0-2) | baseline snapshot/restore (`try/finally`) in all Chatterbox handlers; missing conditioning fails with 400 |
 | Mixed Chatterbox batch misattributes results / drops requests | **RESOLVED** (0-3) | type-partitioned batches, explicit request passing, alignment asserts |
 | Closure over the loop variable in `_execute_*` | **RESOLVED** (0-3) | every worker helper receives its request as a parameter |
-| Requests can hang forever when a group member is missing | **RESOLVED** (0-4) | startup toolchain validation, immediate error on unresolvable routing, scheduler unknown-model safety net |
+| Requests can hang forever when a group member is missing | **RESOLVED** (0-4, 3) | spec-driven startup validation naming the missing step, immediate error on unresolvable routing, scheduler unknown-model safety net |
 | Engine iteration timeout kills the server loop | **RESOLVED** (0-5) | per-request deadlines; watchdog demoted to recoverable safety net with consecutive-trip escalation |
 | Health check iterates dict keys | **RESOLVED** (0-5) | `check_health` iterates `.values()` via `.items()` and returns a structured payload |
 
@@ -73,12 +73,11 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Impact:** Dashboards show zeros; `/metrics` implies GPU KV-cache telemetry that does not exist for a TTS engine. Token metrics are meaningless for audio.
 - **Fix approach:** Replace with speech-specific metrics (requests by endpoint/model, queue depth, synthesis seconds per audio second, GPU allocated bytes per executor) and rename the namespace.
 
-### Hardcoded String Routing
+### Hardcoded String Routing — RESOLVED (Phase 3)
 
-- **Issue:** Multi-step pipelines are routed by `model_type` string comparisons and sentinel model IDs in long `if/elif` chains. Fallback behavior when no matching config exists is silent (see Fragile Areas).
-- **Files:** `harmonyspeech/engine/harmonyspeech_engine.py:109-361`, `harmonyspeech/task_handler/model_runner_base.py:71-115`, `harmonyspeech/endpoints/openai/serving_text_to_speech.py:15-32`
-- **Impact:** Adding a model requires edits in routing, serving model lists, input preparation, execution dispatch, and loader — five places that can drift.
-- **Fix approach:** Introduce a declarative pipeline descriptor per toolchain (ordered steps of `required_model_types`, input mutation functions) and drive both cards and routing from it.
+- **Was:** Multi-step pipelines were routed by `model_type` string comparisons and sentinel model IDs in long `if/elif` chains; serving modules kept their own model-type/group lists. Adding a model required edits in five places that could drift.
+- **Now:** `harmonyspeech/processing/pipeline_registry.py` declares every toolchain as a `PipelineSpec` (steps with `requires`/`needs`/`produces`, entry rules, capabilities). Routing (`next_step`), forwarding (`advance`), startup validation (`validate_registry`) and `/v1/models` cards all read that one declaration; the per-serving-module lists are deleted. The parity of every old routing decision is locked by `tests/unit/inference_flow/test_pipeline_routing.py`.
+- **Remaining:** input preparation and execution dispatch still key on `model_type` (`task_handler/inputs.py`, `task_handler/model_runner_base.py`) — a second place that must learn a new `model_type`. Unifying those behind the registry is future work, not a routing concern.
 
 ### MeloTTS Input Preparation
 
@@ -134,10 +133,8 @@ The engine hosts every model in a YAML config as a permanently resident executor
 
 ### Requests Can Hang Forever When a Group Member Is Missing — RESOLVED (Phase 0-4)
 
-- **Symptoms:** If routing finds no matching `ModelConfig`, `request.model` stays at the sentinel (e.g. `"openvoice_v2"`). `SchedulingBudget.remaining_request_budget()` returns `0` for unknown models (`scheduler.py:27-30`), so the request is moved back to `waiting` every step and its async stream never completes. The HTTP request hangs until the client disconnects.
-- **Files:** `harmonyspeech/processing/scheduler.py:165-189`, `harmonyspeech/engine/harmonyspeech_engine.py:109-361`, `harmonyspeech/engine/async_harmonyspeech.py:418-446`
-- **Trigger:** A toolchain group advertised by `model_cards_from_config_groups` but missing one required member (for example OpenVoice synthesizer configured without its tone converter), or a typo in `model_type`.
-- **Fix:** Validate at startup that every advertised group resolves; in `add_request`, fail with `InvalidInputError` if `request.model` is not a configured model name.
+- **Symptoms:** If routing found no matching `ModelConfig`, `request.model` stayed at the sentinel and the request was requeued forever.
+- **Fix (0-4 + Phase 3):** `validate_registry` reports incomplete pipelines at startup, `next_step` returns `None` for an unresolvable step, and `add_request` rejects the request immediately with an error naming the pipeline and step. The scheduler keeps its unknown-model safety net.
 
 ### Rate-Limit Arithmetic Uses Negative Deltas
 
@@ -403,9 +400,10 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py:806-849`, `harmonyspeech/engine/harmonyspeech_engine.py:467-483`
 - **Blocks:** Low-latency repeated voice cloning; unnecessary GPU work.
 
-### `input_vad_mode` Selection
+### `input_vad_mode` Selection — RESOLVED (Phase 3)
 
-- **Problem:** The field is documented as a VAD engine hint but is purely informational; routing always picks the first `FasterWhisper` config.
+- **Was:** The field was documented as a VAD engine hint but was purely informational; routing always picked the first `FasterWhisper` config.
+- **Now:** `"silero"` selects a configured Silero VAD executor for the OpenVoice pipelines (with a warning and Faster-Whisper fallback when none is configured); Silero emits the same whisper-schema segment artifact the encoder consumes.
 - **Files:** `harmonyspeech/endpoints/openai/protocol.py:160-163`, `harmonyspeech/engine/harmonyspeech_engine.py:167,234`, `docs/api.md:143`
 - **Blocks:** Users choosing Silero VAD inside OpenVoice/HarmonySpeech pipelines.
 
@@ -449,7 +447,7 @@ Also untested by design: E2E suites download real weights and are split across s
 1. **Remove pickle execution from request paths.** *(Done — Phase 0-1)* Replace `torch.load(..., weights_only=False)` with `weights_only=True` or `safetensors` for embeddings and checkpoints (`model_runner_base.py:332-333`, `hf_downloader.py:163`).
 2. **Fix Chatterbox voice leakage.** *(Done — Phase 0-2)* Reset `model.conds`/`ref_dict` per request or carry conditionals in the input (`model_runner_base.py:683-700`).
 3. **Reject or split mixed Chatterbox batches.** *(Done — Phase 0-3)* Assert `len(inputs) == len(requests_to_batch)` and dispatch on request type per item (`inputs.py:174-219`, `model_runner_base.py:96-115`).
-4. **Fail loudly on unresolvable routing.** *(Done — Phase 0-4)* Validate every advertised group at startup and return 400 instead of queueing forever (`scheduler.py`, `harmonyspeech_engine.py:508-534`).
+4. **Fail loudly on unresolvable routing.** *(Done — Phase 0-4, made structural in Phase 3)* Validate every declared pipeline at startup (optionally `--strict-pipelines`) and reject unresolvable requests immediately instead of queueing forever (`pipeline_registry.py`, `scheduler.py`).
 5. **Make auth fail closed and fix the rate-limit math** (`api_server.py:304`, `apikeys.py:107,123`).
 
 ### Priority 2 — GPU Viability on a 16 GB Card

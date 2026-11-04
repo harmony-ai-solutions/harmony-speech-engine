@@ -172,6 +172,14 @@ These fixtures are available to all tests via `tests/conftest.py`:
 | `test_data_dir` | session | `Path` to `tests/test-data/` |
 | `sample_config` | function | Minimal valid model config dict for testing config parsing |
 
+Additionally, `tests/unit/conftest.py` provides:
+
+| Fixture | Scope | Description |
+|---------|-------|-------------|
+| `mock_model_loader` | function | Patches the model loader so no weights are read |
+| `mock_hf_downloader` | function | Patches HuggingFace Hub downloads |
+| `loguru_records` | function | Captures loguru messages (pytest's `caplog` only sees stdlib logging) — used by the routing/validation warning tests |
+
 ---
 
 ## CI Integration

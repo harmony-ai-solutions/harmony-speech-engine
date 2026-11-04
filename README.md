@@ -78,7 +78,7 @@ npm install
 
 #### 2. Check `config.yml` is correctly set up for the models you want to use (See [Models](docs/models.md)).
 
-On startup the engine validates each model toolchain and only advertises complete ones. An incomplete toolchain (e.g. an OpenVoice V2 setup without its tone converter) logs a warning listing the missing model types and rejects requests routed to it with an error, instead of leaving them waiting.
+On startup the engine validates each model toolchain and only advertises complete ones. An incomplete toolchain (e.g. an OpenVoice V2 setup without its tone converter) logs a warning naming the missing step and rejects requests routed to it with an error, instead of leaving them waiting. Add `--strict-pipelines` (or set `HSE_STRICT_PIPELINES=1`) to make incomplete configuration a startup error instead of a warning.
 
 #### 3. Run Harmony Speech Engine from repo base directory:
 ```

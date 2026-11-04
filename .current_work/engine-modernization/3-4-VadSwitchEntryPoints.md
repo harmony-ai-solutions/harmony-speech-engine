@@ -72,9 +72,26 @@ Admission (`add_request`) resolves `pipeline_state` via the first matching rule;
 
 ## Checklist
 
-- [ ] Silero produces Whisper-compatible `VadArtifact` segments; filter adjusted
-- [ ] `input_vad_mode` honored with graceful fallback
-- [ ] `EntryRule` set replaces field-coercion entry hacks; `single_speaker_tts` FIXME resolved
-- [ ] Forwarded requests never re-resolve entry
-- [ ] Docs + tests green
-- [ ] `summary.md` Implementation Status updated
+- [x] Silero produces Whisper-compatible `VadArtifact` segments; filter adjusted
+- [x] `input_vad_mode` honored with graceful fallback
+- [x] `EntryRule` set replaces field-coercion entry hacks; `single_speaker_tts` FIXME resolved
+- [x] Forwarded requests never re-resolve entry
+- [x] Docs + tests green
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (recorded after implementation)
+
+- `VadArtifact` gained a `source` field (`"whisper"` / `"silero"`) plus
+  `from_silero_timestamps()`; the encoder filter keys off `source`, keeping the
+  whisper text-length heuristic exactly as before.
+- The Silero executor now always builds normalized segments; only the JSON *response*
+  stays dependent on `get_timestamps` (standalone `/v1/audio/vad` unchanged).
+- The VAD preference is expressed as `Step.preference_field` +
+  `requires_by_preference`, the simpler of the two options in the task.
+- `EntryRule.requires_model_type` was added so the Chatterbox embed entry depends on
+  whether a dedicated embedding executor is configured (see 3-2 deviations).
+- Silero segments still obey the 1.5 s–20 s duration filter (the reference clip must
+  contain a usable speech run); only the text-length condition is skipped.
+- E2E: `tests/e2e/tts/test_openvoice_vad_mode.py` runs the real OpenVoice V2 cloning
+  pipeline with `input_vad_mode="silero"`, `"whisper"`, and with Silero absent
+  (fallback) — all three pass on CPU.

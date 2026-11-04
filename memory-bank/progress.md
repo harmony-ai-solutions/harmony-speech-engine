@@ -6,6 +6,20 @@
 **Overall Completion**: ~75%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 3 (COMPLETE, 2026-11-04)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 3 of a 6-phase modernization; `summary.md` tracks all phases)
+
+- ✅ **3-1 PipelineSpec model & registry** — `Step`/`PipelineSpec`/`EntryRule`/`PipelineState` plus `next_step()`/`advance()` in `harmonyspeech/processing/pipeline_registry.py`; artifact-first `needs`, declared `produces`/`clears`; `EngineRequest.pipeline_state`.
+- ✅ **3-2 Family migration** — registry holds 11 specs (8 client-facing toolchains + 3 single-step executors); both `if/elif` ladders deleted (~250 lines); routing/forwarding spec-driven; error guard, explicit-model short-circuit and Phase 6 extension point preserved.
+- ✅ **3-3 Startup validation & model cards** — `validate_registry()` names each missing step; `--strict-pipelines`/`HSE_STRICT_PIPELINES`; cards generated from specs (capabilities/languages/members) and every per-serving-module hand list deleted; `/v1/models` ids unchanged.
+- ✅ **3-4 VAD switch & entry points** — Silero emits whisper-schema `VadArtifact` segments (backend-aware encoder filter); `input_vad_mode` honoured with fallback+warning; `EntryRule` set replaces field-presence entry hacks (`single_speaker_tts` FIXME resolved); forwarded requests never re-resolve entry.
+- ✅ **3-5 Routing tests & exit** — `tests/unit/inference_flow/test_pipeline_routing.py` parity table (40 cases over every family × entry shape), artifact-flow, per-step error, missing-artifact, disconnect, registry-only extension and strict-boot tests.
+
+**Verification**: 469 unit + 23 integration green; wire-contract e2e 38 passed / 3 model-only skips; real-model e2e green on CPU for all TTS families (HarmonySpeech with `HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1`), Whisper STT, Silero/Whisper VAD, VoiceFixer, plus a new Silero-VAD-in-pipeline cloning test.
+
+**Next**: Phase 4 — VRAM (fp16 rollout + Chatterbox weight dedup).
+
 ## Engine Modernization — Phase 2 (COMPLETE, 2026-11-04)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 2 of a 6-phase modernization; `summary.md` tracks all phases)

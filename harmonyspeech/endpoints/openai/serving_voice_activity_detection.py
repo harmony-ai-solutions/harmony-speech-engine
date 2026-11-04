@@ -24,8 +24,6 @@ from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
 # Add new model classes which allow handling VAD Requests here
 # If multiple models need to be initialized to process request, add multiple to the list
-_VAD_MODEL_TYPES = ["FasterWhisper", "SileroVAD"]
-_VAD_MODEL_GROUPS = {}
 
 
 class OpenAIServingVoiceActivityDetection(OpenAIServing):
@@ -34,7 +32,8 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]) -> list[ModelCard]:
-        return OpenAIServing.model_cards_from_config_groups(configured_models, _VAD_MODEL_TYPES, _VAD_MODEL_GROUPS)
+        # Advertised cards come from the pipeline registry (Phase 3-3).
+        return OpenAIServing.model_cards_from_specs(configured_models, "vad")
 
     async def check_voice_activity(
         self, request: DetectVoiceActivityRequest, raw_request: Request

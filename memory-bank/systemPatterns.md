@@ -71,56 +71,73 @@ class ExecutorBase:
         pass
 ```
 
-### 4. Request Routing System
+### 4. Request Routing System (declarative, Phase 3)
 
-The routing system implements **intelligent model selection** based on request characteristics and available models.
+Routing is **data, not code**. `harmonyspeech/processing/pipeline_registry.py`
+declares every toolchain as a `PipelineSpec`:
 
-#### Routing Strategies
-
-**1. Harmony Speech Routing**
 ```python
-def reroute_request_harmonyspeech(self, request: RequestInput):
-    # Multi-step pipeline: Embedding → Synthesis → Vocoding
-    if isinstance(request, SpeechEmbeddingRequestInput):
-        # Route to HarmonySpeechEncoder
-    elif isinstance(request, SynthesisRequestInput):
-        # Route to HarmonySpeechSynthesizer
-    elif isinstance(request, VocodeRequestInput):
-        # Route to HarmonySpeechVocoder
+PipelineSpec(
+    id="openvoice_v2",
+    steps=(vad, embed, synthesize, tone_convert),  # each Step declares
+    # requires (model_type preference), needs, produces, clears, advertises
+    final_step="tone_convert",
+    capabilities=frozenset({"tts", "embed", "vc"}),
+    entry_rules=(...),  # request shape -> starting step (+ optional stop_after)
+)
 ```
 
-**2. OpenVoice V1/V2 Routing**
-```python
-def reroute_request_openvoice_v2(self, request: RequestInput):
-    # Complex workflow: VAD → Embedding → Synthesis → Voice Conversion
-    if request.input_vad_data is None:
-        # Route to FasterWhisper for VAD
-    elif request.input_embedding is None:
-        # Route to OpenVoiceV2ToneConverterEncoder
-    elif request.input_audio is None:
-        # Route to MeloTTSSynthesizer
-    else:
-        # Route to OpenVoiceV2ToneConverter
-```
+Only two functions implement the behaviour:
+
+* `next_step(spec, state, request, model_configs)` — resolves the concrete model
+  for the current step (preference order, language variants, `input_vad_mode`),
+  or returns `None` so the engine emits the typed "pipeline not fully
+  configured" error naming the step.
+* `advance(spec, engine_request, result)` — maps the finished step's **typed
+  artifacts** onto the request fields declared in `produces`, clears superseded
+  fields, increments the step index and reports completion.
+
+The routing position travels on `EngineRequest.pipeline_state` and is resolved
+once at admission from the entry rules; forwarded requests never re-resolve it.
+The old `reroute_request_*` ladders and the output-class-sniffing forwarding
+branches are gone (Phase 3-2). Startup validation
+(`validate_registry`), `/v1/models` cards (`model_cards_from_specs`) and the
+capability/language metadata all read the same registry, so adding a toolchain
+touches one file.
+
+#### Entry points
+
+Entry rules replaced field-presence heuristics. Notable ones:
+
+* embedding-only requests start at VAD and `stop_after` the embed step;
+* `mode: "single_speaker_tts"` starts **and stops** at the synthesis step (the
+  old FIXME field-coercion hack is gone);
+* voice conversion starts at the tone-conversion step;
+* Chatterbox starts at its embed step only when a dedicated embedding executor
+  is configured (otherwise the TTS executor embeds inline);
+* single-step executors (`kitten_tts`, `fasterwhisper`, `silero_vad`) and
+  concrete model names bypass the pipeline (`advertise_toolchain=False`).
 
 ### 5. Request Processing Pipeline
 
 #### Multi-Step Processing Pattern
 
-The system supports complex workflows that require multiple models working in sequence:
+The system supports complex workflows that require multiple models working in
+sequence. A hop only ever writes what the step declared:
 
 ```python
-def check_forward_processing(self, result: ExecutorResult):
-    # Determine if request needs forwarding to another model
-    if isinstance(result.result_data, SpeechTranscriptionRequestOutput):
-        # VAD completed, forward to embedding
-        forwarding_request.input_vad_data = result.result_data.output
-        self.add_request(result.request_id, forwarding_request)
-    elif isinstance(result.result_data, SpeechEmbeddingRequestOutput):
-        # Embedding completed, forward to synthesis
-        forwarding_request.input_embedding = result.result_data.output
-        self.add_request(result.request_id, forwarding_request)
+def advance(spec, engine_request, result):
+    for output_attribute, field_name in step.produces:  # e.g. ("vad_artifact", "input_vad_data")
+        artifact = getattr(result, output_attribute, None)
+        if artifact is None:
+            raise MissingStepArtifactError(...)  # typed error naming the step
+        engine_request.artifacts[field_name] = artifact
+    state.step_index += 1
+    return step.name == (state.stop_after or spec.final_step)
 ```
+
+Intermediate values are typed artifacts (Phase 2), never re-serialized wire
+payloads; `needs` is checked against the artifact store first.
 
 #### Request Status Lifecycle
 

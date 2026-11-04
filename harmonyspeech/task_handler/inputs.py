@@ -434,6 +434,11 @@ def prepare_openvoice_tone_converter_encoder_inputs(
         audio_artifact = get_audio_artifact(request, entry, "input_audio", target_sr=target_sr)
         vad = get_vad_artifact(request, entry, "input_vad_data")
         segments = vad.segments
+        # Silero-origin segments carry no transcript (``text`` is empty by
+        # design), so the whisper text-length filter would drop every one of
+        # them. Keep the duration filter for both backends and only apply the
+        # text heuristic to backends that actually produce text (Phase 3-4).
+        text_filtered = vad.source != "silero"
 
         waveform = audio_artifact.numpy
         max_len = waveform.size
@@ -461,7 +466,8 @@ def prepare_openvoice_tone_converter_encoder_inputs(
             duration_s = segment_samples.size / float(target_sr)
 
             # filter out the segment if shorter than 1.5s and longer than 20s
-            if 1.5 < duration_s < 20.0 and 2 <= len(text) < 200:
+            text_ok = (2 <= len(text) < 200) if text_filtered else True
+            if 1.5 < duration_s < 20.0 and text_ok:
                 segment_artifacts.append(AudioArtifact.from_numpy(segment_samples, target_sr))
 
             if k < len(segments) - 1:

@@ -1,8 +1,14 @@
 import argparse
 import dataclasses
+import os
 from dataclasses import dataclass
 
 from harmonyspeech.common.config import EngineConfig
+
+
+def _strict_pipelines_default() -> bool:
+    """``--strict-pipelines`` default from ``HSE_STRICT_PIPELINES``."""
+    return os.environ.get("HSE_STRICT_PIPELINES", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 @dataclass
@@ -12,6 +18,8 @@ class EngineArgs:
     disable_log_stats: bool = False
     # Overrides EngineConfig.request_timeout_s when set.
     request_timeout_s: float | None = None
+    # Turn incomplete-pipeline startup warnings into a boot error.
+    strict_pipelines: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -28,6 +36,16 @@ class EngineArgs:
             default=None,
             help="Per-request deadline in seconds, overriding the config file. 0 disables the deadline.",
         )
+        parser.add_argument(
+            "--strict-pipelines",
+            action="store_true",
+            default=_strict_pipelines_default(),
+            help=(
+                "Fail startup when a declared model pipeline is incomplete. Without this flag "
+                "incomplete pipelines are logged as warnings and hidden from /v1/models. "
+                "Can also be enabled with HSE_STRICT_PIPELINES=1."
+            ),
+        )
         return parser
 
     @classmethod
@@ -40,8 +58,13 @@ class EngineArgs:
 
     def create_engine_config(self, base_config: EngineConfig) -> EngineConfig:
         # Use this method to inject cli args to override the base engine config if needed
+        overrides = {}
         if self.request_timeout_s is not None:
-            return dataclasses.replace(base_config, request_timeout_s=self.request_timeout_s)
+            overrides["request_timeout_s"] = self.request_timeout_s
+        if self.strict_pipelines:
+            overrides["strict_pipelines"] = True
+        if overrides:
+            return dataclasses.replace(base_config, **overrides)
         return base_config
 
 

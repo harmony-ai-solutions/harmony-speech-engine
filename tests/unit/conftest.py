@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger as loguru_logger
 
 
 @pytest.fixture
@@ -11,6 +12,17 @@ def mock_model_loader():
     with patch("harmonyspeech.modeling.loader.get_model_class") as mock:
         mock.return_value = MagicMock()
         yield mock
+
+
+@pytest.fixture
+def loguru_records():
+    """Capture loguru messages (pytest's caplog only sees stdlib logging)."""
+    records: list[str] = []
+    handler_id = loguru_logger.add(lambda message: records.append(str(message)), level="WARNING")
+    try:
+        yield records
+    finally:
+        loguru_logger.remove(handler_id)
 
 
 @pytest.fixture

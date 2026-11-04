@@ -12,24 +12,6 @@ from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
 from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_embedding
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
-# Add new model classes which allow handling Embedding Requests here
-# If multiple models need to be initialized to process request, add multiple to the list
-_EMBEDDING_MODEL_TYPES = [
-    "HarmonySpeechEncoder",
-    "ChatterboxEmbedding",
-    "ChatterboxTTS",  # handles embed when no ChatterboxEmbedding configured
-    "ChatterboxTurboTTS",
-    "ChatterboxMultilingualTTS",
-]
-_EMBEDDING_MODEL_GROUPS = {
-    "harmonyspeech": ["HarmonySpeechEncoder"],
-    "openvoice_v1": ["FasterWhisper", "OpenVoiceV1ToneConverterEncoder"],
-    "openvoice_v2": ["FasterWhisper", "OpenVoiceV2ToneConverterEncoder"],
-    "chatterbox": ["ChatterboxEmbedding", "ChatterboxTTS"],  # ChatterboxTTS fallback
-    "chatterbox_turbo": ["ChatterboxTurboTTS"],
-    "chatterbox_multilingual": ["ChatterboxMultilingualTTS"],
-}
-
 
 class OpenAIServingVoiceEmbedding(OpenAIServing):
     def __init__(self, engine: AsyncHarmonySpeech, available_models: list[ModelCard]):
@@ -37,9 +19,8 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]):
-        return OpenAIServing.model_cards_from_config_groups(
-            configured_models, _EMBEDDING_MODEL_TYPES, _EMBEDDING_MODEL_GROUPS
-        )
+        # Advertised cards come from the pipeline registry (Phase 3-3).
+        return OpenAIServing.model_cards_from_specs(configured_models, "embed")
 
     async def create_voice_embedding(
         self, request: EmbedSpeakerRequest, raw_request: Request

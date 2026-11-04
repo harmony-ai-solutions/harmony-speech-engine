@@ -35,6 +35,11 @@ class ModelCard(BaseModel):
     languages: list[LanguageOptions] | None = Field(default_factory=list)
     root: str | None = None
     parent: str | None = None
+    # Additive metadata generated from the pipeline registry (Phase 3-3):
+    # capabilities the pipeline serves ("tts", "embed", "vc", "stt", "vad",
+    # "restore") and, for toolchain cards, the configured member executor names.
+    capabilities: list[str] | None = None
+    models: list[str] | None = None
     # permission: List[ModelPermission] = Field(default_factory=list)
 
 

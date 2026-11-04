@@ -304,20 +304,34 @@ class SpeakerArtifact:
 
 @dataclass
 class VadArtifact:
-    """VAD/transcription segments (whisper segment dicts or silero timestamps).
+    """VAD/transcription segments.
+
+    Two producers feed this artifact and both are normalized onto the **whisper
+    segment schema** (Phase 3-4), so downstream consumers never branch on the
+    backend:
+
+    * Faster-Whisper: ``{"text", "segments", "info"}`` where each segment is
+      ``{"start": seconds, "end": seconds, "text": str, ...}`` — ``source`` is
+      ``"whisper"``.
+    * Silero VAD: ``get_speech_timestamps`` returns ``{"start", "end"}`` sample
+      offsets; the executor divides them by the 16 kHz model rate and emits
+      ``{"start": seconds, "end": seconds, "text": ""}`` — ``source`` is
+      ``"silero"``. The empty ``text`` is why the OpenVoice encoder's
+      text-length filter is backend aware (see ``task_handler/inputs.py``).
 
     ``info`` and ``text`` are the whisper extras the tone-converter encoder does
-    not need but transcription consumers do; Phase 3-4 normalizes silero output
-    to the same schema.
+    not need but transcription consumers do.
     """
 
     segments: list[dict] = field(default_factory=list)
     info: dict | None = None
     text: str | None = None
     device: torch.device | None = None
+    #: Backend that produced the segments (``"whisper"`` / ``"silero"``).
+    source: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: dict) -> VadArtifact:
+    def from_payload(cls, payload: dict, source: str = "whisper") -> VadArtifact:
         """Build from the whisper JSON payload (``{"text", "segments", "info"}``)."""
         segments = payload.get("segments") or []
         if not isinstance(segments, list):
@@ -326,7 +340,35 @@ class VadArtifact:
         if info is not None and not isinstance(info, dict):
             # whisper's ``info`` is serialized with dataclasses.asdict, but accept objects too.
             info = getattr(info, "__dict__", None)
-        return cls(segments=list(segments), info=info, text=payload.get("text"))
+        return cls(
+            segments=list(segments),
+            info=info,
+            text=payload.get("text"),
+            source=payload.get("source") or source,
+        )
+
+    @classmethod
+    def from_silero_timestamps(
+        cls,
+        timestamps: list[dict],
+        *,
+        sample_rate: int = 16000,
+        return_seconds: bool = False,
+    ) -> VadArtifact:
+        """Normalize ``get_speech_timestamps`` output to whisper-schema segments.
+
+        Silero reports mono sample offsets unless called with
+        ``return_seconds=True``; pass the same flag here so the conversion is
+        explicit rather than guessed.
+        """
+        segments = []
+        for timestamp in timestamps or []:
+            start = float(timestamp.get("start", 0.0))
+            end = float(timestamp.get("end", 0.0))
+            if not return_seconds:
+                start, end = start / float(sample_rate), end / float(sample_rate)
+            segments.append({"start": start, "end": end, "text": ""})
+        return cls(segments=segments, text="", source="silero")
 
     @property
     def has_speech(self) -> bool:

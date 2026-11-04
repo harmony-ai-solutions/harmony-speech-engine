@@ -220,12 +220,19 @@ class _AsyncHarmonySpeech(HarmonySpeechEngine):
         request_data: RequestInput,
         arrival_time: float | None = None,
         artifacts: dict | None = None,
+        pipeline_state=None,
     ) -> None:
 
         if arrival_time is None:
             arrival_time = time.time()
 
-        return self.add_request(request_id, request_data=request_data, arrival_time=arrival_time, artifacts=artifacts)
+        return self.add_request(
+            request_id,
+            request_data=request_data,
+            arrival_time=arrival_time,
+            artifacts=artifacts,
+            pipeline_state=pipeline_state,
+        )
 
     async def check_health_async(self) -> dict:
         """Probe every model executor and return the structured health payload."""

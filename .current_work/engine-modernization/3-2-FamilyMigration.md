@@ -91,9 +91,38 @@ Every routing decision the old ladders made must be reproducible: build the rout
 
 ## Checklist
 
-- [ ] All 8+ specs registered exactly per the table
-- [ ] Both ladders deleted; routing/forwarding spec-driven
-- [ ] Error guard + explicit-model short-circuit preserved
-- [ ] Phase-6 extension point documented at `advance()`
-- [ ] Parity table tests transcribed from old code and passing
-- [ ] `summary.md` Implementation Status updated
+- [x] All 8+ specs registered exactly per the table
+- [x] Both ladders deleted; routing/forwarding spec-driven
+- [x] Error guard + explicit-model short-circuit preserved
+- [x] Phase-6 extension point documented at `advance()`
+- [x] Parity table tests transcribed from old code and passing
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (recorded after implementation)
+
+- **Spec count**: 11 specs — the 8 client-facing families of the table plus
+  `kitten_tts`, `fasterwhisper` and `silero_vad` as single-step pipelines
+  (`advertise_toolchain=False` so `/v1/models` keeps its pre-migration id set).
+- **`chatterbox_vc`** is single-step but keeps a toolchain card: the family id is a
+  client-facing alias that existed before the migration.
+- **Deleted**: `reroute_request_harmonyspeech/_openvoice_v1/_openvoice_v2/_voicefixer/
+  _chatterbox/_chatterbox_vc`, the `_present`/`_missing` helpers, the
+  output-class-sniffing forwarding branches, `_forwarding_artifacts` and
+  `_resubmit_forward` — ~250 lines net.
+- **Explicit-model short-circuit** now compares `returning_model_cfg.name` with the
+  requested model (the old `ModelConfig == str` comparison could never be true).
+  Both the short-circuit and the "no pipeline" path now mark the request
+  `FINISHED_STOPPED`, which also fixes a pre-existing scheduler leak for direct
+  single-model requests.
+- **Chatterbox embed fallback**: routing a cloning request to the TTS executor and
+  then expecting an `embedding_artifact` would fail, so the embed start is an
+  `EntryRule` gated on a configured `ChatterboxEmbedding`
+  (`requires_model_type`). Without it the request starts at `synthesize` and the
+  TTS executor embeds inline — which is what the old engine actually did (one hop);
+  the old docs/tests claimed two.
+- **`tone_convert` has no `needs`**: a voice-conversion request carries
+  `source_audio`/`target_embedding` instead of the cloning fields, so the step
+  validates its own inputs (unchanged executor behaviour).
+- **Single-speaker OpenVoice** requires its own entry rule that stops after
+  synthesis; the old forwarding logic also refused to run the tone converter
+  without a cloned speaker.

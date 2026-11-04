@@ -220,6 +220,10 @@ def test_check_forward_processing_error_result_updates_scheduler():
 @pytest.mark.unit
 def test_check_forward_processing_normal_embedding_still_forwards():
     """Regression guard: a successful embedding result must still be forwarded."""
+    from types import SimpleNamespace
+
+    from harmonyspeech.common.artifacts import SpeakerArtifact
+
     embed_cfg = MagicMock()
     embed_cfg.name = "cb-embed"
     embed_cfg.model_type = "ChatterboxEmbedding"
@@ -236,7 +240,10 @@ def test_check_forward_processing_normal_embedding_still_forwards():
         mode="voice_cloning",
         input_audio="base64audio==",
     )
-    embed_output = SpeechEmbeddingRequestOutput(request_id="fwd-001", output="base64conds==")
+    speaker = SpeakerArtifact(conditionals=SimpleNamespace(), backend="chatterbox")
+    embed_output = SpeechEmbeddingRequestOutput(
+        request_id="fwd-001", output="", embedding_artifact=speaker
+    )
     result = ExecutorResult(request_id="fwd-001", input_data=tts_input, result_data=embed_output)
 
     with patch.object(engine, "add_request") as mock_add:
@@ -244,7 +251,12 @@ def test_check_forward_processing_normal_embedding_still_forwards():
 
     assert new_status == RequestStatus.FINISHED_FORWARDED
     assert forwarding_request is not None
-    assert forwarding_request.input_embedding == "base64conds=="
+    # Phase 3: the speaker artifact travels on the hop; the legacy wire field
+    # is not written and the superseded reference audio is cleared.
+    _, kwargs = mock_add.call_args
+    assert kwargs["artifacts"]["input_embedding"] is speaker
+    assert "input_audio" not in kwargs["artifacts"]
+    assert forwarding_request.input_embedding is None
     assert forwarding_request.input_audio is None
     mock_add.assert_called_once()
 
