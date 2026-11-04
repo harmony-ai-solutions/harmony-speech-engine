@@ -208,3 +208,180 @@ def test_markdown_table_contains_every_case():
 
     assert "chatterbox" in table
     assert "| tts | stochastic | PASS |" in table
+
+
+# ---------------------------------------------------------------------------
+# Post-review refinements (2026-11-05): VC intelligibility + optional fixtures
+# ---------------------------------------------------------------------------
+def test_compute_wer_identical_after_normalisation():
+    assert ar.compute_wer("It's time to go home.", "its time to go home") == pytest.approx(1 / 5)
+    assert ar.compute_wer("The quick brown fox", "the quick brown fox.") == 0.0
+
+
+def test_compute_wer_counts_substitution_insertion_deletion():
+    assert ar.compute_wer("one two three four", "one too three four") == pytest.approx(0.25)
+    assert ar.compute_wer("one two three four", "one two three") == pytest.approx(0.25)
+    assert ar.compute_wer("one two three", "one two three four") == pytest.approx(1 / 3)
+
+
+def test_compute_wer_empty_reference():
+    assert ar.compute_wer("", "") == 0.0
+    assert ar.compute_wer("", "unexpected words") == 1.0
+
+
+def test_partition_optional_cases_skips_only_missing_optional_fixture():
+    required = {"name": "required", "reference": "missing"}
+    optional_present = {"name": "optional_present", "reference": "present", "optional": True}
+    optional_missing = {"name": "optional_missing", "reference": "missing", "optional": True}
+
+    runnable, skipped = ar.partition_optional_cases(
+        [required, optional_present, optional_missing],
+        available=lambda name: name == "present",
+    )
+
+    assert [case["name"] for case in runnable] == ["required", "optional_present"]
+    assert [case["name"] for case in skipped] == ["optional_missing"]
+
+
+def test_reference_available_reflects_disk():
+    assert ar.reference_available("repo_voice_a") is True
+    assert ar.reference_available("definitely-not-a-fixture") is False
+
+
+def test_vc_cases_are_real_speech_with_a_transcript_and_label():
+    cases = {case["name"]: case for case in ar.FAMILY_SPECS["chatterbox"]["cases"]}
+
+    primary = cases["vc_speech_a_to_b"]
+    assert primary["kind"] == "vc"
+    assert primary["reference"] == "repo_voice_a"  # wanda4 — real speech
+    assert primary["target"] == "repo_voice_b"  # wanda5 — real speech
+    assert primary["transcript"] == "en_wanda4"
+    assert "intelligible" in primary["label"]
+
+    secondary = cases["vc_speech_to_synth_voice"]
+    assert secondary["reference"] == "repo_voice_a"
+    assert secondary["target"] == "voice_b"  # synthetic timbre only
+    assert secondary.get("wer_gate") is False  # non-speech target: report only
+    assert "report" in secondary["label"].lower()
+
+
+def test_multilingual_cases_label_accent_transfer_and_optional_native():
+    cases = {case["name"]: case for case in ar.FAMILY_SPECS["chatterbox_multilingual"]["cases"]}
+
+    accent = cases["tts_de_en_accent"]
+    assert accent["language"] == "de"
+    assert "reference" not in accent
+    assert "accent transfer" in accent["label"].lower()
+    assert "native" in accent["label"].lower()
+
+    native = cases["tts_de_native"]
+    assert native["optional"] is True
+    assert native["reference"] == "repo_voice_de"
+    assert "ref_voice_de.wav" in native["skip_message"]
+
+
+def test_score_vc_intelligibility_reports_both_sides_and_soft_gate():
+    case = {"name": "vc", "kind": "vc", "transcript": "en_wanda4", "language": "en"}
+    transcripts = {
+        "a.wav": "It's time to go home.",
+        "b.wav": "At time to go home.",
+    }
+
+    scores = ar.score_vc_intelligibility(
+        case, "a.wav", "b.wav", transcribe=lambda path, language: transcripts[path]
+    )
+
+    assert scores["wer_a"] == 0.0
+    assert scores["wer_b"] == pytest.approx(0.2)
+    assert scores["wer"] == pytest.approx(0.2)
+    assert scores["warn"] is False
+    assert scores["failed"] is False
+    assert scores["reference_text"] == "It's time to go home."
+
+
+def test_score_vc_intelligibility_hard_fails_only_above_threshold():
+    case = {"name": "vc", "kind": "vc", "transcript": "en_wanda4", "language": "en"}
+    # 4 of 5 reference words wrong -> WER 0.8 > 0.7 fail threshold.
+    scores = ar.score_vc_intelligibility(
+        case, "a.wav", "b.wav", transcribe=lambda path, language: "completely different words here now"
+    )
+    assert scores["failed"] is True
+
+    # 3 of 5 wrong -> 0.6: warn only, not a hard failure.
+    warn_scores = ar.score_vc_intelligibility(
+        case, "a.wav", "b.wav", transcribe=lambda path, language: "time to go away today"
+    )
+    assert warn_scores["warn"] is True
+    assert warn_scores["failed"] is False
+
+
+def test_markdown_table_shows_wer_and_expectation_label():
+    report = {
+        "timestamp_utc": "2026-11-05T00:00:00Z",
+        "axis": "dtype:float32-vs-float16",
+        "commit": "def5678",
+        "use_gpu": True,
+        "env": {"torch": "2.9.1", "gpu": "Test GPU", "driver": "1.2.3"},
+        "families": {
+            "chatterbox": {
+                "kind": "stochastic",
+                "skipped_cases": [],
+                "cases": {
+                    "vc_speech_a_to_b": {
+                        "metrics": {
+                            "duration_pct": 0.0,
+                            "rms_pct": 1.0,
+                            "logmel_mse": 2.0,
+                            "ltas_rmse_db": 1.0,
+                            "corr": 0.1,
+                            "identical": False,
+                        },
+                        "wer": {
+                            "wer": 0.2,
+                            "wer_a": 0.2,
+                            "wer_b": 0.2,
+                            "warn": False,
+                            "failed": False,
+                        },
+                        "passed": True,
+                        "failures": [],
+                        "label": "real speech -> real speech timbre: content must stay intelligible",
+                    }
+                },
+            }
+        },
+    }
+
+    table = ar._markdown_table(report)
+
+    assert "| WER |" in table
+    assert "| 0.200 |" in table
+    assert "content must stay intelligible" in table
+
+
+def test_markdown_table_lists_skipped_optional_cases():
+    report = {
+        "timestamp_utc": "2026-11-05T00:00:00Z",
+        "axis": "dtype:float32-vs-float16",
+        "commit": "def5678",
+        "use_gpu": True,
+        "env": {"torch": "2.9.1", "gpu": "Test GPU", "driver": "1.2.3"},
+        "families": {
+            "chatterbox_multilingual": {
+                "kind": "stochastic",
+                "cases": {},
+                "skipped_cases": [
+                    {
+                        "name": "tts_de_native",
+                        "reason": "provide tests/audio_fixtures/ref_voice_de.wav",
+                    }
+                ],
+            }
+        },
+    }
+
+    table = ar._markdown_table(report)
+
+    assert "Skipped optional cases" in table
+    assert "tts_de_native" in table
+    assert "ref_voice_de.wav" in table

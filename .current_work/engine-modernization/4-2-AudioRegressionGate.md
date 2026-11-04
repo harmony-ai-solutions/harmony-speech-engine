@@ -94,3 +94,37 @@ On failure-or-marginal cases the script writes a small folder of A/B wav pairs (
   where no VAD is involved; the Whisper-VAD-driven toolchains use the
   pre-existing repository speech samples because synthetic vowels are not
   detected as speech (documented in the fixture module and the benchmark doc).
+
+## Post-review refinements (2026-11-05)
+
+Follow-up to the listening review of `out/`; not new phase work (no checklist
+boxes changed).
+
+* **VC case was measuring the wrong thing.** `vc_a_to_b` used the synthetic
+  `voice_a` clip as the VC *source*; VC converts source content, so hum-in →
+  hum-out with the target timbre, and the case could not demonstrate or gate
+  intelligibility. Primary case is now `vc_speech_a_to_b` (real speech on both
+  sides: `wanda4` → `wanda5`). The synthetic-target variant is kept as
+  `vc_speech_to_synth_voice` with an explicit label.
+* **Objective VC intelligibility.** Both rendered sides are transcribed with
+  faster-whisper-tiny and WER-scored against `TEXTS["en_wanda4"]` ("It's time
+  to go home.", the clip's own transcript). WER is in JSON + markdown, warns
+  above 0.4 and hard-fails above 0.7. Measured on GPU 1: real-speech VC WER
+  **0.000** on both dtype and sharing axes (engine healthy, no
+  `_execute_chatterbox_vc` bug). The synthetic-target variant reports 1.6–2.2
+  (Whisper hallucinating on a hum-like output) and sets `wer_gate: false`, so
+  it documents the measurand mismatch without failing the default run.
+* **Multilingual accent semantics.** In pinned chatterbox-tts 0.1.6,
+  `language_id` only selects tokenization; accent comes from the conditionals,
+  and the bundled conds are English. `tts_de` is renamed
+  `tts_de_en_accent` and labelled as accent transfer. Added optional
+  `tts_de_native` (German text + `tests/audio_fixtures/ref_voice_de.wav`);
+  while that user-provided clip is absent the case logs one line and is
+  excluded from metrics. Re-ran the multilingual dtype axis: accent-transfer
+  case still passes (log-mel MSE 0.002, LTAS 0.010 dB), skip logic observed.
+* **Numeric-noise note.** Documented in `docs/benchmarks/audio-regression.md`
+  (and linked from `throughput.md`) that the 1.59e-05 batching residual is
+  float32 accumulation-order noise below one PCM-16 LSB (3.05e-5), not a
+  measurement artifact.
+* Unit tests added for WER, the optional-fixture skip logic, case labels and
+  the new markdown columns. Existing suite counts unchanged/plus new tests.

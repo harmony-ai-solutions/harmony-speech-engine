@@ -6,6 +6,16 @@ Provenance
   PCM-16 clips produced by :mod:`tests.audio_fixtures.generate_references`
   (deterministic numpy synthesis: harmonic glottal source + formant resonances +
   pitch contour). No third-party or copyrighted audio is committed.
+* ``repo_voice_a`` / ``repo_voice_b`` are the pre-existing repository e2e
+  fixtures ``tests/test-data/samples/wanda4.wav`` / ``wanda5.wav`` (real
+  speech, committed before this harness). ``en_wanda4`` in :data:`TEXTS` is
+  wanda4's Whisper-tiny transcript, used as the reference for the
+  voice-conversion intelligibility (WER) gate.
+* ``ref_voice_de.wav`` is an **optional, user-provided** reference for the
+  native-accent German case (``chatterbox_multilingual/tts_de_native``). It is
+  not committed: a short self-recorded German speech clip works. Until it
+  exists the case is skipped with one log line and excluded from metrics — see
+  :func:`reference_available`.
 * Texts are short, punctuation-normalised English sentences (plus one German
   sentence for the multilingual family) so tokenisation is stable across runs.
 
@@ -39,6 +49,9 @@ REFERENCE_CLIPS = {
     "voice_b": os.path.join(FIXTURE_DIR, "ref_voice_b.wav"),
     "repo_voice_a": os.path.join(_REPO_SAMPLES, "wanda4.wav"),
     "repo_voice_b": os.path.join(_REPO_SAMPLES, "wanda5.wav"),
+    # Optional: not committed (user-provided German speech). The harness skips
+    # the native-accent German case while this file is absent.
+    "repo_voice_de": os.path.join(FIXTURE_DIR, "ref_voice_de.wav"),
 }
 
 #: Fixed texts per family. Keep them short (a few seconds of speech) so a full
@@ -48,6 +61,10 @@ TEXTS = {
     "en_numbers": "In nineteen eighty four the engine measured exactly nine models.",
     "de_short": "Der schnelle braune Fuchs springt ueber den faulen Hund.",
     "zh_short": "这是一个语音合成回归测试。",
+    # Source transcript for the voice-conversion intelligibility gate. wanda4
+    # (``repo_voice_a``) is a 3.6 s real-speech clip; this is its faster-
+    # whisper-tiny transcription, not an invented sentence.
+    "en_wanda4": "It's time to go home.",
     # Mixed-length set for the `batching:1-vs-N` axis: one long, one medium and
     # two short sentences so a padded batch really mixes lengths (and the
     # length-similar sub-batcher has something to do).
@@ -73,6 +90,16 @@ FAMILY_KIND = {
     "chatterbox_multilingual": "stochastic",
     "chatterbox_vc": "stochastic",
 }
+
+
+def reference_available(name: str) -> bool:
+    """Whether a logical reference clip exists on disk.
+
+    Optional fixtures (currently ``repo_voice_de``) are excluded from the
+    harness metrics while their file is absent instead of failing the run.
+    """
+    path = REFERENCE_CLIPS.get(name)
+    return bool(path) and os.path.isfile(path)
 
 
 def reference_wav_b64(name: str = "voice_a") -> str:
@@ -106,6 +133,7 @@ __all__ = [
     "FIXTURE_DIR",
     "REFERENCE_CLIPS",
     "TEXTS",
+    "reference_available",
     "reference_duration_seconds",
     "reference_wav_b64",
     "tiny_wav_b64",

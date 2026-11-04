@@ -76,7 +76,9 @@ sample-wise on the rendered WAV.
 Verdict thresholds (`BATCHING_*` in the harness): duration Δ ≤ 0.1 %, max
 |Δsample| ≤ 2e-3, log-mel MSE ≤ 1e-2, correlation ≥ 0.999. The measured
 MeloTTS residual (1.6e-5) is below one 16-bit LSB; OpenVoice V1 reproduces the
-solo run exactly after PCM16 encoding.
+solo run exactly after PCM16 encoding. The `1.59e-05` is expected float32
+batched-kernel accumulation noise, not a measurement bug — see
+[Numeric noise floor](audio-regression.md#numeric-noise-floor).
 
 Unit-level proof of the same property (tiny randomly-initialised instances of
 the vendored classes): `infer_batched` with `B=1` is **bit-identical** to

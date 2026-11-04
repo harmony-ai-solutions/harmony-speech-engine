@@ -102,6 +102,16 @@ BATCHING_LOG_MEL_MSE = 1e-2
 BATCHING_DURATION_PCT = 0.1
 BATCHING_CORR_MIN = 0.999
 
+#: Voice-conversion intelligibility gate (post-review 2026-11-05). VC converts
+#: the *content* of the source clip, so a converted clip must still transcribe
+#: to the source transcript. WER is measured by transcribing both rendered sides
+#: with the harness's faster-whisper model and comparing against ``TEXTS``.
+#: Reported + warning above 0.4; hard failure only above 0.7. Transcription is
+#: language-aware: non-English source clips need their own ``language`` and a
+#: transcript in that language (the bundled clips are English).
+VC_WER_WARN = 0.4
+VC_WER_FAIL = 0.7
+
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +182,13 @@ FAMILY_SPECS: dict[str, dict] = {
         ],
         "group": "chatterbox-base",
         "cases": [
-            {"name": "tts_bundled_voice", "kind": "tts", "model": "chatterbox", "text": "en_short"},
+            {
+                "name": "tts_bundled_voice",
+                "kind": "tts",
+                "model": "chatterbox",
+                "text": "en_short",
+                "label": "bundled voice, plain text",
+            },
             {
                 "name": "tts_clone_voice_a",
                 "kind": "tts",
@@ -180,13 +196,39 @@ FAMILY_SPECS: dict[str, dict] = {
                 "text": "en_numbers",
                 "mode": "voice_cloning",
                 "reference": "voice_a",
+                "label": "synthetic reference: timbre porting only (source is not speech)",
             },
             {
-                "name": "vc_a_to_b",
+                # Primary VC case: real speech on both sides. A voice conversion
+                # must keep the *content* (the source sentence) intelligible while
+                # adopting the target timbre; the WER gate below proves it.
+                "name": "vc_speech_a_to_b",
                 "kind": "vc",
                 "model": "chatterbox_vc",
-                "reference": "voice_a",
-                "target": "voice_b",
+                "reference": "repo_voice_a",  # wanda4: "It's time to go home."
+                "target": "repo_voice_b",  # wanda5 (real speech timbre)
+                "transcript": "en_wanda4",
+                "language": "en",
+                "label": "real speech -> real speech timbre: content must stay intelligible (WER gate)",
+            },
+            {
+                # Secondary VC case: real speech -> synthetic vowel timbre. This
+                # isolates timbre porting (the target carries no speech content),
+                # but the converted output should still say the source sentence.
+                "name": "vc_speech_to_synth_voice",
+                "kind": "vc",
+                "model": "chatterbox_vc",
+                "reference": "repo_voice_a",  # wanda4
+                "target": "voice_b",  # synthetic vowel-like timbre
+                "transcript": "en_wanda4",
+                "language": "en",
+                # Report WER but do not gate: the target has no speech content,
+                # so the converted output is dominated by the synthetic timbre
+                # and cannot be expected to transcribe. This case documents the
+                # measurand mismatch that the old synthetic-source case hid;
+                # only the real-speech pair above gates intelligibility.
+                "wer_gate": False,
+                "label": "real speech -> synthetic vowel timbre: isolates timbre porting (WER reported, not gated)",
             },
         ],
     },
@@ -216,13 +258,44 @@ FAMILY_SPECS: dict[str, dict] = {
                 "model": "chatterbox_multilingual",
                 "text": "en_short",
                 "language": "en",
+                "label": "English text, bundled English conditionals",
             },
             {
-                "name": "tts_de",
+                # chatterbox-tts 0.1.6 `mtl_tts.generate(text, language_id,
+                # audio_prompt_path, ...)`: `language_id` only selects
+                # tokenization; accent/prosody come ENTIRELY from the
+                # conditionals — the reference audio, or the bundled conds when
+                # none is given (mtl_tts.py: prepare_conditionals only runs for
+                # audio_prompt_path; `language_id` is passed to
+                # tokenizer.text_to_tokens). The bundled conds are
+                # English-accented, so German text with no reference is
+                # accent transfer (de text / en accent) by construction — not a
+                # native German voice. Named accordingly.
+                "name": "tts_de_en_accent",
                 "kind": "tts",
                 "model": "chatterbox_multilingual",
                 "text": "de_short",
                 "language": "de",
+                "label": "German text + bundled English conditionals: accent transfer, NOT native German",
+            },
+            {
+                # Optional native-accent case: German text with a German
+                # reference clip, which supplies the accent through the
+                # conditionals. Skipped (and excluded from metrics) until a
+                # user-provided clip exists — see fixtures provenance.
+                "name": "tts_de_native",
+                "kind": "tts",
+                "model": "chatterbox_multilingual",
+                "text": "de_short",
+                "language": "de",
+                "reference": "repo_voice_de",
+                "optional": True,
+                "skip_message": (
+                    "native-accent German case skipped: provide tests/audio_fixtures/ref_voice_de.wav "
+                    "— any short German speech clip, e.g. self-recorded; see provenance rules in "
+                    "tests/audio_fixtures/__init__.py"
+                ),
+                "label": "German text + German reference: native accent (skipped until reference exists)",
             },
         ],
     },
@@ -543,6 +616,124 @@ def _decode_response_audio(response) -> tuple[np.ndarray, int]:
     if samples.ndim > 1:
         samples = samples.mean(axis=1)
     return np.asarray(samples, dtype=np.float32), int(rate)
+
+
+def reference_available(name: str) -> bool:
+    """Whether a logical reference clip exists (delegates to the fixtures)."""
+    from tests.audio_fixtures import reference_available as _available
+
+    return _available(name)
+
+
+def partition_optional_cases(cases: list[dict], available=None) -> tuple[list[dict], list[dict]]:
+    """Split cases into runnable and skipped-on-missing-optional-fixture.
+
+    A case marked ``optional`` whose ``reference`` clip is absent is excluded
+    from the run entirely (it never reaches a worker, so it cannot fail) and
+    reported separately. ``available`` is injectable for tests.
+    """
+    available = available or reference_available
+    runnable: list[dict] = []
+    skipped: list[dict] = []
+    for case in cases:
+        if case.get("optional") and case.get("reference") and not available(case["reference"]):
+            skipped.append(case)
+        else:
+            runnable.append(case)
+    return runnable, skipped
+
+
+# ---------------------------------------------------------------------------
+# Voice-conversion intelligibility (WER)
+# ---------------------------------------------------------------------------
+_WHISPER_MODELS: dict[str, object] = {}
+
+
+def _get_whisper():
+    """Load the harness's faster-whisper model once (CPU is enough for tiny)."""
+    from faster_whisper import WhisperModel
+
+    model_id = _whisper_model()["model"]
+    if model_id not in _WHISPER_MODELS:
+        _WHISPER_MODELS[model_id] = WhisperModel(model_id, device="cpu", compute_type="int8")
+    return _WHISPER_MODELS[model_id]
+
+
+def transcribe_wav(path: str, language: str | None = "en") -> str:
+    """Transcribe a rendered clip with the resident faster-whisper model."""
+    model = _get_whisper()
+    segments, _info = model.transcribe(
+        path,
+        language=language or None,
+        beam_size=5,
+        condition_on_previous_text=False,
+    )
+    return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+def _wer_tokens(text: str) -> list[str]:
+    import re
+
+    # Case/punctuation-insensitive words; keep apostrophes so contractions
+    # ("it's") stay one token.
+    cleaned = re.sub(r"[^\w\s']", " ", text.lower())
+    return cleaned.split()
+
+
+def compute_wer(reference: str, hypothesis: str) -> float:
+    """Word error rate (Levenshtein over normalised tokens), ``errors/|ref|``.
+
+    An empty reference is a perfect match only when the hypothesis is empty.
+    """
+    ref = _wer_tokens(reference)
+    hyp = _wer_tokens(hypothesis)
+    if not ref:
+        return 0.0 if not hyp else 1.0
+    previous = list(range(len(hyp) + 1))
+    for i, ref_token in enumerate(ref, start=1):
+        current = [i]
+        for j, hyp_token in enumerate(hyp, start=1):
+            cost = 0 if ref_token == hyp_token else 1
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost))
+        previous = current
+    return previous[-1] / len(ref)
+
+
+def score_vc_intelligibility(
+    case: dict,
+    path_a: str,
+    path_b: str,
+    transcribe=transcribe_wav,
+) -> dict | None:
+    """Transcribe both VC outputs and score WER against the known transcript.
+
+    Returns a reported metric (``warn`` flag) and a soft gate (``failed`` only
+    above :data:`VC_WER_FAIL`). ``transcribe`` is injectable for unit tests.
+    """
+    from tests.audio_fixtures import TEXTS
+
+    transcript_key = case.get("transcript")
+    if not transcript_key:
+        return None
+    reference_text = TEXTS.get(transcript_key, transcript_key)
+    language = case.get("language", "en")
+
+    scores = {
+        "reference_text": reference_text,
+        "language": language,
+        "thresholds": {"warn": VC_WER_WARN, "fail": VC_WER_FAIL},
+    }
+    for side, path in (("a", path_a), ("b", path_b)):
+        hypothesis = transcribe(path, language)
+        scores[f"hypothesis_{side}"] = hypothesis
+        scores[f"wer_{side}"] = round(compute_wer(reference_text, hypothesis), 4)
+
+    worst = max(scores["wer_a"], scores["wer_b"])
+    scores["wer"] = round(worst, 4)
+    scores["warn"] = worst > VC_WER_WARN
+    scores["failed"] = worst > VC_WER_FAIL
+    scores["gated"] = bool(case.get("wer_gate", True))
+    return scores
 
 
 def _run_batching_worker(job, engine, text_table) -> dict:
@@ -953,7 +1144,14 @@ def _gpu_description() -> dict:
     return info
 
 
-def _run_side(family: str, side: str, axis: Axis, use_gpu: bool, workdir: str) -> dict:
+def _run_side(
+    family: str,
+    side: str,
+    axis: Axis,
+    use_gpu: bool,
+    workdir: str,
+    cases: list[dict] | None = None,
+) -> dict:
     out_dir = os.path.join(workdir, f"{family}_{side}")
     manifest_path = os.path.join(workdir, f"{family}_{side}.json")
     job = {
@@ -961,7 +1159,7 @@ def _run_side(family: str, side: str, axis: Axis, use_gpu: bool, workdir: str) -
         "side": side,
         "settings": side_settings(axis, side),
         "use_gpu": use_gpu,
-        "cases": _cases_for_axis(axis, family),
+        "cases": cases if cases is not None else _cases_for_axis(axis, family),
         "out_dir": out_dir,
         "manifest": manifest_path,
     }
@@ -1003,22 +1201,41 @@ def _markdown_table(report: dict) -> str:
         f"{report['env'].get('gpu') or 'CPU'} · driver {report['env'].get('driver') or 'n/a'} · "
         f"mode {'GPU' if report['use_gpu'] else 'CPU'}",
         "",
-        "| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
+    skipped: list[str] = []
     for family, detail in report["families"].items():
         for case_name, case in detail.get("cases", {}).items():
             if "metrics" not in case:
                 lines.append(
-                    f"| {family} | {case_name} | - | ERROR | - | - | - | - | - | {case.get('error', '')[:60]} |"
+                    f"| {family} | {case_name} | - | ERROR | - | - | - | - | - | - | - | "
+                    f"{case.get('error', '')[:60]} |"
                 )
                 continue
             m = case["metrics"]
             verdict = "PASS" if case["passed"] else "FAIL"
+            wer = case.get("wer")
+            if wer:
+                wer_cell = f"{wer['wer']:.3f}"
+                if not wer.get("gated", True):
+                    wer_cell += " (report-only)"
+                elif wer.get("failed"):
+                    wer_cell += " (FAIL)"
+                elif wer.get("warn"):
+                    wer_cell += " (warn)"
+            else:
+                wer_cell = "-"
+            label = case.get("label") or "-"
             lines.append(
                 f"| {family} | {case_name} | {detail['kind']} | {verdict} | {m['duration_pct']} | "
-                f"{m['rms_pct']} | {m['logmel_mse']} | {m['ltas_rmse_db']} | {m['corr']} | {m['identical']} |"
+                f"{m['rms_pct']} | {m['logmel_mse']} | {m['ltas_rmse_db']} | {m['corr']} | {m['identical']} | "
+                f"{wer_cell} | {label} |"
             )
+        for case in detail.get("skipped_cases", []):
+            skipped.append(f"- `{family}/{case['name']}` — {case['reason']}")
+    if skipped:
+        lines.extend(["", "Skipped optional cases (excluded from metrics):", *skipped])
     lines.append("")
     return "\n".join(lines)
 
@@ -1060,18 +1277,37 @@ def run_harness(args) -> int:
             continue
 
         kind = _family_kind(family)
-        cases = _cases_for_axis(axis, family)
+        cases, skipped_cases = partition_optional_cases(_cases_for_axis(axis, family))
+        for case in skipped_cases:
+            print(
+                f"[harness] {family}/{case['name']}: "
+                f"{case.get('skip_message', 'optional fixture missing')}",
+                flush=True,
+            )
         print(f"[harness] {family}: side A ({axis.side_a})…", flush=True)
-        side_a = _run_side(family, axis.side_a, axis, use_gpu, workdir)
+        side_a = _run_side(family, axis.side_a, axis, use_gpu, workdir, cases=cases)
         print(f"[harness] {family}: side B ({axis.side_b})…", flush=True)
-        side_b = _run_side(family, axis.side_b, axis, use_gpu, workdir)
+        side_b = _run_side(family, axis.side_b, axis, use_gpu, workdir, cases=cases)
 
         if axis.kind == "batching":
             # The family's stochastic thresholds are not what this axis asserts;
             # the batching verdict below is sample-wise.
             kind = "deterministic"
 
-        family_entry = {"kind": kind, "cases": {}, "side_a": side_a, "side_b": side_b}
+        family_entry = {
+            "kind": kind,
+            "cases": {},
+            "side_a": side_a,
+            "side_b": side_b,
+            "skipped_cases": [
+                {
+                    "name": case["name"],
+                    "reason": case.get("skip_message", "optional fixture missing"),
+                    "label": case.get("label"),
+                }
+                for case in skipped_cases
+            ],
+        }
         if "error" in side_a or "error" in side_b:
             family_entry["error"] = side_a.get("error") or side_b.get("error")
             report["passed"] = False
@@ -1091,11 +1327,41 @@ def run_harness(args) -> int:
                 continue
             metrics = compute_metrics(a["wav"], b["wav"], kind)
             passed, failures = verdict_for_axis(axis, metrics)
-            family_entry["cases"][name] = {
+
+            # Content fidelity for VC: both rendered sides must transcribe to
+            # the known source sentence. Reported always; soft gate (warn) at
+            # 0.4, hard failure only above 0.7.
+            wer = None
+            if case.get("kind") == "vc":
+                wer = score_vc_intelligibility(case, a["wav"], b["wav"])
+                if wer is not None and not wer.get("gated", True):
+                    print(
+                        f"[harness] {family}/{name}: WER reported only "
+                        f"({wer['wer']:.3f}) — non-speech target, not gated",
+                        flush=True,
+                    )
+                if wer is not None and wer.get("gated", True):
+                    if wer["failed"]:
+                        passed = False
+                        failures.append(
+                            f"WER {wer['wer']:.3f} > {VC_WER_FAIL} (converted speech unintelligible)"
+                        )
+                    elif wer["warn"]:
+                        print(
+                            f"[harness] {family}/{name}: WER warning "
+                            f"{wer['wer']:.3f} > {VC_WER_WARN}",
+                            flush=True,
+                        )
+
+            case_entry = {
                 "metrics": metrics,
                 "passed": passed,
                 "failures": failures,
+                "label": case.get("label"),
             }
+            if wer is not None:
+                case_entry["wer"] = wer
+            family_entry["cases"][name] = case_entry
             if not passed:
                 report["passed"] = False
                 _write_listening_pack(workdir, family, name, a["wav"], b["wav"])
