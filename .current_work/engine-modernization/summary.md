@@ -16,6 +16,7 @@ The architectural targets are taken verbatim from the research document (§6 roa
 - **Phase 1 before Phase 2**: the boundary decoder/encoder becomes the `from_wire()`/`to_wire()` seams the artifact bus keeps — writing them in the other order means doing them twice.
 - **Phase 2 before Phase 3**: `spec.advance()` should write typed artifacts, not base64 fields; otherwise the routing rewrite touches the forwarding code twice.
 - Phases 4 and 5 are independent of each other once 0–3 are done.
+- **Phases 7 and 8** (added 2026-11-05) are independent of each other but both build on the Phase 2 artifacts (7) / Phase 5-2 batching infra (8). Recommended order 7 → 8 so the Phase 8 flood benchmarks include the cache-composition numbers; neither gates the other. Phase 8 excludes the Chatterbox family entirely (see Deferred).
 
 ## Phases
 
@@ -28,6 +29,8 @@ The architectural targets are taken verbatim from the research document (§6 roa
 | **4** | VRAM — fp16 rollout + Chatterbox weight dedup | 1–2 wks | All-fp32 config (~16.4 GiB); 4× duplicated Chatterbox backbones; no VRAM observability |
 | **5** | Honest batching — HSE only | ~1 wk | Fake `max_batch_size` values; per-item loops; type-unsafe mixed batches; padded batched inference for `SynthesizerTrn` |
 | **6** | Capabilities backlog (opt-in) | per item | `post_generation_filters`, `RemoteStepExecutor`, `torch.compile`/CUDA graphs, lazy-load governor — planned in detail only when picked |
+| **7** | Cross-request embedding cache | ~days | Identical reference audio recomputes embeddings/conditionals on every request; TTL (default 300 s) + FIFO beyond 1000 entries, configurable |
+| **8** | Batching across all steps | 1–2 wks | Only the synthesizers batch (5-2); embedders, tone converters, hs1/VoiceFixer steps still loop — batch every architecture that supports it so floods move through whole pipelines |
 
 ## Implementation Status
 
@@ -69,12 +72,23 @@ Track the completion of each phase as implementation progresses:
   - [x] Honest batch config & benchmarks — [5-3-HonestBatchConfigBenchmarks.md](5-3-HonestBatchConfigBenchmarks.md)
 - [ ] **Phase 6: Capabilities backlog (opt-in)**
   - [ ] Overview & prerequisites — [6-1-CapabilitiesBacklog.md](6-1-CapabilitiesBacklog.md)
+- [ ] **Phase 7: Cross-request embedding cache**
+  - [ ] Cache core (TTL 300 s default + FIFO >1000 + byte ceiling) — [7-1-EmbeddingCacheCore.md](7-1-EmbeddingCacheCore.md)
+  - [ ] Executor integration (OV TCE, hs1 encoder, Chatterbox embedding) — [7-2-CacheIntegrationHandlers.md](7-2-CacheIntegrationHandlers.md)
+  - [ ] Metrics, clone-flood benchmark & exit — [7-3-CacheMetricsBenchmark.md](7-3-CacheMetricsBenchmark.md)
+- [ ] **Phase 8: Batching across all steps (except Chatterbox)**
+  - [ ] Batching core extensions (mel-frame + waveform axes) — [8-1-BatchingCoreExtensions.md](8-1-BatchingCoreExtensions.md)
+  - [ ] Embedder batching (OV TCE v1/v2, hs1 encoder) — [8-2-EmbedderBatching.md](8-2-EmbedderBatching.md)
+  - [ ] Tone-converter batching (OV v1/v2) — [8-3-ToneConverterBatching.md](8-3-ToneConverterBatching.md)
+  - [ ] HarmonySpeech + VoiceFixer batching (+ GPU placement fix) — [8-4-HarmonySpeechVoiceFixerBatching.md](8-4-HarmonySpeechVoiceFixerBatching.md)
+  - [ ] VAD/STT audit, parallel lanes (KittenTTS, Silero) & documented skips — [8-5-VadSttAuditAndSkips.md](8-5-VadSttAuditAndSkips.md)
+  - [ ] Honest config, flood benchmark & exit — [8-6-HonestConfigAndPipelineBenchmark.md](8-6-HonestConfigAndPipelineBenchmark.md)
 
 ## Deferred to separate workstreams (not in this plan)
 
 - **Streaming output** (`stream=true`) — after the sentence-chunking QOL workstream lands.
-- **Chatterbox AR batched execution** — needs a per-sequence KV-cache story (mini-vLLM); revisit only if throughput demands it. Interim honesty fix is Phase 5-3.
-- **Worker concurrency on workload machines** — already being raised at deployment level (soulbits-cloud-backend side).
+- **Chatterbox family batching** — deferred as a whole (decision 2026-11-05): AR TTS needs a per-sequence KV-cache story (mini-vLLM), and its non-AR members (VC, embedding) wait for that same dedicated Chatterbox workstream. Interim honesty: `max_batch_size: 1` (Phase 5-3). Note: the Phase 7 **cache** still serves Chatterbox embeddings (compute reuse, not batched execution).
+- **Worker concurrency on workload machines** — already being raised at deployment level (soulbits-cloud-backend side). Related honesty note: within one engine step, models execute sequentially — Phase 8's win is per-step batching, not cross-step parallelism.
 
 ## Conventions for executors
 
