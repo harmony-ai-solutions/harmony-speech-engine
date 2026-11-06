@@ -43,7 +43,22 @@ Phase 5 invariants (honest batching)
   MeloTTS) forward a padded ``[B, T_max]`` batch per step when
   ``batched_inference`` is enabled (default), with length-similar sub-batching
   and a per-model token budget; the per-item loop remains the ``len == 1`` fast
-  path and the fallback.
+  path and the fallback. Phase 8-2 extends the same machinery to the speaker
+  embedders: the OpenVoice tone-converter encoder forwards its
+  ``(request, VAD segment)`` rows as one padded mel batch per sub-batch (rows
+  masked per layer, GRU packed over each row's valid frames), and the
+  HarmonySpeech encoder forwards its fixed-length ``(request, partial)`` rows in
+  one LSTM batch. Embedding rows are always reassembled per request in input
+  order, and cache hits never enter a batch (Phase 7-2). Phase 8-3 adds the
+  tone converters: one ``(request)`` row of per-clip mel frames per padded
+  sub-batch, unpadded in the sample domain with the model's own frame counts,
+  with per-sub-batch loop fallback.
+* **Parallel lanes for non-batchable steps (Phase 8-5).** KittenTTS has a static
+  batch dimension of 1 and Silero VAD is a single-stream API, so those steps run
+  one request per lane instead (``max_batch_size`` lanes over one shared
+  session/serialised phonemizer, per-request error isolation, results in input
+  order). Silero lanes measured below break-even and stay sequential; the numbers
+  and the mechanism are documented in ``docs/batching.md``.
 """
 
 import copy
@@ -87,10 +102,13 @@ from harmonyspeech.task_handler.batching import (
     batched_inference_enabled,
     collapse_per_sample,
     default_token_budget,
+    lane_count,
     pad_feature_batch,
     pad_phone_batch,
     plan_batches,
+    run_in_lanes,
     trim_decoder_output,
+    trim_feature_output,
 )
 from harmonyspeech.task_handler.inputs import (
     as_request_input,
@@ -166,6 +184,32 @@ def _audio_artifact_from_tensor(wav: torch.Tensor, sample_rate: int) -> AudioArt
     return AudioArtifact(waveform=tensor, sample_rate=sample_rate)
 
 
+def _pad_mel_batch(mels, device):
+    """Pad ``[1, C, T, F]`` mel maps on the time axis; returns ``(padded, lengths)``.
+
+    The frame-axis sibling of :func:`~harmonyspeech.task_handler.batching.pad_feature_batch`
+    for the 4-D maps the VoiceFixer restorer exchanges (batch, channel, frames,
+    bins). Padding is digital silence in the *mel* domain (zeros), which is what
+    the vendored UNet's own ``F.pad`` uses past a clip's last frame.
+    """
+    if not mels:
+        raise ValueError("_pad_mel_batch: empty mel list")
+    channels = int(mels[0].shape[1])
+    bins = int(mels[0].shape[3])
+    lengths = [int(mel.shape[2]) for mel in mels]
+    padded = torch.zeros(
+        (len(mels), channels, max(lengths), bins), dtype=mels[0].dtype, device=device
+    )
+    for row, mel in enumerate(mels):
+        if int(mel.shape[1]) != channels or int(mel.shape[3]) != bins:
+            raise ValueError(
+                f"_pad_mel_batch: inconsistent mel shape {tuple(mel.shape)} vs "
+                f"{(channels, bins)} channels/bins"
+            )
+        padded[row, :, : lengths[row]] = mel[0].to(device)
+    return padded, torch.tensor(lengths, dtype=torch.long, device=device)
+
+
 def _clone_tensor(value):
     """Clone a tensor as a detached leaf, or pass a non-tensor through."""
     if torch.is_tensor(value):
@@ -207,6 +251,21 @@ def _clone_conditionals(conds):
         return type(conds)(t3_clone, gen_clone)
     except TypeError:  # pragma: no cover
         return _clone_tensor(conds)
+
+
+def _finalize_encoder_embedding(partial_embeds) -> SpeakerArtifact:
+    """Per-request HarmonySpeech embedding: mean over partials, then L2-norm.
+
+    Shared by the per-item loop and the padded-batch path (Phase 8-2) so both
+    compute the historical ``np.mean`` → normalise arithmetic on a
+    ``[partials, embedding]`` array, in partial order.
+    """
+    raw_embed = np.mean(partial_embeds, axis=0)
+    embed = raw_embed / np.linalg.norm(raw_embed, 2)
+    return SpeakerArtifact(
+        embedding=torch.from_numpy(np.ascontiguousarray(embed, dtype=np.float32)),
+        backend="harmonyspeech",
+    )
 
 
 class ModelRunnerBase:
@@ -618,24 +677,22 @@ class ModelRunnerBase:
         return result
 
     def _execute_harmonyspeech_encoder(self, inputs, requests_to_batch):
-        # FIXME: This is not properly batched
         assert_batch_aligned("_execute_harmonyspeech_encoder", inputs, requests_to_batch)
 
-        def embed_utterance(audio_artifact, initial_request):
+        def partial_frames(audio_artifact):
+            """Numpy mel frontend per clip (the model consumes its fixed-length partials)."""
             # Numpy preprocessing runs on the artifact's waveform (CPU-side); the
             # move is explicit, never implicit.
             source = _bind_to_device(audio_artifact, "cpu")
             preprocessed = preprocess_wav(source.numpy, source_sr=source.sample_rate)
-            input_frames = get_input_frames(preprocessed)
+            return get_input_frames(preprocessed)
+
+        def embed_utterance(audio_artifact, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
+            input_frames = partial_frames(audio_artifact)
             utterances_tensor = torch.from_numpy(input_frames).to(self.device)
             partial_embeds = self.model(utterances=utterances_tensor).detach().cpu().numpy()
-            # Compute the utterance embedding from the partial embeddings
-            raw_embed = np.mean(partial_embeds, axis=0)
-            embed = raw_embed / np.linalg.norm(raw_embed, 2)
-            return SpeakerArtifact(
-                embedding=torch.from_numpy(np.ascontiguousarray(embed, dtype=np.float32)),
-                backend="harmonyspeech",
-            )
+            return _finalize_encoder_embedding(partial_embeds)
 
         # Cross-request cache (Phase 7-2): resolve hits for the whole batch
         # first (guard once at entry — zero cost when no cache is attached),
@@ -645,6 +702,62 @@ class ModelRunnerBase:
             cache, requests_to_batch, lambda i: self._embedding_cache_lookup(inputs[i], {})
         )
 
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-2). Rows are (request, partial-utterance)
+        # pairs: the vendored ``SpeakerEncoder`` already takes ``[B, frames,
+        # mels]`` and partials are fixed-length by construction, so the frame
+        # axis is the row axis — no change to the numpy mel frontend and no
+        # waveform padding. Only cache misses enter the batch; hits never reach
+        # the model.
+        # ------------------------------------------------------------------
+        batched: dict[int, SpeakerArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            misses = [index for index in range(len(inputs)) if slots[index][1] is None]
+            try:
+                rows: list[tuple[int, np.ndarray]] = [
+                    (index, frames) for index in misses for frames in partial_frames(inputs[index])
+                ]
+                if rows:
+                    partials: dict[int, list[np.ndarray]] = {index: [] for index in misses}
+                    plan_lengths = [int(row[1].shape[0]) for row in rows]
+                    batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                    budget = self.model_config.batch_token_budget or default_token_budget(
+                        plan_lengths, batch_size
+                    )
+                    groups = plan_batches(plan_lengths, batch_size, budget)
+                    for group in groups:
+                        group_rows = [rows[index] for index in group]
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_feature_batch(
+                                [
+                                    torch.from_numpy(np.ascontiguousarray(row[1].T, dtype=np.float32))
+                                    for row in group_rows
+                                ],
+                                device=self.device,
+                                return_lengths=True,
+                            )
+                            embeds = (
+                                self.model.forward_batched(padded.transpose(1, 2).contiguous(), padded_lengths)
+                                .detach()
+                                .cpu()
+                                .numpy()
+                            )
+                        for position, absolute in enumerate(group):
+                            partials[rows[absolute][0]].append(embeds[position])
+                    for index in misses:
+                        artifact = _finalize_encoder_embedding(np.stack(partials[index]))
+                        batched[index] = artifact
+                        self._store_embedding_cache_entry(slots[index][0], artifact)
+                    logger.debug(
+                        f"HarmonySpeech encoder: {len(rows)} partial(s) from {len(misses)} request(s) "
+                        f"forwarded in {len(groups)} padded sub-batch(es)"
+                    )
+            except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
+                logger.warning(
+                    f"HarmonySpeech encoder batched embedding failed ({e}); falling back to the per-request loop"
+                )
+                batched.clear()
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
@@ -652,6 +765,8 @@ class ModelRunnerBase:
                 key, cached = slots[i]
                 if cached is not None:
                     embedding = cached
+                elif i in batched:
+                    embedding = batched[i]
                 else:
                     embedding = embed_utterance(x, initial_request)
                     self._store_embedding_cache_entry(key, embedding)
@@ -663,7 +778,13 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_harmonyspeech_synthesizer(self, inputs, requests_to_batch):
-        # FIXME: This is not properly batched
+        # Phase 8-4 audited the vendored forward and kept this a loop: the
+        # HarmonySpeech synthesizer is ForwardTacotron (three SeriesPredictors, a
+        # CBHG prenet, a duration-driven LengthRegulator and a CBHG postnet, each
+        # with a bidirectional GRU/LSTM over the padded axis), not the
+        # SynthesizerTrn the plan expected. See the "Vendored forward audit" in
+        # `.current_work/engine-modernization/8-4-HarmonySpeechVoiceFixerBatching.md`
+        # for the measurements and the verdict.
         assert_batch_aligned("_execute_harmonyspeech_synthesizer", inputs, requests_to_batch)
 
         def synthesize_text(input_params, initial_request):
@@ -712,37 +833,113 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_harmonyspeech_vocoder(self, inputs, requests_to_batch):
-        # FIXME: This is not properly batched
         assert_batch_aligned("_execute_harmonyspeech_vocoder", inputs, requests_to_batch)
 
-        def vocode_mel(input_params, initial_request):
-            mel_artifact, breaks = input_params
-            # Explicit move; the artifact carries its source device.
-            mel_tensor = _bind_to_device(mel_artifact, self.device).mel.squeeze(0)
-            mel = mel_tensor / 4.0  # Fixme: make this configurable
-            kwargs = {"c": mel.T}
-            wav = self.model.inference(**kwargs).detach().cpu().numpy()
-            wav = wav.squeeze(1)
+        def finish_waveform(wav, breaks):
+            """Post-decode steps, identical on both paths.
 
+            Breaks (inter-chunk silence) apply **after** decode, so batching only
+            has to hand this function the request's own decoded samples and its
+            own ``breaks`` list — the pairing never leaves the request.
+            """
             # Add breaks if defined
             if breaks is not None:
                 # Add breaks - FIXME: Make this parameterized
                 b_ends = np.cumsum(np.array(breaks) * 200)  # hop_size 200
                 b_starts = np.concatenate(([0], b_ends[:-1]))
-                wavs = [wav[start:end] for start, end in zip(b_starts, b_ends)]
+                wavs = [wav[start:end] for start, end in zip(b_starts, b_ends, strict=False)]
                 syn_breaks = [np.zeros(int(0.15 * 16000))] * len(breaks)  # Sample Rate 16000
-                wav = np.concatenate([i for w, b in zip(wavs, syn_breaks) for i in (w, b)])
+                wav = np.concatenate(
+                    [i for w, b in zip(wavs, syn_breaks, strict=False) for i in (w, b)]
+                )
 
             # Normalize
             wav = wav / np.abs(wav).max() * 0.97
 
             return AudioArtifact.from_numpy(wav, 16000)
 
+        def mel_frames(mel_artifact):
+            """Per-request device mel on the frame axis (the batch's row unit)."""
+            mel_tensor = _bind_to_device(mel_artifact, self.device).mel.squeeze(0)
+            return mel_tensor / 4.0  # Fixme: make this configurable
+
+        def vocode_mel(input_params, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
+            mel_artifact, breaks = input_params
+            kwargs = {"c": mel_frames(mel_artifact).T}
+            wav = self.model.inference(**kwargs).detach().cpu().numpy()
+            wav = wav.squeeze(1)
+            return finish_waveform(wav, breaks)
+
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-4). Rows are requests on the mel-frame axis:
+        # the vocoder is a MelGAN decoder, so a padded row's frames must not reach
+        # the valid tail (`inference_batched` masks every stage, 8-3 lesson).
+        # Per-request ``breaks`` and normalization stay in ``finish_waveform``.
+        # ------------------------------------------------------------------
+        batched: dict[int, AudioArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows: list[tuple[int, torch.Tensor]] = []
+            for index, (mel_artifact, _breaks) in enumerate(inputs):
+                try:
+                    rows.append((index, mel_frames(mel_artifact)))
+                except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                    logger.warning(
+                        f"HarmonySpeech vocoder: mel frontend failed for request "
+                        f"{requests_to_batch[index].request_id} ({e}); per-item loop will report it"
+                    )
+            if rows:
+                frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
+                batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                budget = self.model_config.batch_token_budget or default_token_budget(
+                    frame_lengths, batch_size
+                )
+                groups = plan_batches(frame_lengths, batch_size, budget)
+                forwarded = 0
+                for group in groups:
+                    group_rows = [rows[position] for position in group]
+                    try:
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_feature_batch(
+                                [mel for _index, mel in group_rows],
+                                device=self.device,
+                                return_lengths=True,
+                            )
+                            waveform, sample_lengths = self.model.inference_batched(
+                                padded, padded_lengths
+                            )
+                            trimmed = trim_decoder_output(waveform, sample_lengths, 1)
+                    except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
+                        logger.warning(
+                            f"HarmonySpeech vocoder batched forward failed ({e}); "
+                            f"falling back to the per-request loop for {len(group_rows)} request(s)"
+                        )
+                        continue
+                    forwarded += len(group_rows)
+                    for position, _absolute in enumerate(group):
+                        index = group_rows[position][0]
+                        try:
+                            wav = trimmed[position][0].detach().cpu().float().numpy()
+                            batched[index] = finish_waveform(wav, inputs[index][1])
+                        except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                            logger.warning(
+                                f"HarmonySpeech vocoder: could not finish request "
+                                f"{requests_to_batch[index].request_id} ({e}); "
+                                f"per-item loop will report it"
+                            )
+                if batched:
+                    logger.debug(
+                        f"HarmonySpeech vocoder: {forwarded} request(s) forwarded in "
+                        f"{len(groups)} padded sub-batch(es)"
+                    )
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                audio_artifact = vocode_mel(x, initial_request)
+                audio_artifact = batched.get(i)
+                if audio_artifact is None:
+                    audio_artifact = vocode_mel(x, initial_request)
                 result = self._build_result(initial_request, "", VocodeRequestOutput)
                 result.result_data.audio_artifact = audio_artifact
             except Exception as e:
@@ -758,21 +955,27 @@ class ModelRunnerBase:
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
 
-        # FIXME: This is not properly batched
+        # The encoder batch below covers the reference encoder; the per-segment
+        # STFT frontend stays per row (it reflect-pads every clip on its own).
         assert_batch_aligned("_execute_openvoice_tone_converter_encoder", inputs, requests_to_batch)
 
+        def segment_spectrogram(segment):
+            """Per-segment STFT: the historical frontend, unchanged."""
+            y = _bind_to_device(segment, self.device).waveform
+            return spectrogram_torch(
+                y,
+                hf_config.data.filter_length,
+                hf_config.data.sampling_rate,
+                hf_config.data.hop_length,
+                hf_config.data.win_length,
+                center=False,
+            ).to(self.device)
+
         def run_converter_encoder(vad_audio_segments, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
             gs = []
             for segment in vad_audio_segments:
-                y = _bind_to_device(segment, self.device).waveform
-                y = spectrogram_torch(
-                    y,
-                    hf_config.data.filter_length,
-                    hf_config.data.sampling_rate,
-                    hf_config.data.hop_length,
-                    hf_config.data.win_length,
-                    center=False,
-                ).to(self.device)
+                y = segment_spectrogram(segment)
                 with torch.no_grad():
                     g = self.model.ref_enc(y.transpose(1, 2)).unsqueeze(-1)
                     gs.append(g.detach())
@@ -793,6 +996,68 @@ class ModelRunnerBase:
 
         slots = self._resolve_cache_slots(cache, requests_to_batch, _lookup)
 
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-2). Rows are (request, VAD segment) pairs —
+        # a request may own several segments, like 5-2's (request, sentence)
+        # rows. The reference encoder takes mel frames, so rows are padded on the
+        # frame axis and forwarded for their real frame counts; each request's
+        # segment embeddings are then stacked and averaged in segment order, the
+        # same arithmetic the loop performs. Only cache misses enter the batch.
+        # ------------------------------------------------------------------
+        batched: dict[int, SpeakerArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            misses = [index for index in range(len(inputs)) if slots[index][1] is None]
+            try:
+                rows: list[tuple[int, AudioArtifact]] = [
+                    (index, segment) for index in misses for segment in inputs[index]
+                ]
+                if rows:
+                    segment_gs: dict[int, list[torch.Tensor]] = {index: [] for index in misses}
+                    # The sample count is the segment length on a per-row basis
+                    # (frames = f(samples) monotonic), so planning on it keeps the
+                    # same length-similar grouping without a second STFT.
+                    plan_lengths = [int(segment.waveform.numel()) for _, segment in rows]
+                    batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                    budget = self.model_config.batch_token_budget or default_token_budget(
+                        plan_lengths, batch_size
+                    )
+                    groups = plan_batches(plan_lengths, batch_size, budget)
+                    for group in groups:
+                        group_rows = [rows[index] for index in group]
+                        specs = [segment_spectrogram(segment) for _row, segment in group_rows]
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_feature_batch(
+                                [spec[0] for spec in specs],
+                                device=self.device,
+                                return_lengths=True,
+                            )
+                            g = self.model.ref_enc.forward_batched(
+                                padded.transpose(1, 2).contiguous(), padded_lengths
+                            )
+                        for position, absolute in enumerate(group):
+                            segment_gs[rows[absolute][0]].append(
+                                g[position].detach().unsqueeze(-1).unsqueeze(0)
+                            )
+                    for index in misses:
+                        if not segment_gs[index]:
+                            # No segment survived the VAD filters: the loop below
+                            # raises exactly as it did before batching existed.
+                            continue
+                        gs = torch.stack(segment_gs[index]).mean(0)
+                        artifact = SpeakerArtifact(embedding=gs.cpu(), backend="openvoice")
+                        batched[index] = artifact
+                        self._store_embedding_cache_entry(slots[index][0], artifact)
+                    logger.debug(
+                        f"OpenVoice tone-converter encoder: {len(rows)} segment(s) from {len(misses)} "
+                        f"request(s) forwarded in {len(groups)} padded sub-batch(es)"
+                    )
+            except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
+                logger.warning(
+                    f"OpenVoice tone-converter encoder batched embedding failed ({e}); "
+                    f"falling back to the per-request loop"
+                )
+                batched.clear()
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
@@ -800,6 +1065,8 @@ class ModelRunnerBase:
                 key, cached = slots[i]
                 if cached is not None:
                     embedding = cached
+                elif i in batched:
+                    embedding = batched[i]
                 else:
                     embedding = run_converter_encoder(x, initial_request)
                     self._store_embedding_cache_entry(key, embedding)
@@ -817,12 +1084,24 @@ class ModelRunnerBase:
         hf_config = get_model_config(
             self.model_config.model, self.model_config.model_type, self.model_config.revision, flavour
         )
+        sample_rate = int(hf_config.data.sampling_rate)
+        # A VITS decoder emits ``prod(upsample_rates)`` samples per mel frame;
+        # for both tone converters that equals the configured hop length. Reading
+        # it off the model keeps the unpad step tied to the model's own output
+        # semantics (the solo path returns the whole decoder output) rather than
+        # to a coincidental config value.
+        samples_per_frame = int(hf_config.data.hop_length)
+        decoder_rates = getattr(getattr(self.model, "dec", None), "upsample_rates", None)
+        if decoder_rates:
+            samples_per_frame = 1
+            for rate in decoder_rates:
+                samples_per_frame *= int(rate)
 
-        # FIXME: This is not properly batched
         assert_batch_aligned("_execute_openvoice_tone_converter", inputs, requests_to_batch)
 
-        def run_converter_encoder(input_params, initial_request):
-            audio_artifact, target_speaker, source_speaker = input_params
+        def speaker_embeddings(input_params):
+            """Device-local source/target embeddings, validated per request."""
+            _audio_artifact, target_speaker, source_speaker = input_params
 
             # Both embedding blobs decoded through the safe loaders at admission
             # (``weights_only=True``), so a hostile pickle fails closed before
@@ -833,9 +1112,17 @@ class ModelRunnerBase:
                 raise ValueError("source_embedding: missing embedding tensor")
             target_embedding = _bind_to_device(target_speaker, self.device).embedding
             src_embedding = _bind_to_device(source_speaker, self.device).embedding
+            return src_embedding, target_embedding
 
+        def mel_frontend(audio_artifact):
+            """Per-clip mel frontend: the historical frontend, unchanged.
+
+            ``spectrogram_torch`` reflect-pads every clip before the STFT, so a
+            padded waveform batch would change the shorter rows' edge frames
+            (8-2 lesson). The batch is built on the mel frames instead.
+            """
             y = _bind_to_device(audio_artifact, self.device).waveform.float()
-            spec = spectrogram_torch(
+            return spectrogram_torch(
                 y,
                 hf_config.data.filter_length,
                 hf_config.data.sampling_rate,
@@ -843,6 +1130,12 @@ class ModelRunnerBase:
                 hf_config.data.win_length,
                 center=False,
             ).to(self.device)
+
+        def run_converter_encoder(input_params, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
+            audio_artifact = input_params[0]
+            src_embedding, target_embedding = speaker_embeddings(input_params)
+            spec = mel_frontend(audio_artifact)
             spec_lengths = torch.LongTensor([spec.size(-1)]).to(self.device)
 
             with torch.no_grad():
@@ -851,13 +1144,86 @@ class ModelRunnerBase:
                 )
                 output_audio = output_audio[0][0, 0].data.cpu().float().numpy()
 
-            return AudioArtifact.from_numpy(output_audio, hf_config.data.sampling_rate)
+            return AudioArtifact.from_numpy(output_audio, sample_rate)
+
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-3). One row per request: the mel frontend
+        # stays per clip (reflect padding, see above), the rows are padded on
+        # the mel-frame axis, and every length-similar sub-batch is one
+        # ``voice_conversion_batched`` forward. Outputs are unpadded in the
+        # sample domain with the model's own frame counts (``y_lengths *
+        # prod(upsample_rates)``), which is exactly the solo path's full
+        # decoder output. A failing sub-batch falls back to the loop for its
+        # requests only.
+        # ------------------------------------------------------------------
+        batched: dict[int, AudioArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows: list[tuple[int, torch.Tensor]] = []
+            for index, input_params in enumerate(inputs):
+                try:
+                    rows.append((index, mel_frontend(input_params[0])))
+                except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                    logger.warning(
+                        f"OpenVoice tone converter: mel frontend failed for request "
+                        f"{requests_to_batch[index].request_id} ({e}); per-item loop will report it"
+                    )
+            if rows:
+                frame_lengths = [int(spec.size(-1)) for _index, spec in rows]
+                batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                budget = self.model_config.batch_token_budget or default_token_budget(
+                    frame_lengths, batch_size
+                )
+                groups = plan_batches(frame_lengths, batch_size, budget)
+                forwarded = 0
+                for group in groups:
+                    group_rows = [rows[position] for position in group]
+                    try:
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_feature_batch(
+                                [spec[0] for _index, spec in group_rows],
+                                device=self.device,
+                                return_lengths=True,
+                            )
+                            embeddings = [
+                                speaker_embeddings(inputs[index]) for index, _spec in group_rows
+                            ]
+                            sid_src = torch.cat([source for source, _target in embeddings], dim=0)
+                            sid_tgt = torch.cat([target for _source, target in embeddings], dim=0)
+                            output_audio, _y_mask, _ = self.model.voice_conversion_batched(
+                                padded,
+                                padded_lengths,
+                                sid_src=sid_src,
+                                sid_tgt=sid_tgt,
+                                tau=0.3,
+                            )
+                            trimmed = trim_decoder_output(
+                                output_audio, padded_lengths, samples_per_frame
+                            )
+                    except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
+                        logger.warning(
+                            f"OpenVoice tone converter batched forward failed ({e}); "
+                            f"falling back to the per-request loop for {len(group_rows)} request(s)"
+                        )
+                        continue
+                    forwarded += len(group_rows)
+                    for position, _absolute in enumerate(group):
+                        index = group_rows[position][0]
+                        batched[index] = AudioArtifact.from_numpy(
+                            trimmed[position][0].detach().cpu().float().numpy(), sample_rate
+                        )
+                if batched:
+                    logger.debug(
+                        f"OpenVoice tone converter: {forwarded} request(s) forwarded in "
+                        f"{len(groups)} padded sub-batch(es)"
+                    )
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                audio_artifact = run_converter_encoder(x, initial_request)
+                audio_artifact = batched.get(i)
+                if audio_artifact is None:
+                    audio_artifact = run_converter_encoder(x, initial_request)
                 result = self._build_result(initial_request, "", VoiceConversionRequestOutput)
                 result.result_data.audio_artifact = audio_artifact
             except Exception as e:
@@ -866,14 +1232,46 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_faster_whisper(self, inputs, requests_to_batch):
+        """Transcribe (and segment, for the pipeline's VAD step) per request.
+
+        Phase 8-5 audit — **there is no cross-request batch to fold into one
+        call here.** In the installed ``faster_whisper`` (1.2.1),
+        ``BatchedInferencePipeline`` batches *within a single audio*:
+        ``transcribe(audio, ...)`` takes one path / file object / mono ndarray,
+        cuts it into <=30 s clips with faster-whisper's own VAD and pushes those
+        clips through ``forward()`` in groups of ``batch_size``
+        (``_batched_segments_generator`` → ``forward`` →
+        ``generate_segment_batched``). Neither ``transcribe()`` nor
+        ``WhisperModel.generate_segments()`` accepts a list of audios.
+
+        One handler call == one request's audio (``prepare_faster_whisper_inputs``
+        returns one ``AudioArtifact`` per request), and that holds for both
+        request paths: STT requests and the pipeline's whisper-segmentation VAD
+        step (a ``DetectVoiceActivityRequestInput`` routed to this model type)
+        arrive through the same prepare function, so both take this loop. Batching
+        across requests would mean re-implementing ``transcribe()`` — per-audio
+        VAD chunking, feature extraction, per-audio language detection (hence a
+        per-request tokenizer and prompt) and timestamp restoration — on top of
+        upstream internals. That trades a stable public API for a drifting copy,
+        so the loop stays and the skip is documented in ``docs/batching.md``.
+        """
         assert_batch_aligned("_execute_faster_whisper", inputs, requests_to_batch)
+
+        # One pipeline per step (it is a thin view over the shared model). The
+        # clip batch is *intra-audio*, unrelated to ``max_batch_size``, which is
+        # the scheduler's admission width.
+        pipeline = BatchedInferencePipeline(model=self.model)
+        clip_batch_size = 16
 
         def run_batched_transcribe(audio_artifact, initial_request):
             # faster-whisper takes a mono numpy array; the artifact already holds
             # the boundary-decoded 16 kHz waveform.
             audio_ref = _bind_to_device(audio_artifact, "cpu").numpy
-            batched_model = BatchedInferencePipeline(model=self.model)
-            segments, info = batched_model.transcribe(audio_ref, batch_size=16)
+            # The pipeline carries a word-timestamp cursor across calls; reset it
+            # per request so one request's segments can never shift the next
+            # request's timestamps (per-request state isolation, Phase 0-2).
+            pipeline.last_speech_timestamp = 0.0
+            segments, info = pipeline.transcribe(audio_ref, batch_size=clip_batch_size)
             segment_data = []
             text = ""
             for segment in segments:
@@ -1178,20 +1576,43 @@ class ModelRunnerBase:
     def _execute_voicefixer_restorer(self, inputs, requests_to_batch):
         """Execute VoiceFixerRestorer model to enhance audio quality."""
         assert_batch_aligned("_execute_voicefixer_restorer", inputs, requests_to_batch)
+        # The vendored forward processes a clip in 30 s slices and concatenates the
+        # per-slice mels, so the batched row unit is the ``(request, slice)`` pair
+        # (the same shape as 5-2's ``(request, sentence)`` rows).
+        segment_samples = int(getattr(self.model, "sample_rate", 44100)) * 30
 
-        def restore_audio(audio_artifact, initial_request):
-            # [1, samples] -> [batch, channels, samples]
+        def audio_segments(audio_artifact):
+            """Device waveform slices, ``[1, 1, samples]`` each."""
             audio_tensor = _bind_to_device(audio_artifact, self.device).waveform
             if audio_tensor.dim() == 2:
                 audio_tensor = audio_tensor.unsqueeze(1)
+            return [
+                audio_tensor[..., start : start + segment_samples]
+                for start in range(0, int(audio_tensor.shape[-1]), segment_samples)
+            ]
 
-            # Run the VoiceFixerRestorer model
-            with torch.no_grad():
-                enhanced_mel = self.model(audio_tensor)
+        def mel_frontend(segment):
+            """Per-slice mel frontend: the historical STFT/mel path, per clip.
 
+            It stays per row because the centered STFT reflect-pads every clip on
+            its own (the 8-2/8-3 frontend rule); the batch is built on the frames.
+            """
+            return self.model.preprocess(segment)
+
+        def mel_artifact(segment_mels):
+            """Fold a request's per-slice mels exactly like ``model.forward``.
+
+            The solo path collects ``[1, 1, frames, bins]`` tensors per slice and
+            concatenates them along the historical axis (``dim=3``) when there is
+            more than one; a single slice is returned as-is. Both shapes are
+            preserved here verbatim.
+            """
+            enhanced = (
+                segment_mels[0] if len(segment_mels) == 1 else torch.cat(segment_mels, dim=3)
+            )
             # VoiceFixer emits [batch, channels, frames, bins]; the vocoder only
             # consumes channel 0, so store the canonical [1, bins, frames].
-            mel = enhanced_mel.detach().cpu().float()
+            mel = enhanced.detach().cpu().float()
             if mel.dim() == 4:
                 mel = mel[:, 0].transpose(-1, -2)
             elif mel.dim() == 3:
@@ -1204,13 +1625,89 @@ class ModelRunnerBase:
                 hop_length=441,
             )
 
+        def restore_audio(audio_artifact, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
+            # [1, samples] -> [batch, channels, samples]
+            audio_tensor = _bind_to_device(audio_artifact, self.device).waveform
+            if audio_tensor.dim() == 2:
+                audio_tensor = audio_tensor.unsqueeze(1)
+
+            # Run the VoiceFixerRestorer model
+            with torch.no_grad():
+                enhanced_mel = self.model(audio_tensor)
+            return mel_artifact([enhanced_mel])
+
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-4). Rows are ``(request, 30 s slice)`` pairs
+        # on the mel-frame axis: the UNet's conv/pool stack would otherwise let a
+        # padded row's padding reach its valid tail (`forward_batched` masks every
+        # stage). Per-request outputs are reassembled in slice order.
+        # ------------------------------------------------------------------
+        batched: dict[int, MelArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows: list[tuple[int, torch.Tensor]] = []
+            for index, audio_artifact in enumerate(inputs):
+                try:
+                    for segment in audio_segments(audio_artifact):
+                        rows.append((index, mel_frontend(segment)))
+                except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                    logger.warning(
+                        f"VoiceFixer restorer: mel frontend failed for request "
+                        f"{requests_to_batch[index].request_id} ({e}); per-item loop will report it"
+                    )
+            if rows:
+                frame_lengths = [int(mel.shape[2]) for _index, mel in rows]
+                batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                budget = self.model_config.batch_token_budget or default_token_budget(
+                    frame_lengths, batch_size
+                )
+                groups = plan_batches(frame_lengths, batch_size, budget)
+                per_request: dict[int, list[torch.Tensor]] = {index: [] for index, _ in rows}
+                forwarded = 0
+                for group in groups:
+                    group_rows = [rows[position] for position in group]
+                    try:
+                        with torch.no_grad():
+                            padded, padded_lengths = _pad_mel_batch(
+                                [mel for _index, mel in group_rows], self.device
+                            )
+                            restored = self.model.forward_batched(padded, padded_lengths)
+                            trimmed = trim_feature_output(restored, padded_lengths, dim=2)
+                    except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
+                        logger.warning(
+                            f"VoiceFixer restorer batched forward failed ({e}); "
+                            f"falling back to the per-request loop for {len(group_rows)} request(s)"
+                        )
+                        continue
+                    forwarded += len(group_rows)
+                    for position, _absolute in enumerate(group):
+                        index = group_rows[position][0]
+                        per_request[index].append(trimmed[position].unsqueeze(0))
+                for index, slices in per_request.items():
+                    if len(slices) == len(audio_segments(inputs[index])):
+                        try:
+                            batched[index] = mel_artifact(slices)
+                        except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                            logger.warning(
+                                f"VoiceFixer restorer: could not reassemble request "
+                                f"{requests_to_batch[index].request_id} ({e}); "
+                                f"per-item loop will report it"
+                            )
+                if batched:
+                    logger.debug(
+                        f"VoiceFixer restorer: {forwarded} slice(s) from {len(inputs)} request(s) "
+                        f"forwarded in {len(groups)} padded sub-batch(es)"
+                    )
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                mel_artifact = restore_audio(x, initial_request)
+                artifact = batched.get(i)
+                if artifact is None:
+                    artifact = restore_audio(x, initial_request)
                 result = self._build_result(initial_request, "", AudioConversionRequestOutput)
-                result.result_data.mel_artifact = mel_artifact
+                result.result_data.mel_artifact = artifact
             except Exception as e:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
@@ -1220,10 +1717,20 @@ class ModelRunnerBase:
         """Execute VoiceFixerVocoder model to convert mel spectrogram to audio."""
         assert_batch_aligned("_execute_voicefixer_vocoder", inputs, requests_to_batch)
 
+        def mel_frames(mel_artifact):
+            """Device mel on the frame axis, ``[1, bins, frames]`` (artifact form)."""
+            return _bind_to_device(mel_artifact, self.device).mel
+
+        def normalize(audio_np):
+            """Per-request peak normalization: the historical arithmetic."""
+            if np.abs(audio_np).max() > 0:
+                audio_np = audio_np / np.abs(audio_np).max() * 0.97
+            return audio_np
+
         def vocode_mel(mel_artifact, initial_request):
+            """Per-item loop: the ``len == 1`` fast path and the fallback."""
             # VoiceFixer's forward expects [batch, 1, frames, bins].
-            mel = _bind_to_device(mel_artifact, self.device).mel
-            mel_tensor = mel.transpose(-1, -2).unsqueeze(1)
+            mel_tensor = mel_frames(mel_artifact).transpose(-1, -2).unsqueeze(1)
 
             # Run the VoiceFixerVocoder model
             with torch.no_grad():
@@ -1234,17 +1741,72 @@ class ModelRunnerBase:
             if audio_np.ndim > 1:
                 audio_np = audio_np.squeeze()
 
-            # Normalize audio
-            if np.abs(audio_np).max() > 0:
-                audio_np = audio_np / np.abs(audio_np).max() * 0.97
+            return AudioArtifact.from_numpy(normalize(audio_np), 44100)
 
-            return AudioArtifact.from_numpy(audio_np, 44100)
+        # ------------------------------------------------------------------
+        # Padded-batch path (Phase 8-4). The mel-to-condition frontend stays per
+        # request (`tr_pre`'s tail length depends on the row's own frame count);
+        # the vocoder generator runs one masked forward per sub-batch, and the
+        # peak normalization stays **per request** — a batch max would rescale a
+        # quiet clip by its neighbour's loudest sample.
+        # ------------------------------------------------------------------
+        batched: dict[int, AudioArtifact] = {}
+        if batched_inference_enabled(self.model_config) and len(inputs) > 1:
+            rows: list[tuple[int, torch.Tensor]] = []
+            for index, mel_artifact in enumerate(inputs):
+                try:
+                    rows.append((index, mel_frames(mel_artifact).squeeze(0)))
+                except Exception as e:  # noqa: BLE001 - the loop reports this request alone
+                    logger.warning(
+                        f"VoiceFixer vocoder: mel frontend failed for request "
+                        f"{requests_to_batch[index].request_id} ({e}); per-item loop will report it"
+                    )
+            if rows:
+                frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
+                batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+                budget = self.model_config.batch_token_budget or default_token_budget(
+                    frame_lengths, batch_size
+                )
+                groups = plan_batches(frame_lengths, batch_size, budget)
+                forwarded = 0
+                for group in groups:
+                    group_rows = [rows[position] for position in group]
+                    try:
+                        with torch.no_grad():
+                            padded, padded_lengths = pad_feature_batch(
+                                [mel for _index, mel in group_rows],
+                                device=self.device,
+                                return_lengths=True,
+                            )
+                            mel_batch = padded.transpose(-1, -2).unsqueeze(1)
+                            audio, sample_lengths = self.model.forward_batched(
+                                mel_batch, padded_lengths
+                            )
+                            trimmed = trim_decoder_output(audio, sample_lengths, 1)
+                    except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
+                        logger.warning(
+                            f"VoiceFixer vocoder batched forward failed ({e}); "
+                            f"falling back to the per-request loop for {len(group_rows)} request(s)"
+                        )
+                        continue
+                    forwarded += len(group_rows)
+                    for position, _absolute in enumerate(group):
+                        index = group_rows[position][0]
+                        audio_np = trimmed[position][0].detach().cpu().float().numpy()
+                        batched[index] = AudioArtifact.from_numpy(normalize(audio_np), 44100)
+                if batched:
+                    logger.debug(
+                        f"VoiceFixer vocoder: {forwarded} request(s) forwarded in "
+                        f"{len(groups)} padded sub-batch(es)"
+                    )
 
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                audio_artifact = vocode_mel(x, initial_request)
+                audio_artifact = batched.get(i)
+                if audio_artifact is None:
+                    audio_artifact = vocode_mel(x, initial_request)
                 result = self._build_result(initial_request, "", AudioConversionRequestOutput)
                 result.result_data.audio_artifact = audio_artifact
             except Exception as e:
@@ -1253,7 +1815,31 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_silero_vad(self, inputs, requests_to_batch):
-        """Execute Silero VAD model to detect voice activity."""
+        """Execute Silero VAD model to detect voice activity.
+
+        Phase 8-5 verdict: **sequential, no lanes.** Two independent reasons,
+        both measured on the installed packages:
+
+        * Batching is impossible — ``get_speech_timestamps`` is a single-stream
+          API: one 512-sample window at a time through ``model(chunk, sr)``,
+          producing a probability list that the post-processor turns into
+          segments. A batch axis would mean re-implementing that windowing loop
+          and the upstream ONNX graph's state protocol.
+        * Parallel lanes are worse than useless here. Unlike a one-shot graph,
+          the VAD is *many tiny* inferences with Python glue between them, and
+          the installed ``silero_vad.OnnxWrapper`` keeps the streaming LSTM state
+          on the **instance** (``_state`` / ``_context``) and calls
+          ``reset_states()`` at the start of every ``get_speech_timestamps`` —
+          concurrent calls on the shared model corrupt each other (measured: 7 of
+          16 concurrent results differed from their sequential answer). Lanes on
+          per-lane wrappers avoid the corruption but still measured 1.10x / 0.95x
+          / 0.92x at 4 / 8 / 16 lanes on 16 x 30 s clips: the GIL-bound Python
+          loop dominates, exactly as expected for a step this cheap.
+
+        The per-request loop is therefore the honest implementation, and
+        ``max_batch_size`` stays an admission/queue-depth setting. Numbers and the
+        verdict are recorded in ``docs/batching.md``.
+        """
         assert_batch_aligned("_execute_silero_vad", inputs, requests_to_batch)
 
         def run_vad(input_params, initial_request):
@@ -1307,10 +1893,10 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_kittentts_synthesizer(self, inputs, requests_to_batch):
-        """Execute KittenTTSSynthesizer to generate speech audio from text."""
+        """Synthesize the step's requests as parallel lanes (KittenTTS cannot batch)."""
         assert_batch_aligned("_execute_kittentts_synthesizer", inputs, requests_to_batch)
 
-        def synthesize_text(input_params, initial_request):
+        def synthesize_text(input_params):
             input_text, voice, speed_modifier = input_params
 
             # Run KittenTTS generation
@@ -1323,11 +1909,31 @@ class ModelRunnerBase:
 
             return AudioArtifact.from_numpy(audio_array, self.model.sample_rate)
 
+        # ------------------------------------------------------------------
+        # Parallel lanes (Phase 8-5). KittenTTS cannot batch: all four cached
+        # variants export a static batch dimension of 1 (``input_ids [1, len]``,
+        # ``style [1, 256]``, ``speed [1]``). A step therefore runs one request
+        # per lane — ``max_batch_size`` *is* the lane count, no new config key —
+        # over one shared ORT session (``InferenceSession.run`` is thread-safe
+        # and releases the GIL, and the graph is one-shot, so a lane is a single
+        # long C++ call and the lanes scale). The phonemizer inside
+        # ``generate`` serialises itself (espeak is not thread-safe).
+        # ------------------------------------------------------------------
+        lanes = lane_count(len(inputs), getattr(self.model_config, "max_batch_size", 1))
+        lane_results = run_in_lanes(synthesize_text, inputs, lanes, thread_name_prefix="kitten-lane")
+        if lanes > 1:
+            logger.debug(f"KittenTTS: {len(inputs)} request(s) synthesised in {lanes} lane(s)")
+
+        # Result assembly stays on the calling thread (``_build_result`` owns the
+        # per-step duplicate-id guard) and in input order, so a failed lane only
+        # ever becomes its own request's error result.
         outputs = []
-        for i, x in enumerate(inputs):
+        for i, (audio_artifact, error) in enumerate(lane_results):
             initial_request = requests_to_batch[i]
+            if error is not None:
+                outputs.append(self._build_error_result(initial_request, error))
+                continue
             try:
-                audio_artifact = synthesize_text(x, initial_request)
                 result = self._build_result(initial_request, "", TextToSpeechRequestOutput)
                 result.result_data.audio_artifact = audio_artifact
             except Exception as e:

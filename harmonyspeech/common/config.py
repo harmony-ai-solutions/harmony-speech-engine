@@ -51,13 +51,22 @@ class ModelConfig:
             instead of loading them once per config (Phase 4-4). Entries
             without a group keep the historical one-tree-per-config load.
         batched_inference: Optional override for the padded-batch forward
-            (Phase 5-2). ``None`` (default) means "family default": on for the
-            one-shot synthesis families with a validated batched forward
-            (``OpenVoiceV1Synthesizer``, ``MeloTTSSynthesizer``) and off for
-            every other family. ``False`` forces the legacy per-item loop even
-            on those families (a batch size of 1 is the honest value then).
+            (Phase 5-2/8). ``None`` (default) means "family default": on for the
+            model types with a validated batched forward
+            (``OpenVoiceV1Synthesizer``, ``MeloTTSSynthesizer`` today; the
+            Phase 8 tasks add the tone converters, embedders, HarmonySpeech and
+            VoiceFixer types as each handler lands) and off for every other
+            family. ``False`` forces the legacy per-item loop even on those
+            families (a batch size of 1 is the honest value then).
         batch_token_budget: Optional cap for one padded sub-batch, measured as
-            ``items × T_max`` phone tokens (Phase 5-2). ``None`` derives
+            ``items × T_max`` in the step's own **axis unit** (Phase 5-2/8-1).
+            The unit follows what the model pads on: phones for synthesizers
+            (``OpenVoiceV1Synthesizer``, ``MeloTTSSynthesizer``, the Harmony
+            Speech synthesizer), mel/feature frames for tone converters,
+            restorers, vocoders and the Harmony Speech encoder, and audio
+            samples for speaker embedders. The number is compared against the
+            same length vector the handler passes to ``plan_batches``, so pick
+            a value in that unit. ``None`` derives
             ``max_batch_size × median length`` per step.
     """
 

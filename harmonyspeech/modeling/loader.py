@@ -93,6 +93,13 @@ def _get_model_cls(model_config: ModelConfig) -> type[nn.Module]:
         )
 
 
+#: Model types whose graph contains a frontend that creates its tensors with
+#: ``torch.from_numpy`` / ``torch.Tensor(numpy)`` instead of the ambient default
+#: device (``torchlibrosa.stft.STFT`` in the VoiceFixer restorer). They need an
+#: explicit ``model.to(device)`` after construction; every other family is
+#: placed by the ``torch.device`` context it is built in.
+_STFT_FRONTEND_MODEL_TYPES = frozenset({"VoiceFixerRestorer", "VoiceFixerVocoder"})
+
 _MODEL_CONFIGS = {
     # OpenVoice V1
     "OpenVoiceV1Synthesizer": {
@@ -403,6 +410,18 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
             # Every model needs to implement this seperately, because state dicts can differ
             # and post-init task may apply
             model.load_weights(checkpoint, hf_config)
+
+        # The VoiceFixer restorer's STFT frontend is not placed by the device
+        # context above: ``torchlibrosa.stft.STFT`` overwrites its own conv
+        # weights with ``torch.Tensor(numpy arrays)``, which are always CPU
+        # tensors, so the rest of the graph lands on the configured device while
+        # those two convs stay on the host and every forward then fails with
+        # ``input cuda vs weight cpu``. They are registered parameters of the
+        # STFT module, so one explicit ``.to()`` after construction and weight
+        # loading places the whole tree (parameters, buffers and the STFT convs).
+        # On CPU this is a no-op.
+        if model_config.model_type in _STFT_FRONTEND_MODEL_TYPES:
+            model = model.to(device_config.device)
 
         # if isinstance(linear_method, BNBLinearMethod):
         #     replace_quant_params(

@@ -1,7 +1,9 @@
 # Throughput & batching benchmarks
 
-Evidence for Phase 5 ("honest batching"): the padded-batch equivalence gate and
-the pre/post throughput tables that justify the shipped `max_batch_size` values.
+Evidence for Phase 5 ("honest batching"), Phase 7 (cross-request embedding
+cache) and Phase 8 (batching across every step): the padded-batch equivalence
+gate and the pre/post throughput tables that justify the shipped
+`max_batch_size` values, plus the clone-flood scenario matrix.
 
 ## Method
 
@@ -117,8 +119,9 @@ MeloTTS → tone converter):
 No improvement — within run-to-run noise, slightly worse at c=8. The clone
 pipeline is bound by its per-item hops (tone-converter encoder and tone
 converter are `max_batch_size: 1` loops), so a faster synthesis step does not
-move end-to-end throughput. This is why the tone-converter entries stay at 1
-instead of pretending to batch.
+move end-to-end throughput. This is why the tone-converter entries stayed at 1
+in Phase 5 instead of pretending to batch; Phase 8 later gave those hops their
+own padded-batch forward and raised their capacity (see §Phase 8).
 
 Chatterbox TTS (the honesty check — autoregressive, `max_batch_size: 1`):
 
@@ -269,9 +272,249 @@ python scripts/bench_throughput.py --families openvoice_v2 --concurrency 1,4,20 
   the variant generation itself adds no engine cost.
 * Expect no change to the *tail* behaviour of the per-item tone-converter hops
   (`max_batch_size: 1`, see Phase 5): the cache removes a serial step, it does
-  not add parallelism.
+  not add parallelism. (Phase 8 later batched those hops — see §Phase 8.)
 
 Numbers are filled in after the measurement run on the idle GPU; the engine
 commit, torch/driver versions and cache settings belong in the block header
 (`--md-out` appends them automatically).
+
+## Phase 8 — every step batches (flood)
+
+Evidence for Phase 8: with the embedder (8-2), tone-converter (8-3), vocoder and
+restorer (8-4) steps now running padded-batch forwards, the clone and
+restoration pipelines should stop being capped by their serial hops. Phase 8's
+win is **per-step batching**: within one engine step the models still execute
+sequentially (see the honesty note at the end of this section); what changed is
+that a step forwards one padded batch (or a few length-similar sub-batches)
+instead of N single calls, so fewer kernel launches and host round-trips carry
+the same request flood.
+
+### Method
+
+* **Tooling.** `scripts/bench_throughput.py`:
+  * `--concurrency 1,4,20` (comma list; a single integer still works) plus one
+    manual `--concurrency 200` run for the client-ceiling observation.
+  * `--clone-reference {same,distinct}` (Phase 7-3) for the clone matrix, with
+    `--embedding-cache {on,off}` now **verifying** the server's reported
+    `/health` state and aborting on a mismatch — the cache toggle is a
+    server-side flag, so the four cells need two engine boots.
+  * New families: `openvoice_v1`, `harmonyspeech` (encoder → synthesizer →
+    vocoder) and `voicefixer` (restore → vocode, `/v1/audio/convert`), plus
+    `kitten` for the lanes curve.
+  * `--engine-log <file>` parses the engine's DEBUG sub-batch lines for the
+    level and reports the per-step composition (how many padded forwards one
+    engine step needed, rows/requests covered) next to the end-to-end p50/p95
+    and req/s. Run the server with `HARMONYSPEECH_LOG_LEVEL=DEBUG` and redirect
+    its output to that file.
+  * The HTTP client's connection pool is sized from the highest concurrency
+    level instead of `httpx`'s default 100, so a 200-connection run measures the
+    engine rather than the client's connection limit. `--http-max-connections`
+    caps it deliberately when the client ceiling itself is the thing to record.
+  * `--print-scenarios` prints the whole clone matrix (two boots + four runs).
+* **Host.** Benchmark host: RTX 5060 Ti 16 GiB (idle; `CUDA_VISIBLE_DEVICES=1`),
+  the same host as the Phase 5/7 runs. This repository's local dev GPU (GTX
+  1050 Ti 4 GB) exists but is **not** the measurement host. torch/driver
+  versions are recorded by the harness in the block header.
+* **Build.** Working tree implementing Phase 8 on top of commit `dab303a`
+  (`git rev-parse --short HEAD`; the harness records `HEAD`, and the Phase 8
+  commit follows immediately after — same convention as the Phase 5 block).
+* **Engine config.** The reduced benchmark config carries only the families
+  below, with the Phase 8-6 capacity values:
+
+  | Entry | `max_batch_size` | Mechanism |
+  |---|---|---|
+  | `ov2-synthesizer-en` (MeloTTS) | `8` | padded batch, token axis |
+  | `ov2-tone-converter-encoder` / `ov1-tone-converter-encoder` | `8` | padded batch, mel-frame axis |
+  | `ov2-tone-converter` / `ov1-tone-converter` | `8` | padded batch, mel-frame axis |
+  | `hs1-encoder` | `8` | padded batch, mel-frame axis |
+  | `hs1-synthesizer` | `1` | per-item loop (padding-unsafe, documented skip) |
+  | `hs1-vocoder` | `8` | padded batch, mel-frame axis |
+  | `voicefixer-restorer` / `voicefixer-vocoder` | `8` | padded batch, mel-frame axis |
+  | `kitten-tts-mini` | `1` vs `4` | lanes curve: sequential vs 4 lanes |
+  | `faster-whisper-tiny` | `16` | CT2 batches clips inside one audio; queue depth |
+
+  `8` is the **initial** capacity ("start 8, tune on data"); these tables are
+  the data that tunes it. The values are the ones `docs/batching.md` documents
+  and `tests/unit/initialization/test_config.py` enforces.
+* **Load.** 20 requests per concurrency level, 2 warmup requests, one text per
+  TTS family ("The quick brown fox jumps over the lazy dog near the river
+  bank."), `repo_voice_a` from `tests/audio_fixtures` as the clone reference and
+  the restoration input.
+* **Measurement status.** The real-model runs are deferred to the benchmark
+  host: the local HF cache holds only the BERT text encoders, and downloading
+  the multi-GB speech weights is out of scope for this task (same deferral as
+  Phase 7-3). Every cell below is `_tbd_`, to be filled from the idle-GPU run.
+
+### Scenario matrix — OpenVoice V2 clone (Whisper VAD → embed → MeloTTS → tone convert)
+
+`same` is the worker-flood pattern (one voice, many requests); `distinct` gives
+every request a unique reference clip, i.e. a guaranteed embedding-cache miss.
+
+Cache **on**, `--clone-reference same`:
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | first request stores, later requests hit |
+| 4 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | |
+| 20 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | embed step resolved from cache |
+
+Cache **off**, `--clone-reference same`:
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | baseline: embed every request |
+| 4 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+| 20 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+
+Cache **on**, `--clone-reference distinct`:
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | ~0 | unique clip per request → miss |
+| 4 | _tbd_ | _tbd_ | _tbd_ | ~0 | |
+| 20 | _tbd_ | _tbd_ | _tbd_ | ~0 | |
+
+Cache **off**, `--clone-reference distinct`:
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | parity with `same`/off expected |
+| 4 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+| 20 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+
+OpenVoice V1 uses the same toolchain shape and is recorded where cheap (same
+text/reference, concurrency `1,4,20`):
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Config |
+|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | cache on, `same` |
+| 4 | _tbd_ | _tbd_ | _tbd_ | cache on, `same` |
+| 20 | _tbd_ | _tbd_ | _tbd_ | cache on, `same` |
+
+**Expected shape.** `distinct` without the cache shows the full 8-2 + 8-3 + 5-2
+stacking: at c=20 each hop should need ~2–3 length-similar sub-batches instead of
+20 sequential calls. `same` with the cache on removes the embed hop entirely on
+top of that. The Phase 5 clone row (~1.9 req/s flat) is the number this matrix
+is meant to beat.
+
+### Harmony Speech and VoiceFixer curves at the new batch sizes
+
+Harmony Speech clone (`harmonyspeech`: encoder → synthesizer → vocoder). The
+encoder and vocoder batch at `8`; the synthesizer stays a loop, so this curve
+shows what batching the two surrounding hops buys:
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Notes |
+|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | |
+| 4 | _tbd_ | _tbd_ | _tbd_ | |
+| 8 | _tbd_ | _tbd_ | _tbd_ | encoder/vocoder at `max_batch_size: 8` |
+| 20 | _tbd_ | _tbd_ | _tbd_ | synthesizer hop bounds the tail |
+
+VoiceFixer restoration (`voicefixer`: restorer → vocoder; both batch at `8`):
+
+| Concurrency | req/s | p50 (ms) | p95 (ms) | Notes |
+|---|---|---|---|---|
+| 1 | _tbd_ | _tbd_ | _tbd_ | |
+| 4 | _tbd_ | _tbd_ | _tbd_ | |
+| 8 | _tbd_ | _tbd_ | _tbd_ | one padded forward per step expected |
+| 20 | _tbd_ | _tbd_ | _tbd_ | |
+
+### KittenTTS lanes curve (message-queue proof for a non-batchable model)
+
+Two server configs, same `kitten` family, `--concurrency 8`, `--requests 20`:
+
+* **Sequential** — `kitten-tts-mini` with `max_batch_size: 1` (the pre-8-5 loop).
+* **Lanes** — `max_batch_size: 4` (the shipped value; the handler runs 4 lanes
+  over the one shared ORT session).
+
+| Config | `max_batch_size` | req/s | p50 (ms) | p95 (ms) | Lanes observed | Speedup |
+|---|---|---|---|---|---|---|
+| sequential | 1 | _tbd_ | _tbd_ | _tbd_ | 1 | 1.00× |
+| lanes | 4 | _tbd_ | _tbd_ | _tbd_ | 4 | _tbd_ |
+
+The in-process measurement (8-5) is 0.70 → 1.19 req/s (1.71×) at 4 lanes; this
+row re-proves it through HTTP and the scheduler, i.e. `max_batch_size` really is
+the lane count an operator gets.
+
+### Per-step sub-batch composition
+
+From `--engine-log` over the c=20 `distinct`/cache-off level (`_tbd_` until the
+run; the shape to expect):
+
+| Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Reading |
+|---|---|---|---|---|---|---|
+| `embed` | _tbd_ | _tbd_ | _tbd_ | _tbd_ | 20 | 2–3 sub-batches of ≤8 `(request, VAD segment)` rows |
+| `synth` | _tbd_ | _tbd_ | _tbd_ | _tbd_ | 20 | 1–3 sub-batches of ≤8 sentences |
+| `tc` | _tbd_ | _tbd_ | _tbd_ | _tbd_ | 20 | 1–3 sub-batches of ≤8 clips |
+
+The composition next to p50/p95 is the phase's per-step evidence: a step that
+reports one sub-batch for 20 requests is doing 20 requests of work per padded
+forward; a step reporting three is split by the length-similarity rule
+(`T_max / T_min ≤ 4`) or the per-step budget, not by the old loop.
+
+### The 200-connection observation
+
+One manual run at `--concurrency 200` (`--requests 200`) on the same idle GPU,
+OpenVoice V2 clone, cache on, `distinct`:
+
+| Client pool | Concurrency | req/s | p50 (ms) | p95 (ms) | Client ceiling reached? |
+|---|---|---|---|---|---|
+| _tbd_ (default = highest level) | 200 | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+
+Record alongside: the pool size the harness used (`http_client.max_connections`
+in the JSON report), the concurrency at which req/s first plateaus, and whether
+failures/timeouts appear. If the engine saturates below 200, report the plateau
+concurrency — that is the honest capacity number, and the extra connections only
+add client-side queueing. If `--http-max-connections` is set below the level,
+the table must say so: a client-side ceiling is not an engine result.
+
+### Honesty note — steps stay sequential
+
+**Within one engine step, models execute sequentially.** Phase 8's win is
+per-step batched forwards — fewer kernel launches, better device utilisation,
+fewer host round-trips — **not** cross-step parallelism. A single clone request
+still walks VAD → embed → synth → tone-convert one hop after another, and a
+model processes one step at a time. Overlapping different steps (or running
+several engine replicas) is the separate worker-concurrency workstream; do not
+read these numbers as pipeline parallelism.
+
+### Reproduce
+
+```bash
+# 1. print the clone matrix (two boots x four runs) for this config
+python scripts/bench_throughput.py --print-scenarios
+
+# 2. cache ON (the shipped default): one terminal per boot
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path out/bench/config-phase8.yml --port 2242 \
+    > out/bench/engine.log 2>&1
+
+# 3. in the second terminal, once per row (same / distinct)
+python scripts/bench_throughput.py --families openvoice_v2 --concurrency 1,4,20 \
+    --requests 20 --clone-reference same --embedding-cache on \
+    --label phase8-same-cache-on --engine-log out/bench/engine.log \
+    --md-out docs/benchmarks/throughput.md
+
+# 4. restart the engine with --no-embedding-cache, then repeat with
+#    --embedding-cache off and --label phase8-same-cache-off /
+#    phase8-distinct-cache-off.
+
+# 5. other curves
+python scripts/bench_throughput.py --families harmonyspeech,voicefixer \
+    --concurrency 1,4,8,20 --requests 20 --label phase8-hs1-voicefixer \
+    --engine-log out/bench/engine.log --md-out docs/benchmarks/throughput.md
+python scripts/bench_throughput.py --families kitten --concurrency 8 \
+    --requests 20 --config-note "kitten max_batch_size: 4 (4 lanes)" \
+    --label phase8-kitten-lanes --md-out docs/benchmarks/throughput.md
+
+# 6. 200-connection observation
+python scripts/bench_throughput.py --families openvoice_v2 --concurrency 200 \
+    --requests 200 --clone-reference distinct --embedding-cache on \
+    --label phase8-c200 --engine-log out/bench/engine.log \
+    --md-out docs/benchmarks/throughput.md
+```
+
+See [`docs/batching.md`](../batching.md) for the per-model mechanism matrix and
+the Phase 7 clone-flood methodology above for the cache-verification scrape.
 

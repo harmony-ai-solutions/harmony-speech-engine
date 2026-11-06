@@ -55,8 +55,84 @@ Expected shape (record actuals): distinct-voices flood shows the full 8-2+8-3+5-
 
 ## Checklist
 
-- [ ] All newly batched models at measured truthful `max_batch_size`; honesty test in sync
-- [ ] Flood benchmark recorded (20 + 200 concurrency; per-step timings; cache on/off × same/distinct)
-- [ ] Docs: throughput section + final batching matrix + honesty note
-- [ ] Knowledge updates (memory-bank, CONCERNS, CHANGELOG) done
-- [ ] Full suites green; Phase 8 ticked in summary.md
+- [x] All newly batched models at measured truthful `max_batch_size`; honesty test in sync — **initial `8` published in both configs and enforced by the policy test; the measurement + tuning pass is deferred to the benchmark host (Deviation 1)**
+- [ ] Flood benchmark recorded (20 + 200 concurrency; per-step timings; cache on/off × same/distinct) — **tooling, scenario matrix and `_tbd_` tables landed; number collection is deferred to the benchmark host (Deviation 2)**
+- [x] Docs: throughput section + final batching matrix + honesty note
+- [x] Knowledge updates (memory-bank, CONCERNS, CHANGELOG) done
+- [ ] Full suites green; Phase 8 ticked in summary.md — **phase owner's final run (838-test suite was green at hand-off; 8-6 added 19 test cases)**
+
+## Outcome (2026-11-06)
+
+**Config truth.** Both `config.gpu.yml` and `config.yml` now declare
+`max_batch_size: 8` + `batched_inference: true` for the eight newly batched
+entries (`hs1-encoder`, `hs1-vocoder`, `ov1/ov2-tone-converter[-encoder]`,
+`voicefixer-restorer`, `voicefixer-vocoder`). The loops stay loops with their
+documented values: `hs1-synthesizer` 1 (padding-unsafe), Chatterbox family 1
+(product decision), whisper 16 (intra-audio CT2 batch; admission width), Silero
+16 (sequential queue depth), KittenTTS 4 (lane count). A file-header comment and
+the `docs/batching.md` rationale mark `8` as the initial value pending the
+benchmark-host tuning run.
+
+**Honesty tests.** `test_shipped_config_batch_sizes_match_executor_reality` was
+rewritten as the policy itself rather than a name→value dump: it partitions the
+loader registry into `BATCHED_INFERENCE_FAMILIES` (padded forward, >1, flag on),
+`SINGLE_REQUEST_MODEL_TYPES` (loop, exactly 1) and
+`CONCURRENCY_ONLY_MODEL_TYPES` (admission width / queue depth / lane count) and
+asserts each shipped entry against its class. The partition must equal the
+registry, so a new model type cannot ship without a capacity decision.
+`tests/unit/test_batching_docs_matrix.py` gained a config cross-check: every
+shipped entry's `max_batch_size` must equal the value in its matrix row.
+
+**Benchmark tooling.** `scripts/bench_throughput.py`:
+
+* `--concurrency 1,4,20` parses a de-duplicated list (a single integer still
+  works); the HTTP client's pool is sized from the highest level (httpx's default
+  of 100 would silently cap c=200) with `--http-max-connections` to probe a lower
+  client ceiling on purpose.
+* Families added: `openvoice_v1`, `harmonyspeech`, `voicefixer`
+  (`/v1/audio/convert`) and `kitten`.
+* `--embedding-cache {auto,on,off}` verifies the server's `/health`
+  `embedding_cache.enabled` against the run's label and aborts on a mismatch —
+  the cache toggle is a server-side flag, so the four clone cells span two boots.
+  `--print-scenarios` prints the whole two-boot/four-run recipe.
+* `--engine-log` tails the engine's DEBUG log around each level and reports the
+  per-step sub-batch composition (`embed: N steps, M sub-batches, avg M/N per
+  step, rows/requests`) next to p50/p95/req/s, in the console, JSON and markdown.
+* Script-unit tests cover concurrency parsing, pool sizing, cache verification,
+  the scenario matrix (same/distinct × cache on/off), the recipe and the
+  composition parser.
+
+**Docs.** `docs/benchmarks/throughput.md` gained the Phase 8 section: method
+(tooling, benchmark host, commit `dab303a`, config table), the four-cell OV2
+clone matrix plus OV1, hs1 and VoiceFixer curves, the KittenTTS lanes
+comparison (sequential `1` vs lanes `4`), the per-step composition table, the
+200-connection observation slot, the sequential-steps honesty note and the
+reproduce block. Every measured cell is `_tbd_`. `docs/batching.md`'s matrix now
+states `8` (initial) for the batched rows and marks the pre-Phase-8 concurrency
+table as such.
+
+**Knowledge.** `memory-bank/progress.md` + `activeContext.md` have Phase 8
+sections; `CONCERNS.md` retires the "clone path throughput flat" finding with a
+Phase 8 resolution block (and the stale "no real batching" overview bullet);
+`CHANGELOG.md` has the user-visible concurrent-cloning/restoration entry.
+
+### Deviations
+
+1. **`max_batch_size: 8` is initial, not measured.** The plan says "set measured
+   values (start 8, tune on data)". No measurement host is reachable from this
+   checkout and the local HF cache contains only BERT text encoders, so the
+   configs carry the documented initial `8` and the tuning pass is deferred to
+   the benchmark host. `docs/batching.md` and the config header both say so.
+2. **The flood benchmark is tooling + table structure, not numbers.** All four
+   clone cells, the hs1/VoiceFixer curves, the kitten lanes comparison and the
+   200-connection observation are `_tbd_` in `docs/benchmarks/throughput.md`;
+   the reproduce commands and `--print-scenarios` make the run a copy-paste on
+   the benchmark host (the Phase 7-3 pattern).
+3. **Real-model e2e and the GPU `batching:1-vs-N` gates for the touched families
+   are deferred** for the same weights reason (no speech-model weights cached
+   locally; downloading multi-GB checkpoints is out of scope). The phase owner's
+   full-suite run is likewise not performed here.
+4. **`docs/batching.md`'s concurrency table keeps the Phase 5 numbers** (only
+   annotated as pre-Phase-8) because replacing them now would mean publishing
+   unmeasured values; the Phase 8 section carries the `_tbd_` post-batch tables.
+

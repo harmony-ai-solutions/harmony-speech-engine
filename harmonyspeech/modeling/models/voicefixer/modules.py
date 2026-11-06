@@ -9,6 +9,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+
+from ..batch_padding import length_mask
 
 
 def init_layer(layer):
@@ -102,6 +105,27 @@ class BN_GRU(nn.Module):
         out, _ = self.gru(inputs.squeeze(1))
         return out.unsqueeze(1)
 
+    def forward_batched(self, inputs: torch.Tensor, frame_lengths=None) -> torch.Tensor:
+        """Packed-sequence forward over the rows' own frame counts (Phase 8-4).
+
+        The GRU is bidirectional: trailing padding is not harmless extra context
+        for it, it changes every valid frame's output because the backward
+        direction starts at the last frame the tensor holds (the Phase 8-2
+        lesson). Packing each row over its real frame count therefore reproduces
+        the solo run; the batch is padded back to the original length with zeros,
+        which is what the per-row layers downstream already see as padding.
+        """
+        lengths = None if frame_lengths is None else [max(1, int(value)) for value in frame_lengths]
+        if lengths is None or min(lengths) >= inputs.shape[2]:
+            return self.forward(inputs)
+        if self.batchnorm:
+            inputs = self.bn(inputs)
+        sequence = inputs.squeeze(1)
+        packed = pack_padded_sequence(sequence, lengths, batch_first=True, enforce_sorted=False)
+        out, _ = self.gru(packed)
+        out, _ = pad_packed_sequence(out, batch_first=True, total_length=sequence.shape[1])
+        return out.unsqueeze(1)
+
 
 class ConvBlockRes(nn.Module):
     """Residual convolution block."""
@@ -168,6 +192,23 @@ class ConvBlockRes(nn.Module):
         else:
             return origin + x
 
+    def forward_batched(self, x, mask):
+        """``forward`` with each row's padding held at zero between convs.
+
+        The block's convs (kernel 3) and the batchnorm's affine term would
+        otherwise hand the next conv a non-zero padding frame and pull it into
+        the row's last valid frames — a solo run only ever sees implicit zeros
+        there. ``mask`` is ``[B, 1, T, 1]`` so it broadcasts over channels and
+        frequency.
+        """
+        origin = x
+        out = self.conv1(F.leaky_relu_(self.bn1(x), negative_slope=0.01)) * mask
+        out = self.conv2(F.leaky_relu_(self.bn2(out), negative_slope=0.01)) * mask
+
+        if self.is_shortcut:
+            return (self.shortcut(origin) + out) * mask
+        return (origin + out) * mask
+
 
 class EncoderBlockRes(nn.Module):
     """Encoder block with residual connections."""
@@ -189,6 +230,22 @@ class EncoderBlockRes(nn.Module):
         encoder = self.conv_block4(encoder)
         encoder_pool = F.avg_pool2d(encoder, kernel_size=self.downsample)
         return encoder_pool, encoder
+
+    def forward_batched(self, x, mask):
+        """``forward`` plus the time mask at this block's resolution.
+
+        The average pool halves the time axis; each row's 64-aligned span is
+        divisible by two at every level, so a pool window is either fully valid
+        or fully padding and the pooled mask is exact.
+        """
+        encoder = self.conv_block1.forward_batched(x, mask)
+        encoder = self.conv_block2.forward_batched(encoder, mask)
+        encoder = self.conv_block3.forward_batched(encoder, mask)
+        encoder = self.conv_block4.forward_batched(encoder, mask)
+        factor = self.downsample if isinstance(self.downsample, int) else self.downsample[0]
+        encoder_pool = F.avg_pool2d(encoder, kernel_size=self.downsample)
+        pooled_mask = F.max_pool2d(mask, kernel_size=(factor, 1), stride=(factor, 1))
+        return encoder_pool * pooled_mask, encoder, pooled_mask
 
 
 class DecoderBlockRes(nn.Module):
@@ -237,6 +294,29 @@ class DecoderBlockRes(nn.Module):
         x = self.conv_block3(x)
         x = self.conv_block4(x)
         x = self.conv_block5(x)
+        return x
+
+    def forward_batched(self, input_tensor, concat_tensor, mask):
+        """``forward`` with the time mask doubled and held at zero between convs.
+
+        The transposed conv is ``kernel 3 / stride 2`` with no padding followed by
+        :meth:`prune`, so the time axis exactly doubles; ``mask`` (at the input's
+        resolution) is expanded the same way. Valid output frames only ever read
+        valid input frames, so masking once after the transposed conv is enough.
+        """
+        x = self.conv1(F.relu_(self.bn1(input_tensor)))
+        x = self.prune(x, both=False)
+        mask = mask.repeat_interleave(2, dim=2)
+        if x.shape[2] != mask.shape[2] or concat_tensor.shape[2] != mask.shape[2]:
+            raise ValueError(
+                f"DecoderBlockRes.forward_batched: {x.shape[2]} upsampled frames, "
+                f"{concat_tensor.shape[2]} skip frames, {mask.shape[2]} mask frames"
+            )
+        x = torch.cat((x, concat_tensor), dim=1) * mask
+        x = self.conv_block2.forward_batched(x, mask)
+        x = self.conv_block3.forward_batched(x, mask)
+        x = self.conv_block4.forward_batched(x, mask)
+        x = self.conv_block5.forward_batched(x, mask)
         return x
 
 
@@ -354,6 +434,60 @@ class UNetResComplex_100Mb(nn.Module):
 
         output_dict = {"mel": x}
         return output_dict
+
+    def forward_batched(self, sp, frame_lengths):
+        """``forward`` over padded rows, isolated per row (Phase 8-4).
+
+        ``sp`` is ``[B, channels, T_max, F]`` and ``frame_lengths`` each row's own
+        frame count. Every stage is run with a time mask at the row's *own*
+        64-aligned extent (``ceil(T_i / 64) * 64``), which is exactly the tensor a
+        solo run builds when it pads internally: inside that region the batch
+        computes the same values (both sides feed zeros and the same valid
+        frames), past it the mask stands in for the solo run's implicit
+        zero-padding. The mask halves through the average-pool encoders and
+        doubles through the pruned transposed-conv decoders.
+        """
+        lengths = [int(value) for value in frame_lengths]
+        if not lengths or min(lengths) >= sp.shape[2]:
+            return self.forward(sp)
+
+        origin_len = int(sp.shape[2])
+        pad_len = int(np.ceil(origin_len / self.downsample_ratio)) * self.downsample_ratio - origin_len
+        x = F.pad(sp, pad=(0, 0, 0, pad_len))
+        x = x[..., 0 : x.shape[-1] - 1]
+
+        aligned = [
+            int(np.ceil(max(1, value) / self.downsample_ratio)) * self.downsample_ratio
+            for value in lengths
+        ]
+        mask = length_mask(aligned, x.shape[2], device=x.device, dtype=x.dtype)[:, :, :, None]
+
+        # UNet encoder
+        x1_pool, x1, mask1_pool = self.encoder_block1.forward_batched(x, mask)
+        x2_pool, x2, mask2_pool = self.encoder_block2.forward_batched(x1_pool, mask1_pool)
+        x3_pool, x3, mask3_pool = self.encoder_block3.forward_batched(x2_pool, mask2_pool)
+        x4_pool, x4, mask4_pool = self.encoder_block4.forward_batched(x3_pool, mask3_pool)
+        x5_pool, x5, mask5_pool = self.encoder_block5.forward_batched(x4_pool, mask4_pool)
+        x6_pool, x6, mask6_pool = self.encoder_block6.forward_batched(x5_pool, mask5_pool)
+
+        # Bottleneck and decoder
+        x_center = self.conv_block7.forward_batched(x6_pool, mask6_pool)
+        x7 = self.decoder_block1.forward_batched(x_center, x6, mask6_pool)
+        x8 = self.decoder_block2.forward_batched(x7, x5, mask5_pool)
+        x9 = self.decoder_block3.forward_batched(x8, x4, mask4_pool)
+        x10 = self.decoder_block4.forward_batched(x9, x3, mask3_pool)
+        x11 = self.decoder_block5.forward_batched(x10, x2, mask2_pool)
+        x12 = self.decoder_block6.forward_batched(x11, x1, mask1_pool)
+
+        # Final processing
+        x = self.after_conv_block1.forward_batched(x12, mask)
+        x = self.after_conv2(x)
+
+        # Recover original shape
+        x = F.pad(x, pad=(0, 1))
+        x = x[:, :, 0:origin_len, :]
+
+        return {"mel": x}
 
 
 class UpsampleNet(nn.Module):

@@ -8,6 +8,7 @@ from torch.nn import Embedding
 from torch.nn.utils import clip_grad_norm_
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence, pad_sequence
 
+from harmonyspeech.modeling.models.batch_padding import length_mask, run_masked
 from harmonyspeech.modeling.models.harmonyspeech.vocoder.parallel_wavegan.layers.causal_conv import (
     CausalConv1d,
     CausalConvTranspose1d,
@@ -147,6 +148,22 @@ class SpeakerEncoder(nn.Module):
         # Gradient clipping
         clip_grad_norm_(self.parameters(), 3, norm_type=2)
 
+    def _encode(self, utterances, hidden_init=None):
+        """Shared LSTM stack (Phase 8-2 extraction, no math change).
+
+        Returns the per-layer final hidden state ``[num_layers, B, hidden]``.
+        """
+        out, (hidden, cell) = self.lstm(utterances, hidden_init)
+        return hidden
+
+    def _embed(self, hidden):
+        """Shared head: last-layer hidden state → ReLU → linear → L2-norm."""
+        # We take only the hidden state of the last layer
+        embeds_raw = self.relu(self.linear(hidden[-1]))
+
+        # L2-normalize it
+        return embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+
     def forward(self, utterances, hidden_init=None):
         """
         Computes the embeddings of a batch of utterance spectrograms.
@@ -159,15 +176,33 @@ class SpeakerEncoder(nn.Module):
         """
         # Pass the input through the LSTM layers and retrieve all outputs, the final hidden state
         # and the final cell state.
-        out, (hidden, cell) = self.lstm(utterances, hidden_init)
+        return self._embed(self._encode(utterances, hidden_init))
 
-        # We take only the hidden state of the last layer
-        embeds_raw = self.relu(self.linear(hidden[-1]))
+    def forward_batched(self, utterances, frame_lengths=None, hidden_init=None):
+        """Padded-partial batch embedding (Phase 8-2).
 
-        # L2-normalize it
-        embeds = embeds_raw / torch.norm(embeds_raw, dim=1, keepdim=True)
+        ``utterances`` is ``[B, F_max, n_channels]`` with one valid frame count
+        per row in ``frame_lengths``. :meth:`forward` already accepts a batch,
+        but it always consumes *every* frame it is given — right-padding a short
+        row would therefore leak into its final hidden state (the embedding).
+        Packing the LSTM over the valid frames keeps each row's embedding equal
+        to its solo run, so cross-request rows of different lengths batch safely.
 
-        return embeds
+        ``frame_lengths=None`` — or a batch whose rows are all full length, which
+        is the shape the encoder's fixed-length partials always produce — is the
+        plain call (:meth:`forward`), so ``B == 1`` stays bit-identical.
+        """
+        lengths = None if frame_lengths is None else [max(1, int(length)) for length in frame_lengths]
+        max_length = int(utterances.shape[1])
+        if lengths is not None and max(lengths) > max_length:
+            raise ValueError(
+                f"forward_batched: a row declares {max(lengths)} frames, batch holds {max_length}"
+            )
+        if lengths is None or min(lengths) >= max_length:
+            return self.forward(utterances, hidden_init)
+        packed = pack_padded_sequence(utterances, lengths, batch_first=True, enforce_sorted=False)
+        _, (hidden, _cell) = self.lstm(packed, hidden_init)
+        return self._embed(hidden)
 
     def load_weights(self, checkpoint, hf_config=None):
         self.load_state_dict(checkpoint["model_state"])
@@ -462,6 +497,21 @@ class ForwardTacotron(nn.Module):
     #     return model
 
 
+def _masked_residual_stack(stack: ResidualStack, x: torch.Tensor, mask: torch.Tensor):
+    """``ResidualStack`` with its dilated convs held at zero past each row's end.
+
+    A dilated conv reads far past the boundary, so masking at the stack's input
+    is not enough: the stack's own ``stack`` sequence is replayed through
+    :func:`run_masked` (its leaves are activations, a reflection pad and two
+    convs) and the skip path is a per-frame 1x1 conv.
+    """
+    stacked, _ = run_masked(stack.stack, x, mask)
+    return (stacked + stack.skip_layer(x)) * mask, mask
+
+
+_MELGAN_MASKED_BLOCKS = {ResidualStack: _masked_residual_stack}
+
+
 class MelGANGenerator(torch.nn.Module):
     """MelGAN generator module."""
 
@@ -679,6 +729,54 @@ class MelGANGenerator(torch.nn.Module):
         if self.pqmf is not None:
             c = self.pqmf.synthesis(c)
         return c.squeeze(0).transpose(1, 0)
+
+    def inference_batched(self, c, frame_lengths=None, normalize_before=False):
+        """Batched :meth:`inference` over a padded ``[B, in_channels, T_max]`` mel.
+
+        Returns ``(waveform, sample_lengths)``: the decoder output is
+        ``[B, 1, T_max * prod(upsample_scales)]`` and ``sample_lengths`` holds each
+        row's own ``frame_length * prod(upsample_scales)`` for the unpad step.
+
+        Rows are held at zero past their valid span after every stage (the Phase
+        8-3 lesson, see :mod:`harmonyspeech.modeling.models.batch_padding`): a
+        MelGAN decoder is a stack of transposed convolutions, so padding frames
+        would otherwise spread into the valid tail (measured 2e-3 peak on random
+        weights). Reflection pads see each row's own tail instead of the batch
+        padding. ``frame_lengths=None`` or a batch whose rows are all full length
+        calls the plain :meth:`inference` graph, so ``B == 1`` stays bit-identical.
+
+        The PQMF multi-band path and the causal-conv variant are not batched; they
+        raise, and the handler falls back to the per-item loop.
+        """
+        if c.dim() != 3:
+            raise ValueError(f"inference_batched: expected [B, in_channels, T], got {tuple(c.shape)}")
+        if self.pqmf is not None:
+            raise NotImplementedError("MelGANGenerator.inference_batched: PQMF synthesis is not batched")
+        if any(isinstance(module, (CausalConv1d, CausalConvTranspose1d)) for module in self.melgan):
+            raise NotImplementedError("MelGANGenerator.inference_batched: causal convs are not batched")
+        if normalize_before:
+            c = (c - self.mean) / self.scale
+
+        frames = int(c.shape[-1])
+        lengths = None if frame_lengths is None else [int(value) for value in frame_lengths]
+        if lengths is None or min(lengths) >= frames:
+            waveform = self.melgan(c)
+        else:
+            mask = length_mask(lengths, frames, device=c.device, dtype=c.dtype)
+            waveform, _mask = run_masked(self.melgan, c, mask, custom=_MELGAN_MASKED_BLOCKS)
+
+        output_frames = int(waveform.shape[-1])
+        if frames == 0 or output_frames % frames != 0:
+            raise ValueError(
+                f"inference_batched: decoder produced {output_frames} samples for {frames} frames"
+            )
+        samples_per_frame = output_frames // frames
+        sample_lengths = torch.tensor(
+            [max(0, int(value)) * samples_per_frame for value in (lengths or [frames] * c.shape[0])],
+            dtype=torch.long,
+            device=c.device,
+        )
+        return waveform, sample_lengths
 
     def num_params(self, print_out=True):
         parameters = filter(lambda p: p.requires_grad, self.parameters())

@@ -23,6 +23,10 @@ Design notes
 * **Sharing axis is an identity gate.** Deduplicating weights must not change a
   single bit: the harness requires identical length and bitwise-identical
   samples.
+* **Batching axis is allow-listed.** ``batching:1-vs-N`` runs only for families
+  whose handler really forwards a padded batch (:data:`BATCHING_AXIS_ENABLED`).
+  The remaining Phase 8 families already carry their mixed-length case sets, so
+  enabling one is a one-line edit to that set.
 
 Usage
 -----
@@ -101,6 +105,25 @@ BATCHING_MAX_ABS_DIFF = 2e-3
 BATCHING_LOG_MEL_MSE = 1e-2
 BATCHING_DURATION_PCT = 0.1
 BATCHING_CORR_MIN = 0.999
+
+#: Families whose batching gate is runnable today — the handler genuinely
+#: forwards a padded batch, so a ``batching:1-vs-N`` comparison means something.
+#: This is the axis allow-list: a family with ``batching_cases`` registered in
+#: :data:`FAMILY_SPECS` but absent here is refused with the activation task's
+#: name instead of producing an empty gate. Enabling a family is a one-line
+#: edit to this set (Phase 8-2…8-4 flip their own families on when the handler
+#: and its config flag land — never before, the flag must not advertise a
+#: capability the executor lacks).
+BATCHING_AXIS_ENABLED = frozenset(
+    {"openvoice_v1", "openvoice_v2", "melotts", "harmonyspeech", "voicefixer"}
+)
+
+#: Families with ``batching_cases`` already registered (so a later Phase 8 task
+#: only flips the allow-list entry above) and the task that enables them.
+#: Used for the refusal message, never to select cases. Empty since 8-4 enabled
+#: the last two families; the dict stays as the mechanism's carrier and its test
+#: drives it through ``monkeypatch``.
+BATCHING_AXIS_PENDING: dict[str, str] = {}
 
 #: Voice-conversion intelligibility gate (post-review 2026-11-05). VC converts
 #: the *content* of the source clip, so a converted clip must still transcribe
@@ -384,6 +407,52 @@ FAMILY_SPECS: dict[str, dict] = {
                 "reference": "repo_voice_a",
             },
         ],
+        # `batching:1-vs-N` axis (enabled in 8-2; the embed step batches first,
+        # 8-3 adds the tone converter): the same four different-length texts as
+        # openvoice_v1, so the full V2 clone toolchain (VAD → embed → MeloTTS →
+        # tone-converter) is gated end to end.
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "openvoice_v2",
+                "text": "batch_1",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "EN-Newest",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "openvoice_v2",
+                "text": "batch_2",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "EN-Newest",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "openvoice_v2",
+                "text": "batch_3",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "EN-Newest",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "openvoice_v2",
+                "text": "batch_4",
+                "mode": "voice_cloning",
+                "language": "EN",
+                "voice": "EN-Newest",
+                "reference": "repo_voice_a",
+            },
+        ],
     },
     "melotts": {
         "models": [
@@ -450,6 +519,40 @@ FAMILY_SPECS: dict[str, dict] = {
         "cases": [
             {"name": "restore_voice_a", "kind": "restore", "model": "voicefixer", "reference": "voice_a"},
         ],
+        # `batching:1-vs-N` axis (enabled in 8-4): four clips of different
+        # lengths/rates so the padded mel-frame batch really has padding to
+        # trim. `restore_voice_a` is the primary case; the others exist because
+        # a gate needs at least two distinct inputs to compare anything.
+        "batching_cases": [
+            {
+                "name": "restore_voice_a",
+                "kind": "restore",
+                "model": "voicefixer",
+                "reference": "voice_a",
+                "label": "8 s synthetic clip",
+            },
+            {
+                "name": "restore_voice_b",
+                "kind": "restore",
+                "model": "voicefixer",
+                "reference": "voice_b",
+                "label": "second 8 s synthetic clip",
+            },
+            {
+                "name": "restore_repo_a",
+                "kind": "restore",
+                "model": "voicefixer",
+                "reference": "repo_voice_a",
+                "label": "3.6 s real-speech clip",
+            },
+            {
+                "name": "restore_repo_b",
+                "kind": "restore",
+                "model": "voicefixer",
+                "reference": "repo_voice_b",
+                "label": "second real-speech clip",
+            },
+        ],
     },
     "harmonyspeech": {
         "models": [
@@ -464,6 +567,42 @@ FAMILY_SPECS: dict[str, dict] = {
                 "kind": "tts",
                 "model": "harmonyspeech",
                 "text": "en_short",
+                "mode": "voice_cloning",
+                "reference": "repo_voice_a",
+            },
+        ],
+        # `batching:1-vs-N` axis (enabled in 8-4): mixed-length clone requests
+        # so the encoder/synthesizer/vocoder steps all see a padded batch.
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "harmonyspeech",
+                "text": "batch_1",
+                "mode": "voice_cloning",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "harmonyspeech",
+                "text": "batch_2",
+                "mode": "voice_cloning",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "harmonyspeech",
+                "text": "batch_3",
+                "mode": "voice_cloning",
+                "reference": "repo_voice_a",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "harmonyspeech",
+                "text": "batch_4",
                 "mode": "voice_cloning",
                 "reference": "repo_voice_a",
             },
@@ -736,6 +875,66 @@ def score_vc_intelligibility(
     return scores
 
 
+def _build_batching_request_input(case: dict, request_id: str, text_table: dict, deterministic: bool):
+    """Build the wire ``RequestInput`` for one batching-gate case.
+
+    The batching worker adds every case to the scheduler before stepping, so a
+    family's gate may mix request kinds. Each kind maps to its own
+    ``RequestInput`` — and therefore its own artifact flow, exactly what the
+    padded-batch step sees in production:
+
+    * ``tts`` → ``TextToSpeechRequestInput`` (mode/reference/voice from the case);
+    * ``vc`` → ``VoiceConversionRequestInput`` (source + target audio);
+    * ``restore`` → ``AudioConversionRequestInput`` (source audio only).
+
+    ``deterministic`` zeroes the stochastic generation scales, so both sides of
+    the axis compute the same function and only padding/unpacking can differ.
+    """
+    from harmonyspeech.common.inputs import (
+        AudioConversionRequestInput,
+        TextToSpeechRequestInput,
+        VoiceConversionRequestInput,
+    )
+    from harmonyspeech.endpoints.openai.protocol import (
+        AudioConversionRequest,
+        GenerationOptions,
+        TextToSpeechRequest,
+        VoiceConversionRequest,
+    )
+    from tests.audio_fixtures import reference_wav_b64
+
+    kind = case.get("kind", "tts")
+    if kind == "tts":
+        options = None
+        if deterministic:
+            # Zero every stochastic scale: both sides then compute the same
+            # deterministic function, so any difference is padding/unpacking.
+            options = GenerationOptions(noise_scale=0.0, noise_scale_w=0.0, seed=0)
+        request = TextToSpeechRequest(
+            model=case["model"],
+            input=text_table[case["text"]],
+            mode=case.get("mode", "single_speaker_tts"),
+            input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
+            language=case.get("language"),
+            voice=case.get("voice"),
+            generation_options=options,
+        )
+        return TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+    if kind == "vc":
+        request = VoiceConversionRequest(
+            model=case["model"],
+            source_audio=reference_wav_b64(case["reference"]),
+            target_audio=reference_wav_b64(case["target"]),
+        )
+        return VoiceConversionRequestInput.from_openai(request_id=request_id, request=request)
+    if kind == "restore":
+        request = AudioConversionRequest(
+            model=case["model"], source_audio=reference_wav_b64(case["reference"])
+        )
+        return AudioConversionRequestInput.from_openai(request_id=request_id, request=request)
+    raise ValueError(f"batching gate: unknown case kind {kind!r}")
+
+
 def _run_batching_worker(job, engine, text_table) -> dict:
     """Drive one engine step at a time with every case in a single batch.
 
@@ -752,10 +951,7 @@ def _run_batching_worker(job, engine, text_table) -> dict:
 
     import soundfile as sf
 
-    from harmonyspeech.common.inputs import TextToSpeechRequestInput
-    from harmonyspeech.endpoints.openai.protocol import GenerationOptions, TextToSpeechRequest
     from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
-    from tests.audio_fixtures import reference_wav_b64
 
     deterministic = bool(job["settings"].get("deterministic"))
     cases = {case["name"]: case for case in job["cases"]}
@@ -765,21 +961,7 @@ def _run_batching_worker(job, engine, text_table) -> dict:
         pending: list[str] = []
         for name, case in cases.items():
             request_id = f"batch-gate-{name}"
-            options = None
-            if deterministic:
-                # Zero every stochastic scale: both sides then compute the same
-                # deterministic function, so any difference is padding/unpacking.
-                options = GenerationOptions(noise_scale=0.0, noise_scale_w=0.0, seed=0)
-            request = TextToSpeechRequest(
-                model=case["model"],
-                input=text_table[case["text"]],
-                mode=case.get("mode", "single_speaker_tts"),
-                input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
-                language=case.get("language"),
-                voice=case.get("voice"),
-                generation_options=options,
-            )
-            request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+            request_data = _build_batching_request_input(case, request_id, text_table, deterministic)
             artifacts = from_wire_audio(request_data)
             await engine.engine.add_request_async(
                 request_id=request_id, request_data=request_data, artifacts=artifacts
@@ -1409,17 +1591,30 @@ def _family_kind(family: str) -> str:
 
 
 def _cases_for_axis(axis: Axis, family: str) -> list[dict]:
-    """Cases to run for this axis: the batching gate uses its own 4-case set."""
+    """Cases to run for this axis: the batching gate uses its own case set.
+
+    The batching axis is allow-listed by :data:`BATCHING_AXIS_ENABLED`: a
+    family only reports a meaningful gate once its handler actually forwards a
+    padded batch. Families in :data:`BATCHING_AXIS_PENDING` already have their
+    case set registered, so the task that lands the handler only adds the name
+    to the allow-list.
+    """
     spec = FAMILY_SPECS[family]
-    if axis.kind == "batching":
-        cases = spec.get("batching_cases")
-        if not cases:
-            raise SystemExit(
-                f"family '{family}' has no batching_cases; the batching axis only covers "
-                "the padded-batch synthesis families (melotts, openvoice_v1)"
-            )
-        return cases
-    return spec["cases"]
+    if axis.kind != "batching":
+        return spec["cases"]
+    cases = spec.get("batching_cases")
+    if not cases:
+        raise SystemExit(
+            f"family '{family}' has no batching_cases; the batching axis only covers "
+            f"the families registered for it ({', '.join(sorted(BATCHING_AXIS_ENABLED))})"
+        )
+    if family not in BATCHING_AXIS_ENABLED:
+        pending = BATCHING_AXIS_PENDING.get(family, "a later task")
+        raise SystemExit(
+            f"family '{family}' has batching_cases registered but its handler does not batch "
+            f"yet; add it to BATCHING_AXIS_ENABLED when {pending} lands"
+        )
+    return cases
 
 
 def _write_listening_pack(workdir: str, family: str, case: str, path_a: str, path_b: str) -> None:

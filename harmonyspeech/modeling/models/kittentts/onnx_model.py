@@ -1,3 +1,5 @@
+import threading
+
 from misaki import en, espeak  # noqa: F401
 
 import numpy as np
@@ -6,6 +8,49 @@ import phonemizer
 import soundfile as sf
 
 from harmonyspeech.modeling.models.kittentts.preprocess import TextPreprocessor
+
+#: Serialises espeak phonemisation (Phase 8-5).
+#:
+#: ``phonemizer``'s ``EspeakBackend`` keeps mutable post-processing state
+#: (``WordsMismatch`` buffers the last input) and is not thread-safe: two
+#: concurrent ``phonemize`` calls on one backend fail with
+#: ``RuntimeError: number of lines in input and output must be equal, we have:
+#: input=1, output=2`` (reproduced on this machine while measuring the lanes).
+#: Lane execution therefore holds this lock around every phonemise call. One
+#: call is ~0.3 ms, so the serialisation costs nothing next to a ~1.5 s
+#: ``session.run``.
+PHONEMIZER_LOCK = threading.Lock()
+
+#: Fixed ORT intra-op thread count for KittenTTS sessions (Phase 8-5).
+#:
+#: The engine runs one request per lane (``max_batch_size`` lanes) on one shared
+#: session, so the worry was that ORT's default "one intra-op thread per physical
+#: core" oversubscribes the CPU by the lane count. The measured matrix
+#: (lanes x intra_op, mini variant, 12-core dev machine, ``docs/batching.md``)
+#: refuted it: 8 lanes run at 1.22 / 1.24 / 1.27 / 1.27 req/s for intra_op
+#: 1 / 2 / 4 / default, i.e. the pin costs throughput and buys nothing, and
+#: intra_op=1 also doubles the single-request latency (2.61 s vs 1.61 s for
+#: 5.9 s of audio). ``0`` means ORT's own default, i.e. one intra-op thread per
+#: physical core — which also scales down on small hosts, the deployment target
+#: of this model. It is set **explicitly** so the lane behaviour is pinned
+#: rather than inherited from a future ORT default, and it is deliberately not
+#: configurable.
+KITTEN_TTS_INTRA_OP_NUM_THREADS = 0
+
+
+def build_session_options(intra_op_num_threads=None) -> ort.SessionOptions:
+    """Return the ORT session options for a KittenTTS session.
+
+    ``intra_op_num_threads`` defaults to :data:`KITTEN_TTS_INTRA_OP_NUM_THREADS`;
+    an explicit value is only used by the Phase 8-5 measurement matrix.
+    """
+    if intra_op_num_threads is None:
+        intra_op_num_threads = KITTEN_TTS_INTRA_OP_NUM_THREADS
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = int(intra_op_num_threads)
+    # One lane == one request; the lanes provide the parallelism across requests.
+    options.inter_op_num_threads = 1
+    return options
 
 
 def basic_english_tokenize(text):
@@ -94,7 +139,10 @@ class KittenTTS_1_Onnx:
         """
         self.model_path = model_path
         self.voices = np.load(voices_path)
-        self.session = ort.InferenceSession(model_path)
+        # One shared session for all lanes: ORT ``InferenceSession.run`` is
+        # thread-safe and releases the GIL, so lane threads really do run in
+        # parallel on N cores without N copies of the weights (Phase 8-5).
+        self.session = ort.InferenceSession(model_path, sess_options=build_session_options())
 
         self.phonemizer = phonemizer.backend.EspeakBackend(
             language="en-us", preserve_punctuation=True, with_stress=True
@@ -129,8 +177,10 @@ class KittenTTS_1_Onnx:
         if voice in self.speed_priors:
             speed = speed * self.speed_priors[voice]
 
-        # Phonemize the input text
-        phonemes_list = self.phonemizer.phonemize([text])
+        # Phonemize the input text. The espeak backend is not thread-safe, so
+        # lane execution serialises this call (see PHONEMIZER_LOCK).
+        with PHONEMIZER_LOCK:
+            phonemes_list = self.phonemizer.phonemize([text])
 
         # Process phonemes to get token IDs
         phonemes = basic_english_tokenize(phonemes_list[0])
@@ -177,6 +227,18 @@ class KittenTTS_1_Onnx:
         audio = outputs[0][..., :-5000]
 
         return audio
+
+    def warmup(self) -> None:
+        """Run one minimal generate so the first real request skips the cold start.
+
+        The first ``session.run`` on a freshly loaded session pays graph
+        preparation and arena allocation; the Phase 8-5 measurement recorded a
+        ~2 s cold first generate against a ~1.5 s warm one. The dummy text is the
+        shortest chunk the pipeline can produce, so the price is one small
+        inference at load time. Failures are the caller's to log and ignore: a
+        warmup must never turn a loadable model into a failed one.
+        """
+        self.generate("Hi", voice="expr-voice-5-m", speed=1.0)
 
     def generate_to_file(
         self,

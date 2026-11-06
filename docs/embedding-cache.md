@@ -181,8 +181,10 @@ counts and sizes — never the values themselves.
 
 ## Related
 
-* [Batching & concurrency](batching.md) — why cloning is bound by the
-  per-request tone-converter hops, which is what the cache leaves untouched.
+* [Batching & concurrency](batching.md) — the per-model batch/lane/loop matrix;
+  Phase 8 batched the tone-converter hops this cache does not touch, so cache
+  hits and batched forwards compose.
 * [Throughput benchmarks](benchmarks/throughput.md) — the Phase 7 clone-flood
-  measurements (`--clone-reference same|distinct` × cache on/off).
+  measurements (`--clone-reference same|distinct` × cache on/off) and the Phase
+  8 flood matrix on top of them.
 * [API reference](api.md) — `/health`, `/metrics` and the model endpoints.

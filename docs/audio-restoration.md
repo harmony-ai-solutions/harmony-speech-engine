@@ -108,7 +108,7 @@ model_configs:
   - name: "voicefixer-restorer"
     model: "jlmarrugom/voice_fixer"
     model_type: "VoiceFixerRestorer"
-    max_batch_size: 4
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cuda:0"  # or "cpu" for CPU-only inference
@@ -116,7 +116,7 @@ model_configs:
   - name: "voicefixer-vocoder"
     model: "jlmarrugom/voice_fixer"
     model_type: "VoiceFixerVocoder"
-    max_batch_size: 4
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cuda:0"  # or "cpu" for CPU-only inference

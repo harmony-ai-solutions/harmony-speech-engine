@@ -8,8 +8,56 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from ..batch_padding import length_mask, row_lengths, run_masked, sync_mask
 from .modules import BN_GRU, PQMF, ResStack, UNetResComplex_100Mb, UpsampleNet
 from .utils import FDomainHelper, MelScale, from_log, get_mel_weight_torch, to_log, tr_amp_to_db, tr_normalize, tr_pre
+
+
+def _masked_upsample(module: UpsampleNet, x: torch.Tensor, mask: torch.Tensor):
+    """``UpsampleNet`` with its upsampled span masked (Phase 8-4).
+
+    The transposed conv is batch-safe: masking once after it keeps every row's
+    padding at zero. The *skip* branch is not: upstream reshapes
+    ``(x + sin x).repeat(1, factor, 1)`` from ``[B, factor*C, T]`` to
+    ``[B, C, factor*T]``, so its output frame ``j`` reads input frame
+    ``j % T`` — i.e. it depends on the row's own frame count ``T`` and wraps
+    around at it. It is therefore replayed per row on that row's valid slice
+    (a 1x1 conv, so the cost is negligible) and scattered back into the batch,
+    which is exactly what a solo run computes.
+    """
+    transformed = x + torch.sin(x)
+    input_lengths = row_lengths(mask)
+    outputs = module.layer(transformed)
+    mask = sync_mask(mask, outputs.shape[-1])
+    outputs = outputs * mask
+    if module.no_skip or module.org:
+        return outputs, mask
+
+    skip = torch.zeros_like(outputs)
+    factor = module.upsample_factor
+    for row, length in enumerate(input_lengths):
+        if length <= 0:
+            continue
+        row_inputs = transformed[row : row + 1, :, :length]
+        batch, channels, _frames = row_inputs.shape
+        repeated = row_inputs.repeat(1, factor, 1).view(batch, channels, -1)
+        row_skip = module.skip_conv(repeated)
+        skip[row : row + 1, :, : row_skip.shape[-1]] = row_skip
+    outputs = outputs + skip
+    if module.use_drop:
+        outputs = torch.nn.functional.dropout(outputs, p=0.05)
+    return outputs * mask, mask
+
+
+def _masked_res_stack(module: ResStack, x: torch.Tensor, mask: torch.Tensor):
+    """``ResStack`` with each dilated layer masked (its convs read past the end)."""
+    for layer in module.layers:
+        residual, _ = run_masked(layer, x, mask)
+        x = x + residual
+    return x * mask, mask
+
+
+_VOCODER_MASKED_BLOCKS = {UpsampleNet: _masked_upsample, ResStack: _masked_res_stack}
 
 
 class VoiceFixerGenerator(nn.Module):
@@ -56,6 +104,54 @@ class VoiceFixerGenerator(nn.Module):
         mel = unet_out + x
 
         return {"mel": mel, "lstm_out": unet_out, "unet_out": unet_out, "noisy": noisy, "clean": clean}
+
+    def forward_batched(self, mel_orig: torch.Tensor, frame_lengths=None) -> dict[str, torch.Tensor]:
+        """Padded-batch ``forward`` (Phase 8-4).
+
+        ``mel_orig`` is ``[B, 1, T_max, n_mel]`` with each row's real frame count in
+        ``frame_lengths``. The denoiser's bidirectional GRUs are packed over each
+        row's own frames, and the UNet runs with a per-stage time mask, so a row
+        inside the batch equals its solo run. The single-row (or all-equal-length)
+        case calls :meth:`forward` unchanged and is therefore bit-identical.
+
+        ``sp`` is not an input here: the historical ``forward`` receives it but
+        never reads it (audited 2026-11-06).
+        """
+        lengths = None if frame_lengths is None else [int(value) for value in frame_lengths]
+        if lengths is None or min(lengths) >= mel_orig.shape[2]:
+            return self.forward(None, mel_orig)
+
+        noisy = mel_orig.clone()
+        clean = self._denoiser_batched(noisy, lengths) * noisy
+        x = to_log(clean.detach())
+        # The historical path pads *after* ``unet_in`` is built, so a solo row's
+        # UNet input holds plain zeros past its last frame. Mask the input to the
+        # row's own frames; the UNet then isolates each row's 64-aligned extent.
+        rows_mask = length_mask(lengths, mel_orig.shape[2], device=mel_orig.device, dtype=mel_orig.dtype)
+        rows_mask = rows_mask[:, :, :, None]
+        unet_in = torch.cat([to_log(mel_orig), x], dim=1) * rows_mask
+
+        unet_out = self.unet.forward_batched(unet_in, lengths)["mel"]
+
+        mel = unet_out + x * rows_mask
+
+        return {"mel": mel, "lstm_out": unet_out, "unet_out": unet_out, "noisy": noisy, "clean": clean}
+
+    def _denoiser_batched(self, noisy: torch.Tensor, frame_lengths) -> torch.Tensor:
+        """Run the denoiser with its GRUs packed over each row's own frames.
+
+        Every other layer is position-wise (``BatchNorm2d`` in eval mode, ``Linear``,
+        activations), so padding cannot leak through them; the two ``BN_GRU``s are
+        bidirectional over time and must not consume it.
+        """
+        x = noisy
+        for module in self.denoiser:
+            x = (
+                module.forward_batched(x, frame_lengths)
+                if isinstance(module, BN_GRU)
+                else module(x)
+            )
+        return x
 
 
 class VoiceFixerRestorer(nn.Module):
@@ -233,6 +329,32 @@ class VoiceFixerRestorer(nn.Module):
         mel_orig = self.mel(sp.permute(0, 1, 3, 2)).permute(0, 1, 3, 2)
 
         return sp, mel_orig
+
+    def preprocess(self, input_wav: torch.Tensor) -> torch.Tensor:
+        """Per-clip mel frontend: ``[B, 1, samples]`` → ``[B, 1, frames, n_mel]``.
+
+        This is the mel half of :meth:`_pre`. It stays **per clip** in the batched
+        path: the frontend is a centered STFT that reflect-pads every clip on its
+        own, so padding waveforms would change the shorter rows' edge frames (the
+        Phase 8-2/8-3 lesson). ``sp`` (the magnitude spectrogram) is dropped here
+        because the generator never reads it.
+        """
+        return self._pre(input_wav)[1]
+
+    def forward_batched(self, mels: torch.Tensor, frame_lengths=None) -> torch.Tensor:
+        """Restore pre-frontended mel rows, ``[B, 1, T_max, n_mel]`` in.
+
+        ``frame_lengths`` are each row's real frame counts; the output is the
+        same-shaped batch and the caller trims each row to its own count. Rows
+        are one per ``(request, 30 s segment)``, which mirrors the segmentation
+        :meth:`forward` performs internally. A single row (or a batch whose rows
+        all span the tensor) runs the plain generator, so ``B == 1`` stays
+        bit-identical.
+        """
+        lengths = None if frame_lengths is None else [int(value) for value in frame_lengths]
+        if lengths is None or min(lengths) >= mels.shape[2]:
+            return from_log(self.generator.forward(None, mels)["mel"])
+        return from_log(self.generator.forward_batched(mels, lengths)["mel"])
 
     def _trim_center(self, est: torch.Tensor, ref: torch.Tensor) -> tuple:
         """Trim tensors to same length."""
@@ -450,6 +572,36 @@ class VoiceFixerVocoderGenerator(nn.Module):
 
         return wav
 
+    def forward_batched(self, conditions, frame_lengths=None):
+        """Padded batch over condition frames, each row held at zero past its end.
+
+        ``conditions`` is ``[B, in_channels, T_max]`` and ``frame_lengths`` the
+        per-row condition frame counts (each row's own ``tr_pre`` output length).
+        Returns the waveform batch ``[B, 1, T_max * prod(upsample_scales)]``; the
+        caller trims each row with its own length.
+
+        The decoder is a stack of transposed and dilated convolutions: without the
+        per-stage mask (:mod:`harmonyspeech.modeling.models.batch_padding`) a
+        short row's padding spreads into its valid tail (measured 0.28 peak on
+        random weights). ``frame_lengths=None`` or a batch whose rows are all full
+        length calls :meth:`forward`, so ``B == 1`` stays bit-identical.
+        """
+        if self.use_cond_rnn:
+            raise NotImplementedError("VoiceFixerVocoderGenerator: the conditional RNN is not batched")
+        if self.out_channels > 1:
+            raise NotImplementedError("VoiceFixerVocoderGenerator: the PQMF path is not batched")
+
+        lengths = None if frame_lengths is None else [int(value) for value in frame_lengths]
+        x = conditions
+        if lengths is None or min(lengths) >= x.shape[-1]:
+            return self.forward(x)
+
+        mask = length_mask(lengths, x.shape[-1], device=x.device, dtype=x.dtype)
+        if self.use_condnet:
+            x, mask = run_masked(self.condnet, x, mask)
+        x, _mask = run_masked(self.generator, x, mask, custom=_VOCODER_MASKED_BLOCKS)
+        return x
+
     def remove_weight_norm(self):
         """Remove weight normalization from all layers."""
 
@@ -505,6 +657,63 @@ class VoiceFixerVocoder(nn.Module):
         # 4. Generate audio through the original Generator
         audio = self.model(mel)
         return audio
+
+    def forward_batched(self, mel_spectrogram, frame_lengths=None):
+        """Batched :meth:`forward` over a time-padded mel batch (Phase 8-4).
+
+        ``mel_spectrogram`` is ``[B, 1, T_max, 128]`` with each row's real frame
+        count in ``frame_lengths``. Returns ``(audio, sample_lengths)``: the
+        waveform batch and each row's own sample count for the unpad step (a solo
+        run emits exactly ``condition_frames * prod(upsample_scales)`` samples).
+
+        The mel-to-condition frontend stays **per row**: ``tr_pre`` appends a
+        ``frames % 2 + 4`` tail, whose length depends on the row's own frame
+        count. The generator then runs one masked forward per batch, so padding
+        never reaches the valid tail (Phase 8-3 lesson).
+        """
+        # fail hard if wrong format
+        assert mel_spectrogram.size()[-1] == 128, f"Expected 128 mel bins, got {mel_spectrogram.size()[-1]}"
+
+        lengths = None if frame_lengths is None else [int(value) for value in frame_lengths]
+
+        # Ensure tensors are of the same type
+        self.weight_torch = self.weight_torch.type_as(mel_spectrogram)
+
+        # 1-2. Mel weight normalization, amplitude to dB and normalization
+        mel = mel_spectrogram / self.weight_torch
+        mel = tr_normalize(tr_amp_to_db(torch.abs(mel)) - 20.0)
+
+        # 3. Per-row preprocessing: ``tr_pre`` pads by ``l % 2 + 4`` for each
+        # row's own frame count, so it cannot be applied to the padded batch.
+        rows = len(lengths) if lengths is not None else int(mel.shape[0])
+        if lengths is None:
+            lengths = [int(mel.shape[2])] * rows
+        conditions = [tr_pre(mel[row : row + 1, 0, : lengths[row], :]) for row in range(rows)]
+        condition_lengths = [int(condition.shape[-1]) for condition in conditions]
+
+        if max(condition_lengths) == min(condition_lengths):
+            # Equal rows are the plain batched graph (``B == 1`` included), which
+            # keeps the historical arithmetic bit-identical.
+            audio = self.model(torch.cat(conditions, dim=0))
+        else:
+            padded = torch.zeros(
+                (rows, conditions[0].shape[1], max(condition_lengths)),
+                dtype=conditions[0].dtype,
+                device=conditions[0].device,
+            )
+            for row, condition in enumerate(conditions):
+                padded[row, :, : condition.shape[-1]] = condition[0]
+            audio = self.model.forward_batched(padded, condition_lengths)
+
+        samples_per_frame = 1
+        for factor in getattr(self.model, "upsample_scales", [1]):
+            samples_per_frame *= int(factor)
+        sample_lengths = torch.tensor(
+            [length * samples_per_frame for length in condition_lengths],
+            dtype=torch.long,
+            device=mel_spectrogram.device,
+        )
+        return audio, sample_lengths
 
     def load_weights(self, checkpoint: dict[str, Any], hf_config: dict | None = None):
         """Load weights from VoiceFixer vocoder checkpoint."""

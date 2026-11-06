@@ -385,3 +385,126 @@ def test_markdown_table_lists_skipped_optional_cases():
     assert "Skipped optional cases" in table
     assert "tts_de_native" in table
     assert "ref_voice_de.wav" in table
+
+
+# ---------------------------------------------------------------------------
+# Batching-axis plumbing for the Phase 8 families (8-1)
+# ---------------------------------------------------------------------------
+def test_batching_axis_allow_list_is_registered_and_split_from_pending():
+    from tests.audio_fixtures import REFERENCE_CLIPS, TEXTS
+
+    assert set(ar.FAMILY_SPECS) >= ar.BATCHING_AXIS_ENABLED
+    assert not (ar.BATCHING_AXIS_ENABLED & set(ar.BATCHING_AXIS_PENDING))
+    for family in ar.BATCHING_AXIS_ENABLED | set(ar.BATCHING_AXIS_PENDING):
+        cases = ar.FAMILY_SPECS[family].get("batching_cases")
+        assert cases, family
+        names = [case["name"] for case in cases]
+        # The worker keys its manifest by case name, so duplicates would merge.
+        assert len(set(names)) == len(names), family
+        assert len(names) >= 2, f"{family}: a batch gate needs at least two distinct inputs"
+        configured = {entry["name"] for entry in ar.FAMILY_SPECS[family]["models"]}
+        for case in cases:
+            assert case["kind"] in {"tts", "vc", "restore"}, (family, case)
+            assert case["model"] == family or case["model"] in configured, (family, case)
+            if case.get("reference"):
+                assert case["reference"] in REFERENCE_CLIPS, (family, case)
+            if case.get("text"):
+                assert case["text"] in TEXTS, (family, case)
+
+
+def test_batching_axis_covers_every_family_with_a_batched_handler():
+    """8-4 enabled the last two families; nothing is left waiting."""
+    assert ar.BATCHING_AXIS_PENDING == {}
+    assert {
+        "openvoice_v1",
+        "openvoice_v2",
+        "melotts",
+        "harmonyspeech",
+        "voicefixer",
+    } == ar.BATCHING_AXIS_ENABLED
+    for family in ("harmonyspeech", "voicefixer"):
+        cases = ar._cases_for_axis(ar.parse_axis("batching:1-vs-4"), family)
+        assert cases is ar.FAMILY_SPECS[family]["batching_cases"]
+
+
+def test_batching_axis_returns_the_registered_cases_for_an_enabled_family():
+    axis = ar.parse_axis("batching:1-vs-4")
+
+    cases = ar._cases_for_axis(axis, "openvoice_v1")
+
+    assert cases is ar.FAMILY_SPECS["openvoice_v1"]["batching_cases"]
+
+
+def test_batching_axis_covers_the_openvoice_v2_clone_pipeline():
+    """8-2 activates the V2 family: the full clone pipeline (VAD → embed → synth → TC)."""
+    axis = ar.parse_axis("batching:1-vs-4")
+
+    cases = ar._cases_for_axis(axis, "openvoice_v2")
+
+    assert cases is ar.FAMILY_SPECS["openvoice_v2"]["batching_cases"]
+    assert all(case["kind"] == "tts" for case in cases)
+    assert all(case.get("reference") for case in cases)
+
+
+@pytest.mark.parametrize("family", ["harmonyspeech"])
+def test_batching_axis_refuses_a_registered_but_disabled_family(monkeypatch, family):
+    """The refusal mechanism stays covered even though the pending set is empty."""
+    monkeypatch.setattr(ar, "BATCHING_AXIS_ENABLED", frozenset())
+    monkeypatch.setattr(ar, "BATCHING_AXIS_PENDING", {family: "9-9 (synthetic pending entry)"})
+    axis = ar.parse_axis("batching:1-vs-4")
+
+    with pytest.raises(SystemExit) as excinfo:
+        ar._cases_for_axis(axis, family)
+
+    message = str(excinfo.value)
+    assert "does not batch yet" in message
+    assert ar.BATCHING_AXIS_PENDING[family].split(" ")[0] in message
+
+
+def test_non_batching_axes_still_use_the_family_cases():
+    axis = ar.parse_axis("dtype:float32-vs-float16")
+
+    assert ar._cases_for_axis(axis, "voicefixer") is ar.FAMILY_SPECS["voicefixer"]["cases"]
+
+
+def test_batching_worker_builds_a_restore_request_input():
+    """The voicefixer gate runs `restore` cases through the same worker."""
+    from harmonyspeech.common.inputs import AudioConversionRequestInput
+
+    case = {
+        "name": "restore_voice_a",
+        "kind": "restore",
+        "model": "voicefixer",
+        "reference": "voice_a",
+    }
+
+    request_input = ar._build_batching_request_input(
+        case, "batch-gate-restore_voice_a", {}, deterministic=True
+    )
+
+    assert isinstance(request_input, AudioConversionRequestInput)
+    assert request_input.request_id == "batch-gate-restore_voice_a"
+    assert request_input.source_audio
+
+
+def test_batching_worker_builds_a_deterministic_tts_request_input():
+    from harmonyspeech.common.inputs import TextToSpeechRequestInput
+    from tests.audio_fixtures import TEXTS
+
+    case = {
+        "name": "batch_short",
+        "kind": "tts",
+        "model": "harmonyspeech",
+        "text": "batch_1",
+        "mode": "voice_cloning",
+        "reference": "repo_voice_a",
+    }
+
+    request_input = ar._build_batching_request_input(
+        case, "batch-gate-batch_short", TEXTS, deterministic=True
+    )
+
+    assert isinstance(request_input, TextToSpeechRequestInput)
+    assert request_input.input_text == TEXTS["batch_1"]
+    assert request_input.generation_options.noise_scale == 0.0
+

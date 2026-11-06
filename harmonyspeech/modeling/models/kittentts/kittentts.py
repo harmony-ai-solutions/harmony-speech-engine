@@ -9,6 +9,7 @@ import json
 
 import numpy as np
 from huggingface_hub import hf_hub_download
+from loguru import logger
 
 from harmonyspeech.modeling.models.kittentts.onnx_model import KittenTTS_1_Onnx
 
@@ -54,6 +55,22 @@ class KittenTTSSynthesizer:
         self.repo_id = repo_id
         self.sample_rate = KITTENTTS_SAMPLE_RATE
         self._model = self._load_model(repo_id, cache_dir)
+        self._warmup()
+
+    def _warmup(self) -> None:
+        """Load-time warmup: one tiny generate (Phase 8-5).
+
+        Keeps the ~2 s first-inference cold start out of the first real
+        request. The ONNX session is shared by all lanes, so one warmup covers
+        every lane; a failure is logged and ignored — warmup must never turn a
+        loadable model into a failed one.
+        """
+        try:
+            self._model.warmup()
+        except Exception as error:  # noqa: BLE001 - best-effort warmup
+            logger.warning(
+                f"KittenTTS warmup generate failed ({error}); the first request will pay the cold start"
+            )
 
     def _load_model(self, repo_id: str, cache_dir: str | None) -> KittenTTS_1_Onnx:
         """Download and initialize KittenTTS_1_Onnx from HuggingFace."""

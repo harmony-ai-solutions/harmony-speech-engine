@@ -48,12 +48,113 @@ Close out the batching matrix: verify the already-native batching paths are actu
 
 ## Checklist
 
-- [ ] Whisper handler verified/converted to one batched call per step
-- [ ] Silero batching skip evidenced (single-stream API); Silero lanes verified, measured, verdict recorded
-- [ ] KittenTTS parallel lanes implemented (max_batch_size = lane count, no new config key)
-- [ ] Lane/`intra_op` measurement matrix run; fixed value baked in; RTF recorded in `docs/batching.md`
-- [ ] Load-time warmup landed (first-request cold start gone)
-- [ ] GPU-EP probe verdict recorded (DirectML / CUDA-EP coexistence, or explicit "not pursued" with reason)
-- [ ] Chatterbox exclusion documented as an explicit decision
-- [ ] `docs/batching.md` matrix complete for every model type
-- [ ] `summary.md` Implementation Status updated
+- [x] Whisper handler verified/converted to one batched call per step — **audit: no cross-request batch exists** (upstream API is single-audio); one pipeline per step, one `transcribe` per request, cursor reset per request
+- [x] Silero batching skip evidenced (single-stream API); Silero lanes verified, measured, verdict recorded — **verdict: sequential kept** (0.95× at 8 lanes; shared wrapper is not thread-safe)
+- [x] KittenTTS parallel lanes implemented (max_batch_size = lane count, no new config key)
+- [x] Lane/`intra_op` measurement matrix run; fixed value baked in; RTF recorded in `docs/batching.md`
+- [x] Load-time warmup landed (first-request cold start gone)
+- [x] GPU-EP probe verdict recorded (DirectML / CUDA-EP coexistence, or explicit "not pursued" with reason)
+- [x] Chatterbox exclusion documented as an explicit decision
+- [x] `docs/batching.md` matrix complete for every model type
+- [x] `summary.md` Implementation Status updated
+
+## Outcome (2026-11-06)
+
+**Whisper — audit, no conversion.** In the installed `faster_whisper` 1.2.1
+`BatchedInferencePipeline.transcribe()` takes a **single** audio (path / file
+object / mono ndarray) and batches *within* it: its own VAD cuts the audio into
+≤30 s clips, which `_batched_segments_generator` feeds through `forward()` in
+groups of `batch_size`. Neither `transcribe()` nor
+`WhisperModel.generate_segments()` accepts a list. Since
+`prepare_faster_whisper_inputs` returns one `AudioArtifact` per request — for STT
+requests and for the pipeline's whisper-segmentation VAD step alike — there is no
+cross-request call to fold. Folding would mean re-implementing `transcribe()`
+(per-audio VAD chunking, per-audio language detection and tokenizer, timestamp
+restoration) on top of upstream internals. The handler now builds **one pipeline
+per step** (was per request) and resets the pipeline's word-timestamp cursor per
+request; `batch_size=16` is documented as the intra-audio clip batch and
+`max_batch_size: 16` as admission width. Integration tests pin it:
+`test_whisper_step_builds_one_pipeline_and_transcribes_each_request_once`,
+`test_whisper_vad_step_takes_the_same_per_request_path`.
+
+**Silero VAD — lanes measured and rejected; sequential kept.** The installed
+package contradicts the plan's assumption: per-call state is **not**
+function-local. `OnnxWrapper` keeps `_state` / `_context` / `_last_sr` on the
+instance and `get_speech_timestamps` calls `model.reset_states()` at entry, so
+concurrent calls on the shared model corrupt each other — measured **7 of 16**
+concurrent results differ from their sequential answer. Lanes with per-lane
+wrappers (the only correct form) measured on 16 × 30 s clips: 1.10× at 4 lanes,
+**0.95× at 8**, 0.92× at 16 (3.94 s sequential, 4.15 s at 8). Below the ≥2× bar,
+so the handler stays a plain loop and `max_batch_size: 16` remains queue depth.
+
+**KittenTTS — lanes implemented.** `max_batch_size` is the lane count (no new
+config key); the handler dispatches each request's `generate` to a bounded pool
+of `min(len(inputs), max_batch_size)` lanes over the one shared ORT session,
+reassembles results in input order and turns a lane's exception into exactly that
+request's error. Measured matrix (mini, 8 × ~5.9 s audio, 12-core host):
+
+| lanes | intra 1 | intra 2 | intra 4 | intra default |
+|---|---|---|---|---|
+| 4 (req/s) | 1.06 | 1.04 | 1.18 | 1.19 |
+| 8 (req/s) | 1.23 | 1.24 | 1.28 | 1.29 |
+
+Single-request latency: 2.61 s (intra 1), 1.71 s (2), 1.74 s (4), 1.61 s
+(default) for 5.9 s of audio. **Chosen:** `KITTEN_TTS_INTRA_OP_NUM_THREADS = 0`
+(ORT's own default = one intra-op thread per physical core), `inter_op = 1`,
+baked in and not configurable: throughput is flat across `intra_op` (the
+suspected oversubscription costs nothing) and the default keeps the best
+single-request RTF (0.273 vs 0.443 at intra 1). Before/after: single-request RTF
+unchanged, 4 lanes 0.70 → 1.19 req/s (1.71×), 8 lanes → 1.29 req/s (1.91×).
+
+**Warmup.** `KittenTTS_1_Onnx.warmup()` runs one "Hi" generate from
+`KittenTTSSynthesizer.__init__`; a failure is logged and never fails the load.
+On this machine the cold gap was already small (1.52 s cold vs 1.47–1.53 s
+warm), so the warmup is cheap insurance rather than a measured win here.
+
+**Phonemizer lock.** Required, not optional: `phonemizer`'s `EspeakBackend` is
+not thread-safe and concurrent `phonemize` calls fail with
+`RuntimeError: number of lines in input and output must be equal, we have:
+input=1, output=2` (reproduced while measuring). `PHONEMIZER_LOCK` guards the
+call (~0.3 ms).
+
+**GPU execution providers — not pursued.** The pinned hse environment is
+CPU-only ORT (`['AzureExecutionProvider', 'CPUExecutionProvider']`); adding
+`onnxruntime-directml`/`-gpu` means installing into that pinned environment
+(project policy forbids; Application Control blocks several wheels) and the CUDA
+EP risks DLL coexistence with torch's CUDA 13 libraries. KittenTTS's purpose is
+ultra-light CPU deployment, so opportunistic GPU stays a benchmark-host question.
+
+**`docs/batching.md`** now carries the one-table matrix (19 registry types, each
+exactly once: mechanism, budget axis unit, fallback, `max_batch_size` rationale
+or skip reason), the KittenTTS lane/`intra_op` matrices, the Silero verdict
+numbers, the whisper audit section and the verbatim Chatterbox product decision.
+`tests/unit/test_batching_docs_matrix.py` lints the table against
+`_MODEL_CONFIGS`.
+
+### Deviations
+
+1. **Whisper was not converted to one batched call per step** — the plan's
+   premise ("CT2 takes lists — pad-free") does not hold for the installed
+   faster-whisper: the list-accepting entry point does not exist. Recorded as an
+   audit + documented skip, with a test pinning the real (one-pipeline-per-step,
+   one-transcribe-per-request) behaviour.
+2. **Silero lanes were not implemented, and the package internals contradict the
+   plan**: per-call state is instance state, not function-local, so the shared
+   session is *not* safe for concurrent calls (7/16 corrupted results). Lanes
+   with per-lane wrappers measured 0.95× at 8 lanes (< 2× bar) → sequential kept,
+   and the code's default matches the measurement.
+3. **`intra_op` winner is ORT's default (0), not a small pin.** The plan expected
+   N lanes × default threads to oversubscribe; the matrix shows flat throughput
+   across 1/2/4/default and a doubled single-request latency at 1. Chose 0 for
+   the measured best on both axes.
+4. **Warmup is not backed by a measured cold-start gap on this machine**
+   (1.52 s cold vs ~1.5 s warm). Kept as cheap insurance; documented as such.
+5. **KittenTTS weights were not in any local HF cache** (contrary to the
+   hand-off note); the matrix ran on the mini variant downloaded to
+   `%TEMP%\opencode\kitten` with `curl.exe --ssl-no-revoke` (Python's network
+   stack and HF's CDN reset the connection). No packages were installed.
+6. **Lane speedup at 8 lanes is 1.91×, not >2×** on this host. The integration
+   test therefore asserts ≥2× against a GIL-releasing stub (it tests the lane
+   mechanism); the real-model number is recorded in `docs/batching.md` rather
+   than asserted.
+

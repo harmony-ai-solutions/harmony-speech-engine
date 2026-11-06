@@ -121,7 +121,7 @@ Python 3.12.12, Windows 11. GPU 1 of 3 (otherwise idle), `CUDA_VISIBLE_DEVICES=1
 | openvoice_v2 | clone_voice_a | **FAIL (structural)** | — | — | — | — | — | — |
 | melotts | tts_en | **FAIL (structural)** | — | — | — | — | — | — |
 | harmonyspeech | — | skipped | CPU-pinned: `dtype` only selects bf16 on CPU |
-| voicefixer | — | not run | pre-existing GPU device-placement bug (see below) |
+| voicefixer | — | not re-run | GPU placement fixed in Phase 8-4; axis needs a benchmark-host run (see below) |
 | kittentts | — | skipped | ONNX runtime ignores torch dtype |
 
 Boot VRAM in the same run (Chatterbox TTS + VC + embedding):
@@ -140,10 +140,13 @@ Failures and why they are per-entry `float32` opt-outs:
   `transforms.rational_quadratic_spline` (spline bin widths underflow in fp16).
   Casting the prepared BERT features to the model dtype (now done in the
   MeloTTS handler) is necessary but not sufficient.
-* `voicefixer` — GPU inference currently raises `Input type
-  (torch.cuda.FloatTensor) and weight type (torch.FloatTensor)` (a submodule is
-  never moved to the device); the dtype axis cannot be measured until that
-  pre-existing bug is fixed. Kept `float32`.
+* `voicefixer` — GPU inference used to raise `Input type (torch.cuda.FloatTensor)
+  and weight type (torch.FloatTensor)` (the STFT frontend's conv weights were
+  built on the CPU and the model was never moved). **Fixed in Phase 8-4**: the
+  loader now places the whole model after construction and weight loading, so the
+  family runs on GPU for the first time. Its dtype axis has not been re-measured
+  yet — run `--families voicefixer --axis dtype:float32-vs-float16 --gpu` on the
+  benchmark host. Kept `float32` until then.
 * `harmonyspeech` is CPU-pinned in the shipped GPU config (the CPU executor
   rewrites fp16 → bf16), and KittenTTS/Silero are ONNX — torch `dtype` is a
   no-op there by design.
@@ -181,6 +184,20 @@ models' sampling noise switched off (`generation_options.noise_scale = 0`,
 isolates padding/unpadding rather than sampling noise or batch-shape-dependent
 kernel choice. Verdict: duration Δ ≤ 0.1 %, max |Δsample| ≤ 2e-3, log-mel MSE
 ≤ 1e-2, corr ≥ 0.999.
+
+Phase 8-2 added `openvoice_v2` to the allow-list (its clone pipeline batches the
+voice-embedding step as well). The measured run for it on the benchmark host is
+still outstanding, so it has no row below yet; the embed step's equivalence is
+covered by unit-tier bit-equality tests instead
+(`tests/unit/modeling/test_batched_embedders.py`).
+
+Phase 8-4 added `harmonyspeech` (encoder → vocoder; the synthesizer stays a
+per-item loop) and `voicefixer` (`restore_voice_a` and friends). Their GPU runs
+are outstanding for the same reason — `voicefixer` only became runnable on GPU in
+that phase. Their equivalence is covered by
+`tests/unit/modeling/test_batched_hs_voicefixer.py`,
+`tests/unit/inference_flow/test_batched_hs_voicefixer_handlers.py` and the
+4-request engine tests in `tests/integration/test_batched_synthesis.py`.
 
 | Family | Case | Verdict | duration Δ% | max\|Δsample\| | log-mel MSE | corr | identical |
 |---|---|---|---|---|---|---|---|

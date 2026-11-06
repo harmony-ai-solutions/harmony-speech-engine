@@ -51,8 +51,86 @@ The `batching:1-vs-N` axis in `scripts/audio_regression.py` (5-2) is family-keye
 
 ## Checklist
 
-- [ ] Feature/waveform padding + trimming helpers with lengths semantics
-- [ ] Axis units documented; budget applies to all three axes
-- [ ] Harness family map ready for new steps
-- [ ] Helper unit tests green
-- [ ] `summary.md` Implementation Status updated
+- [x] Feature/waveform padding + trimming helpers with lengths semantics
+- [x] Axis units documented; budget applies to all three axes
+- [x] Harness family map ready for new steps
+- [x] Helper unit tests green
+- [x] `summary.md` Implementation Status updated
+
+## Deviations
+
+### API design (implemented 2026-11-06)
+
+**Lengths-aware feature padding — flag, not a sibling function.**
+`pad_feature_batch(features, pad_value=0.0, device=None, return_lengths=False)`.
+The Phase 5-2 MeloTTS caller (two call sites, four `padded_bert` /
+`padded_ja_bert` constructions) destructures only the tensor, so the default
+return stays `padded` and that source is untouched. With `return_lengths=True`
+it returns `(padded [B, bins, T_max], frame_lengths long[B])`. One code path
+means one set of shape/validation messages; a sibling function would have
+duplicated the channel-check and padding loop. Both return shapes are spelled
+out in the docstring.
+
+**`trim_feature_output(outputs, frame_lengths, dim=-1)`.**
+Accepts both ranks the handlers produce rather than asserting 3-D:
+`[B, T_max]` (an embedding over frames) and `[B, bins, T_max]` (mel/feature
+maps), generalising to any rank ≥ 2. The batch axis is always `0`; `dim` is the
+padded time axis (normalised, so positive indices work too). Each returned
+tensor drops the batch axis and keeps every other axis, i.e. `[bins, T_i]` /
+`[T_i]` — the same "drop batch, keep channels" contract as
+`trim_decoder_output`, so a `[B, 1, T]` waveform trims to `[1, T_i]` and the
+sample axis reuses this helper instead of a fourth trimmer. Validation mirrors
+`trim_decoder_output`: length count must equal `outputs.shape[0]`, no row may
+ask for more frames than the padded axis holds, negative lengths clamp to 0.
+
+**`pad_waveform_batch(waveforms, sample_rates=None, pad_value=0.0, device=None)`
+→ `(padded [B, 1, T_max], sample_lengths long[B])`.**
+Two accepted forms so the 8-2 embedder handlers can pass whatever they already
+hold: `[(waveform, sample_rate), ...]` rows (artifact-style) or bare tensors
+plus a parallel `sample_rates=` list. Rates are mandatory in effect — if they
+come as rows, the rows carry them — because the equal-rate invariant cannot be
+checked without them; a mismatch raises `ValueError` naming the distinct rates.
+Integer (PCM) rows are widened to `float32`; `pad_value` defaults to silence
+(0.0).
+
+**No family added to `BATCHED_INFERENCE_FAMILIES`.**
+Left as `{"OpenVoiceV1Synthesizer", "MeloTTSSynthesizer"}` per the scope guard:
+8-2/8-3/8-4 add their model types when the handler can actually honour the
+flag.
+
+**Axis units.** The module docstring now carries the three-axis table
+(`token` = phones for synthesizers, `frame` = mel/feature frames for tone
+converters/restorers/vocoders/HarmonySpeech encoder, `sample` = audio samples
+for embedders) and states that `plan_batches` / `default_token_budget` /
+`ModelConfig.batch_token_budget` see only a length vector, so they work in
+whichever unit the step passes and no phone-specific assumption leaks. The
+`ModelConfig` docstrings for `batched_inference` and `batch_token_budget`
+document the unit per model type (docstring-only, no schema change).
+
+### `scripts/audio_regression.py` extension mechanism
+
+* **Allow-list + pending map** (the one-line activation): `BATCHING_AXIS_ENABLED`
+  is the existing family gate (unchanged membership: `openvoice_v1`,
+  `melotts`). `BATCHING_AXIS_PENDING` names the families whose case sets are
+  registered but whose handlers do not batch yet, together with the task that
+  activates them (`openvoice_v2` → 8-2/8-3, `harmonyspeech` / `voicefixer` →
+  8-4). `_cases_for_axis` now refuses a pending family with that task name
+  instead of the old "no batching_cases" message; enabling a family later is a
+  single edit to `BATCHING_AXIS_ENABLED`.
+* **Case sets registered now**: `openvoice_v2` gets the same four mixed-length
+  `clone_voice_*` cases as `openvoice_v1`; `harmonyspeech` gets four
+  mixed-length clone cases (`batch_1..4`); `voicefixer` gets four `restore_*`
+  cases over the four distinct reference clips (a gate needs ≥2 distinct
+  inputs; `restore_voice_a` is the primary case 8-4 names).
+* **Worker generalized by kind**: request construction moved into
+  `_build_batching_request_input(case, request_id, text_table, deterministic)`,
+  which maps `tts` → `TextToSpeechRequestInput`, `vc` →
+  `VoiceConversionRequestInput`, `restore` → `AudioConversionRequestInput`.
+  Previously the worker hard-coded TTS requests, so a restore family could not
+  have been gated at all. The drive loop (add all → `step_async`) and the
+  deterministic `GenerationOptions(noise_scale=0, noise_scale_w=0, seed=0)` are
+  unchanged, so existing families/axes behave exactly as before.
+* Tests for the plumbing live in `tests/unit/benchmarks/test_audio_regression.py`
+  (allow-list disjointness, case-set well-formedness, refusal message, the
+  per-kind request builder) rather than in the new batching-helper test file.
+

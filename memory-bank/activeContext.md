@@ -8,9 +8,20 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 8 (CODE COMPLETE, 2026-11-06; measurement run pending)
+
+**Current workstream**: `.current_work/engine-modernization/` — phases 0–5, 7 and 8 are code-complete; 6 is an opt-in backlog. Phase 8's GPU measurements are queued for the benchmark host.
+
+- **8-1..8-4**: the padded-batch machinery now covers the mel-frame and waveform axes. OpenVoice V1/V2 tone-converter encoders, the HarmonySpeech encoder, both OpenVoice tone converters, the HarmonySpeech vocoder and the VoiceFixer restorer/vocoder all forward one padded batch per length-similar sub-batch, with per-stage padding masks, packed GRUs/LSTMs, per-row reflection tails and per-request length/loudness semantics. The HarmonySpeech synthesizer stays a loop (vendored ForwardTacotron drifts 0.16 peak under padding). The VoiceFixer STFT device-placement bug was fixed at the loader.
+- **8-5**: whisper audit (faster-whisper batches inside one audio; one pipeline per step, admission width 16), Silero documented skip (single-stream, 0.95× at 8 lanes, shared wrapper not thread-safe), KittenTTS parallel lanes (`max_batch_size` = lane count = 4; 1.71× measured, 1.91× at 8 lanes, ORT `intra_op` default, phonemizer lock, warmup). `docs/batching.md` holds the final 19-type matrix.
+- **8-6**: both shipped configs set `max_batch_size: 8` + `batched_inference: true` on the newly batched families (initial value, tuning lands with the benchmark-host run); hs1-synthesizer/Chatterbox stay 1, whisper/Silero 16, Kitten 4. `tests/unit/initialization/test_config.py` now encodes the three-way policy (batched family, per-request loop, admission/queue/lane depth) and `tests/unit/test_batching_docs_matrix.py` cross-checks the docs matrix against every shipped entry. `scripts/bench_throughput.py` gained a concurrency list, server-side cache verification, `--engine-log` per-step sub-batch composition, client-pool sizing for c=200, `--print-scenarios`, and the OV1/HarmonySpeech/VoiceFixer/Kitten families. `docs/benchmarks/throughput.md` §Phase 8 has the full scenario matrix, per-step composition slot, 200-connection observation and the sequential-steps honesty note.
+- Open: every Phase 8 table is `_tbd_`. The local HF cache has only BERT text encoders, so the flood, hs1/VoiceFixer, kitten-lane and 200-connection runs plus the real-model `batching:1-vs-N` gates happen on the RTX 5060 Ti benchmark host. The 838-test suite was green at hand-off; full-suite verification is the phase owner's.
+
+Next up when work resumes: run the Phase 8 benchmark-host measurements and fill the `_tbd_` tables.
+
 ### Engine Modernization — Phase 7 (COMPLETE, 2026-11-06)
 
-**Current workstream**: `.current_work/engine-modernization/` — phases 0–5 and 7 are complete; 6 is an opt-in backlog and 8 (batching across all steps) is queued.
+**Current workstream**: `.current_work/engine-modernization/` — phases 0–5, 7 and 8 are code-complete; 6 is an opt-in backlog. (Phase 7's measurement run is still queued for the benchmark host.)
 
 - **7-1**: `harmonyspeech/processing/embedding_cache.py` — one `EmbeddingCache` per engine, threaded executor → worker → model runner exactly like the weight registry. Keys are content-addressed over `(model_identity, audio_hash, params)` (`AudioArtifact.content_hash` = sha256 over decoded PCM + sample rate); values are `SpeakerArtifact`s deep-copied on put and on serve (Phase 0-2 isolation). Policy: TTL 300 s (lazy check + sweep every 16 puts), FIFO beyond 1000 entries (never LRU — a hit never reorders), optional 1 GiB byte ceiling; `bump_load_version` makes entries from a previous weight load unreachable.
 - **7-2**: cache seams in four handlers — Chatterbox embedding (`exaggeration` is part of the key), Chatterbox VC target audio, OpenVoice V1/V2 tone-converter encoder (`vad_source` is part of the key), Harmony Speech encoder. `embedding_cache=None` keeps the pre-Phase-7 path byte-for-byte. Config/CLI: `embedding_cache_enabled/ttl_s/max_entries/max_bytes`, `--embedding-cache-ttl-s`, `--embedding-cache-max-entries`, `--no-embedding-cache`.

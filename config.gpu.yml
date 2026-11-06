@@ -1,8 +1,13 @@
+# `max_batch_size` = requests admitted for a model in one engine step *and*
+# processed together (see docs/batching.md). Phase 8-6 set the newly batched
+# model types to an initial 8; per-step tuning lands with the benchmark-host run
+# (docs/benchmarks/throughput.md, Phase 8 section).
 model_configs:
   - name: "hs1-encoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechEncoder"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -18,7 +23,8 @@ model_configs:
   - name: "hs1-vocoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechVocoder"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -48,7 +54,8 @@ model_configs:
   - name: "ov1-tone-converter"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverter"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -56,7 +63,8 @@ model_configs:
   - name: "ov1-tone-converter-encoder"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverterEncoder"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -119,7 +127,8 @@ model_configs:
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverter"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -127,7 +136,8 @@ model_configs:
   - name: "ov2-tone-converter-encoder"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverterEncoder"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -162,7 +172,8 @@ model_configs:
   - name: "voicefixer-restorer"
     model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
     model_type: "VoiceFixerRestorer"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -171,7 +182,8 @@ model_configs:
   - name: "voicefixer-vocoder"
     model: "jlmarrugom/voice_fixer"  # Alternative: "cqchangm/voicefixer"
     model_type: "VoiceFixerVocoder"
-    max_batch_size: 1
+    max_batch_size: 8
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cuda"

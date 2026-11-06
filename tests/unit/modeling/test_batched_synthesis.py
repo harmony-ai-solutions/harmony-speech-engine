@@ -421,7 +421,24 @@ def _config(model_type: str, **kwargs) -> ModelConfig:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("model_type", ["OpenVoiceV1Synthesizer", "MeloTTSSynthesizer"])
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        "OpenVoiceV1Synthesizer",
+        "MeloTTSSynthesizer",
+        # Phase 8-2 embedders
+        "OpenVoiceV1ToneConverterEncoder",
+        "OpenVoiceV2ToneConverterEncoder",
+        "HarmonySpeechEncoder",
+        # Phase 8-3 tone converters
+        "OpenVoiceV1ToneConverter",
+        "OpenVoiceV2ToneConverter",
+        # Phase 8-4 vocoders and restorer
+        "HarmonySpeechVocoder",
+        "VoiceFixerRestorer",
+        "VoiceFixerVocoder",
+    ],
+)
 def test_batched_inference_defaults_on_for_the_batched_families(model_type):
     config = _config(model_type)
     assert supports_batched_inference(config) is True
@@ -432,7 +449,16 @@ def test_batched_inference_defaults_on_for_the_batched_families(model_type):
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "model_type",
-    ["VoiceFixerRestorer", "ChatterboxTTS", "FasterWhisper", "SileroVAD", "KittenTTSSynthesizer"],
+    [
+        # Documented loop-only families: the HarmonySpeech synthesizer skipped the
+        # padded batch on evidence (8-4 audit), the rest run per-item by design.
+        "HarmonySpeechSynthesizer",
+        "ChatterboxTTS",
+        "ChatterboxVC",
+        "FasterWhisper",
+        "SileroVAD",
+        "KittenTTSSynthesizer",
+    ],
 )
 def test_batched_inference_is_off_for_loop_only_families(model_type):
     assert batched_inference_enabled(_config(model_type)) is False
@@ -446,7 +472,7 @@ def test_batched_inference_can_be_disabled_per_model():
 
 @pytest.mark.unit
 def test_batched_inference_true_on_a_loop_only_family_still_uses_the_loop():
-    config = _config("VoiceFixerRestorer", batched_inference=True)
+    config = _config("HarmonySpeechSynthesizer", batched_inference=True)
     assert batched_inference_enabled(config) is False
 
 

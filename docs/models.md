@@ -121,11 +121,16 @@ instance, so per-request conditioning (`conds` / `ref_dict`) remains isolated.
 #### Batching
 
 `max_batch_size` states how many requests a model processes per engine step, and
-`batched_inference` (default on for the OpenVoice V1 and MeloTTS synthesizers)
-selects the padded-batch forward for one-shot synthesis. Chatterbox is
-autoregressive and runs one request per step, so its capacity comes from
-replicas. See [Batching & concurrency](batching.md) for the per-family table,
-the length-similar sub-batching rules and the measured throughput.
+`batched_inference` (default on for the OpenVoice V1 and MeloTTS synthesizers, the
+two speaker-embedding steps (Phase 8-2), the two tone converters (Phase 8-3) and
+the two vocoders plus the VoiceFixer restorer (Phase 8-4)) selects the
+padded-batch forward for one-shot synthesis, embedding, tone conversion,
+vocoding and restoration. The Harmony Speech synthesizer keeps a per-item loop
+(its vendored generator is not padding-safe; see
+[Batching & concurrency](batching.md)). Chatterbox is autoregressive and runs one
+request per step, so its capacity comes from replicas. See
+[Batching & concurrency](batching.md) for the per-family table, the
+length-similar sub-batching rules and the measured throughput.
 
 #### Measured footprint (RTX 5060 Ti 16 GiB, full `config.gpu.yml` catalogue)
 
@@ -234,6 +239,10 @@ VoiceFixer processes audio internally at 44.1kHz and uses a two-stage pipeline:
 
 The models are accessible through the `/v1/audio/convert` endpoint for audio restoration workflows. 
 
+Both stages run on the configured device (CPU or CUDA) and, when more than one
+restoration request reaches the same model in one engine step, as one padded
+batch per step (Phase 8-4).
+
 Implementation Type: Adapted
 
 Links:
@@ -289,7 +298,7 @@ model_configs:
   - name: "hs1-encoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechEncoder"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -297,7 +306,7 @@ model_configs:
   - name: "hs1-synthesizer"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechSynthesizer"
-    max_batch_size: 10
+    max_batch_size: 1
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -305,7 +314,7 @@ model_configs:
   - name: "hs1-vocoder"
     model: "harmony-ai/harmony-speech-v1"
     model_type: "HarmonySpeechVocoder"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -349,7 +358,7 @@ model_configs:
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "EN"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -358,7 +367,7 @@ model_configs:
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1Synthesizer"
     language: "ZH"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -366,7 +375,7 @@ model_configs:
   - name: "ov1-tone-converter"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverter"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -374,7 +383,7 @@ model_configs:
   - name: "ov1-tone-converter-encoder"
     model: "myshell-ai/openvoice"
     model_type: "OpenVoiceV1ToneConverterEncoder"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -436,7 +445,7 @@ model_configs:
     model: "myshell-ai/MeloTTS-English-v3"
     model_type: "MeloTTSSynthesizer"
     language: "EN"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -445,7 +454,7 @@ model_configs:
     model: "myshell-ai/MeloTTS-Chinese"
     model_type: "MeloTTSSynthesizer"
     language: "ZH"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -453,7 +462,7 @@ model_configs:
   - name: "ov2-tone-converter"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverter"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -461,7 +470,7 @@ model_configs:
   - name: "ov2-tone-converter-encoder"
     model: "myshell-ai/openvoicev2"
     model_type: "OpenVoiceV2ToneConverterEncoder"
-    max_batch_size: 10
+    max_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"

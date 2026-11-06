@@ -6,6 +6,23 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 8 (CODE COMPLETE, 2026-11-06; benchmark-host run pending)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 8 of the modernization; `summary.md` tracks all phases)
+
+- ✅ **8-1 Batching core extensions** — `pad_feature_batch(return_lengths=True)`, `trim_feature_output`, `pad_waveform_batch`, axis-unit docs; `audio_regression.py` gained a pending-family activation map so 8-2…8-4 could gate immediately.
+- ✅ **8-2 Embedder batching** — `ReferenceEncoder.forward_batched` (per-layer padding masks + packed GRU) and `SpeakerEncoder.forward_batched` (packed LSTM); OpenVoice V1/V2 tone-converter encoders and the HarmonySpeech encoder batch `(request, segment/partial)` rows on the mel-frame axis; cache hits resolve before the batch; B=1 bit-identical.
+- ✅ **8-3 Tone-converter batching** — `SynthesizerTrn.voice_conversion_batched` with an opt-in per-stage decoder padding mask (a padded row drifted 0.30 peak before it); handler pads per-request mel frames, plans length-similar sub-batches, trims by `y_lengths × prod(upsample_rates)`.
+- ✅ **8-4 HarmonySpeech + VoiceFixer batching (+ GPU placement fix)** — `MelGANGenerator.inference_batched` and `VoiceFixerVocoder.forward_batched` mask every stage, restore reflection tails and replay the length-dependent skip per row; `VoiceFixerRestorer.forward_batched` packs the GRUs and masks the UNet; VoiceFixer's STFT conv weights are now placed on the configured device (the pre-existing GPU device-mismatch fix). HarmonySpeech synthesizer is a documented skip (0.16 peak padding drift).
+- ✅ **8-5 VAD/STT audit, lanes and skips** — whisper is batched within one audio (one pipeline per step, admission width 16); Silero keeps its sequential loop (single-stream API, 0.95× at 8 lanes, shared wrapper not thread-safe); KittenTTS runs `min(requests, max_batch_size)` lanes over one shared ONNX session (1.71× at 4 lanes, 1.91× at 8, `intra_op` = ORT default, phonemizer lock, load warmup); 19-type matrix in `docs/batching.md` + docs-lint test.
+- ✅ **8-6 Honest config, flood benchmark tooling & exit** — both configs now declare `max_batch_size: 8` (+ `batched_inference: true`) for the newly batched families (initial value; tuning pending the benchmark-host run) while hs1-synthesizer and Chatterbox stay 1, whisper 16, Silero 16, Kitten 4. The config-honesty test now encodes the three-way policy (batched family / per-request loop / admission-lane-queue depth) and a docs test cross-checks every shipped entry against the `docs/batching.md` matrix. `scripts/bench_throughput.py` gained `--concurrency` list parsing, `--embedding-cache {auto,on,off}` verification against `/health`, `--engine-log` per-step sub-batch composition, client-pool sizing for c=200, `--print-scenarios`, and the OV1/HarmonySpeech/VoiceFixer/Kitten families. `docs/benchmarks/throughput.md` §Phase 8 carries the scenario matrix, per-step composition slot, 200-connection observation and the sequential-steps honesty note (all measurements `_tbd_`).
+
+**Verification**: 838-test suite was green at Phase 8 hand-off; 8-6 added 19 test cases (46 green across `tests/unit/benchmarks/test_bench_throughput_references.py`, `tests/unit/initialization/test_config.py`, `tests/unit/test_batching_docs_matrix.py`). Remaining: the phase owner's full-suite run and the benchmark-host measurement (local HF cache holds only BERT text encoders, so real-model runs and the GPU `batching:1-vs-N` gates run on the RTX 5060 Ti host).
+
+**Deviations**: `8` is an initial capacity, not a measured tuning; flood/family tables are `_tbd_` until the benchmark host run; real-model e2e for the touched families is deferred for the same weights reason; Chatterbox remains excluded by product decision.
+
+**Next**: run the Phase 8 benchmark host measurements, then fill the `_tbd_` cells and tick the Phase 8 exit.
+
 ## Engine Modernization — Phase 7 (COMPLETE, 2026-11-06)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 7 of the modernization; `summary.md` tracks all phases)

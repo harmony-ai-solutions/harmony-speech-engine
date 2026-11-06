@@ -31,9 +31,9 @@ limits, real batching/streaming, VRAM residency management, dependency hygiene.
 | Batch mispairing could only be caught in review | **RESOLVED** (5-1) | `assert_batch_aligned` + `EngineBatchError` (typed per-request errors) and a per-step request-id uniqueness guard in `_build_result`; engine-level invariant suite |
 | "Real batching" listed as an open gap (`gpu_model_runner` loop) | **PARTIALLY RESOLVED** (5-2) | one-shot synthesis families batch for real; Chatterbox stays autoregressive by decision (needs a per-sequence KV cache) and scales by replicas, documented in `docs/batching.md` |
 
-Remaining batching work (explicitly out of scope for Phase 5): Chatterbox AR
-batching with a KV cache; batched tone-converter/encoder hops (they are per-item
-loops and cap end-to-end clone throughput at ~1.9 req/s).
+Still open after Phase 5 (now addressed by Phase 8): Chatterbox AR batching
+with a KV cache; batched tone-converter/encoder hops (they were per-item
+loops and capped end-to-end clone throughput at ~1.9 req/s).
 
 ## Phase 7 resolutions (2026-11-06)
 
@@ -43,15 +43,28 @@ loops and cap end-to-end clone throughput at ~1.9 req/s).
 | Cache behaviour would have been invisible to operators (and the privacy implications undocumented) | **RESOLVED** (7-3) | `/metrics` `hse_embedding_cache_*` series (zeros when disabled, never absent) + `/health` `embedding_cache` block; `docs/embedding-cache.md` documents what is retained, for how long, and how to disable it |
 | Clone-flood value was unmeasurable | **RESOLVED** (7-3) | `scripts/bench_throughput.py --clone-reference {same,distinct}` (distinct = a deterministic unique clip per request, the miss worst case); methodology + table structure in `docs/benchmarks/throughput.md` (GPU numbers pending) |
 
-Still open after Phase 7: the tone-converter/encoder hops remain per-item loops
-(Phase 8), so the cache removes a serial step but adds no parallelism.
+Still open after Phase 7: the tone-converter/encoder hops remained per-item loops
+until Phase 8 gave them a padded-batch forward.
+
+## Phase 8 resolutions (2026-11-06)
+
+| Finding | Status | Fix |
+|---|---|---|
+| Clone path throughput flat (Phase 5-3: OV2 ~1.9 req/s at c=8, bound by the per-item tone-converter/encoder loops) | **ADDRESSED** (8-2, 8-3, 8-4, 8-6) | the OpenVoice tone-converter encoders/converters, Harmony Speech encoder/vocoder and VoiceFixer restorer/vocoder now run padded-batch forwards; the shipped configs declare `max_batch_size: 8` for those families (initial value, tuning pending the benchmark-host run). Measurement recorded at the benchmark host — `docs/benchmarks/throughput.md` §Phase 8 |
+| VAD/STT steps could only be "batched" by reimplementing upstream internals | **DOCUMENTED SKIP** (8-5) | faster-whisper batches *within* one audio (admission width `16`, one pipeline per step); Silero is single-stream and its lanes measured below break-even (0.95× at 8), so its loop stays with `16` as queue depth |
+| KittenTTS could not batch at all (static ONNX batch dim 1) | **RESOLVED** (8-5) | parallel lanes over one shared session: `max_batch_size` *is* the lane count (`4`), 1.71× at 4 lanes through the HTTP path is re-measured in §Phase 8 |
+| HarmonySpeech synthesizer stayed a loop | **DOCUMENTED SKIP** (8-4) | vendored ForwardTacotron drifts 0.16 peak under padding (bidirectional predictors/postnet); `max_batch_size: 1` is the honest value |
+
+Remaining batching work after Phase 8: the Chatterbox family only (per-sequence
+KV-cache scheduler, a separate workstream). Everything else is either batched,
+laned, or a documented skip in `docs/batching.md`.
 
 ## Overview
 
 The engine hosts every model in a YAML config as a permanently resident executor, executes batches request-by-request in Python loops, and transports all audio as base64 inside JSON. Three properties dominate the risk profile:
 
 1. **VRAM residency.** `config.gpu.yml` declares 28 models, 20 of them on `cuda`, and every CUDA model is loaded onto the same device at startup.
-2. **No real batching or streaming.** `gpu_model_runner.py` contains no batching logic, and `_execute_*` methods loop per request. `output_options.stream=true` is rejected.
+2. **No streaming (batching resolved).** Phase 5/8 gave every batchable family a padded-batch or lane path; the Chatterbox family stays a per-request loop by decision. `output_options.stream=true` is still rejected.
 3. **Transport and dependency coupling.** Full WAV payloads cross the API as base64 JSON, and a module-level `import chatterbox` makes the optional `--no-deps` Chatterbox install mandatory for the server to boot at all.
 
 ## Highest-Risk Items
@@ -243,12 +256,13 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Still open:** no unload/evict path, no OOM preflight. `/health` and `/metrics` now expose per-model and shared-group VRAM (`hse_model_vram_bytes`, `hse_shared_backbone_bytes`, …), which is the input a future governor needs.
 - **Improvement path:** Pick a small "resident set" per deployment; move the rest to lazy load with LRU eviction (the registry's `release()` is already wired for it); finish the fp16 opt-ins once upstream VITS/VoiceFixer code is half-precision safe.
 
-### Per-Request Batching in Name Only
+### Per-Request Batching in Name Only — RESOLVED (Phases 5 & 8; Chatterbox excepted by decision)
 
-- **Problem:** The scheduler builds per-model batches up to `max_batch_size` (`scheduler.py:191-230`), but every `_execute_*` method loops `for i, x in enumerate(inputs)` and runs the model once per item. `gpu_model_runner.py` has no batching code at all, and `FasterWhisper` is the only path that uses a batched inference pipeline (`BatchedInferencePipeline.transcribe(..., batch_size=16)`, `model_runner_base.py:371-394`).
-- **Files:** `harmonyspeech/task_handler/model_runner_base.py:162-884` (8 `# FIXME: This is not properly batched` markers at lines 163, 186, 234, 279, 327, 397, 456, and the KittenTTS/Chatterbox loops at 666-675, 709-718, 751-760, 795-804), `harmonyspeech/task_handler/gpu_model_runner.py:27-40`
-- **Impact:** GPU utilization stays low, `max_batch_size` inflates queueing latency without throughput gain, and concurrent requests for one model serialize completely. A batch of 10 TTS requests takes ~10× the single-request time.
-- **Improvement path:** Add true tensor batching for MeloTTS/OpenVoice/Chatterbox where the model supports padded batches; otherwise set `max_batch_size: 1` so the scheduler stops pretending, and expose per-model concurrency instead. Remove the `FIXME` markers only when the corresponding loop is gone.
+- **Was:** The scheduler built per-model batches up to `max_batch_size`, but every `_execute_*` method looped `for i, x in enumerate(inputs)` and ran the model once per item; `max_batch_size` was decorative for most families.
+- **Now:** the one-shot synthesizers (Phase 5-2), the speaker embedders (8-2), the tone converters (8-3), the HarmonySpeech vocoder and VoiceFixer restorer/vocoder (8-4) forward padded sub-batches; KittenTTS runs parallel lanes (8-5); whisper's CT2 pipeline and Silero's sequential queue are documented skips. Every remaining `1` in the configs is a measured decision (`docs/batching.md`). The Chatterbox family stays a per-request loop by product decision (KV-cache workstream).
+- **Files:** `harmonyspeech/task_handler/model_runner_base.py`, `harmonyspeech/task_handler/batching.py`, `docs/batching.md`
+- **Remaining:** remove the historical `# FIXME: This is not properly batched` comments that still sit on migrated handlers, and the Comment/Chapter GPU runner stub (already tracked above).
+
 
 ### Scheduler Serializes Models With In-Flight Work
 

@@ -1,9 +1,18 @@
 """Unit tests for harmonyspeech/common/config.py — DeviceConfig, ModelConfig, EngineConfig."""
 
+import os
+
 import pytest
 import torch
+import yaml
 
 from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
+from harmonyspeech.modeling.loader import _MODEL_CONFIGS
+from harmonyspeech.task_handler.batching import (
+    BATCHED_INFERENCE_FAMILIES,
+    batched_inference_enabled,
+    supports_batched_inference,
+)
 
 # ── DeviceConfig ──────────────────────────────────────────────────────────────
 
@@ -185,19 +194,45 @@ model_configs:
     assert "tts-model" in names
     assert "stt-model" in names
 
-# ── Shipped config honesty (Phase 5-3) ────────────────────────────────────────
 
-import os as _os
+# ── Shipped config honesty (Phase 5-3, finalised in 8-6) ──────────────────────
 
-import yaml as _yaml
+#: Model types whose step is a plain per-request loop: one request per engine
+#: step, so `max_batch_size` is exactly 1. The HarmonySpeech synthesizer's
+#: vendored ForwardTacotron is padding-unsafe (Phase 8-4 audit: 0.16 peak drift);
+#: the whole Chatterbox family is out of scope by product decision (KV-cache
+#: workstream, see `docs/batching.md`).
+SINGLE_REQUEST_MODEL_TYPES = frozenset(
+    {
+        "HarmonySpeechSynthesizer",
+        "ChatterboxTTS",
+        "ChatterboxTurboTTS",
+        "ChatterboxMultilingualTTS",
+        "ChatterboxEmbedding",
+        "ChatterboxVC",
+    }
+)
 
-from harmonyspeech.task_handler.batching import batched_inference_enabled, supports_batched_inference
+#: Non-batched steps that still admit more than one request per step. Here the
+#: number is an admission width, a queue depth or a lane count — never a padded
+#: batch width — and each value is the one `docs/batching.md` justifies.
+CONCURRENCY_ONLY_MODEL_TYPES = {
+    # `BatchedInferencePipeline.transcribe()` batches the 30 s clips *inside one
+    # audio*; 16 is the scheduler's admission width (Phase 8-5 audit).
+    "FasterWhisper": 16,
+    # Sequential loop kept: `get_speech_timestamps` is single-stream and the
+    # shared wrapper is not thread-safe; 16 is queue depth (Phase 8-5 verdict).
+    "SileroVAD": 16,
+    # Static ONNX batch dimension of 1 → one request per lane; 4 is the lane
+    # count over the one shared session (Phase 8-5).
+    "KittenTTSSynthesizer": 4,
+}
 
 
 def _shipped_config(name: str):
-    repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-    with open(_os.path.join(repo_root, name), encoding="utf-8") as handle:
-        return _yaml.safe_load(handle)
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    with open(os.path.join(repo_root, name), encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
 
 
 @pytest.mark.unit
@@ -205,63 +240,50 @@ def _shipped_config(name: str):
 def test_shipped_config_batch_sizes_match_executor_reality(config_name):
     """`max_batch_size` is a capacity signal: it must equal what the executor does.
 
-    * Chatterbox is autoregressive and runs one request per step -> 1.
-    * One-shot synthesizers with a padded-batch forward -> > 1 (and the flag on).
-    * Every remaining handler runs a per-item loop -> 1.
-    * Whisper (BatchedInferencePipeline) and the cheap CPU loops keep their values.
+    The policy has exactly three classes (Phase 8-6 finalised the values):
+
+    * a model type with a real padded-batch forward (`BATCHED_INFERENCE_FAMILIES`)
+      admits more than one request per step and has batching enabled;
+    * a model type whose step is a per-request loop admits exactly one
+      (`SINGLE_REQUEST_MODEL_TYPES`);
+    * a non-batched step whose number means admission width, queue depth or lane
+      count keeps that documented value (`CONCURRENCY_ONLY_MODEL_TYPES`).
+
+    The three sets together must cover the loader registry, so a new model type
+    cannot ship without a deliberate capacity decision. The values themselves
+    must also agree word for word with `docs/batching.md`
+    (`tests/unit/test_batching_docs_matrix.py` cross-checks the matrix).
     """
     data = _shipped_config(config_name)
     entries = data["model_configs"]
-    by_name = {entry["name"]: entry for entry in entries}
 
-    chatterbox = [entry for entry in entries if entry["name"].startswith("chatterbox")]
-    assert chatterbox, f"{config_name}: no Chatterbox entries found"
-    for entry in chatterbox:
-        assert entry["max_batch_size"] == 1, entry["name"]
+    covered = BATCHED_INFERENCE_FAMILIES | SINGLE_REQUEST_MODEL_TYPES | set(CONCURRENCY_ONLY_MODEL_TYPES)
+    assert covered == set(_MODEL_CONFIGS)
 
-    loop_only = {
-        "hs1-encoder",
-        "hs1-synthesizer",
-        "hs1-vocoder",
-        "ov1-tone-converter",
-        "ov1-tone-converter-encoder",
-        "ov2-tone-converter",
-        "ov2-tone-converter-encoder",
-        "voicefixer-restorer",
-        "voicefixer-vocoder",
-    }
-    for name in loop_only:
-        entry = by_name.get(name)
-        if entry is None:
-            continue
-        assert entry["max_batch_size"] == 1, f"{name} runs a per-item loop"
-
-    for name, entry in by_name.items():
-        if name.startswith(("ov1-synthesizer-", "ov2-synthesizer-")):
-            assert entry["max_batch_size"] > 1, name
-            assert entry.get("batched_inference") is True, name
-
-    whisper = [entry for entry in entries if entry["model_type"] == "FasterWhisper"]
-    for entry in whisper:
-        assert entry["max_batch_size"] == 16, entry["name"]
-
-    kitten = [entry for entry in entries if entry["model_type"] == "KittenTTSSynthesizer"]
-    for entry in kitten:
-        assert entry["max_batch_size"] == 4, entry["name"]
-
-    silero = [entry for entry in entries if entry["model_type"] == "SileroVAD"]
-    for entry in silero:
-        assert entry["max_batch_size"] == 16, entry["name"]
+    for entry in entries:
+        name = entry["name"]
+        model_type = entry["model_type"]
+        size = entry["max_batch_size"]
+        if model_type in BATCHED_INFERENCE_FAMILIES:
+            assert size > 1, f"{config_name}: {name} has a padded-batch forward"
+            assert entry.get("batched_inference", True) is True, name
+        elif model_type in SINGLE_REQUEST_MODEL_TYPES:
+            assert size == 1, f"{config_name}: {name} admits one request per step"
+        else:
+            assert model_type in CONCURRENCY_ONLY_MODEL_TYPES, name
+            assert size == CONCURRENCY_ONLY_MODEL_TYPES[model_type], f"{config_name}: {name}"
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
 def test_shipped_config_loads_with_batched_inference_flags(config_name):
-    repo_root = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))))
-    config = EngineConfig.load_config_from_yaml(_os.path.join(repo_root, config_name))
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    config = EngineConfig.load_config_from_yaml(os.path.join(repo_root, config_name))
 
-    synth = [cfg for cfg in config.model_configs if supports_batched_inference(cfg)]
-    assert synth, config_name
-    assert all(batched_inference_enabled(cfg) for cfg in synth)
-    for cfg in synth:
-        assert cfg.max_batch_size > 1
+    batched = [cfg for cfg in config.model_configs if supports_batched_inference(cfg)]
+    assert batched, config_name
+    assert all(batched_inference_enabled(cfg) for cfg in batched)
+    # Phase 8-6: every family with a padded-batch forward now publishes its
+    # honest admission capacity, so the flag must be on and the capacity real.
+    for cfg in batched:
+        assert cfg.max_batch_size > 1, cfg.name
