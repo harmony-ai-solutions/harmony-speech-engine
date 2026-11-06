@@ -65,8 +65,39 @@ Run on an idle GPU (measurements precedent: GPU 1), OpenVoice V2 clone pipeline 
 
 ## Checklist
 
-- [ ] `/metrics` + `/health` cache series live (zeros when disabled)
-- [ ] Clone-flood benchmark recorded (same/distinct × cache on/off, c={1,4,20})
-- [ ] Ops docs incl. privacy note; CHANGELOG entry
-- [ ] Full suites green; knowledge docs updated
-- [ ] Phase 7 ticked in summary.md
+- [x] `/metrics` + `/health` cache series live (zeros when disabled)
+- [ ] Clone-flood benchmark recorded (same/distinct × cache on/off, c={1,4,20}) — **tooling + doc structure done; GPU benchmark run deferred to benchmark host**
+- [x] Ops docs incl. privacy note; CHANGELOG entry
+- [x] Full suites green (unit 655 / integration 37 / wire-contract e2e 38 + 3); knowledge docs updated
+- [x] Phase 7 ticked in summary.md
+
+## Deviations & notes (7-3)
+
+- **Metrics surface is slightly wider than the plan's list.** Beyond the eight
+  required series the exporter also emits `hse_embedding_cache_enabled` (0/1) and
+  `hse_embedding_cache_byte_evictions_total`, so "cache disabled" is
+  distinguishable from "cache cold" and every eviction reason is visible. Series
+  names, types and semantics are in `docs/embedding-cache.md`.
+- **`/health` + `/metrics` telemetry wiring was fixed, not just extended.** The
+  serving layer holds `AsyncHarmonySpeech`, which previously exposed neither
+  `get_vram_stats()` nor the `check_health()` payload to the endpoints, so the
+  Phase 4-5 VRAM block/series were being dropped at runtime (only the unit test
+  shell engine exercised them). 7-3 adds `get_vram_stats()` /
+  `get_embedding_cache_stats()` proxies and returns the payload from
+  `AsyncHarmonySpeech.check_health()`; the dead-loop `AsyncEngineDeadError`
+  behaviour is unchanged.
+- **Benchmark reference variants.** `--clone-reference distinct` derives its
+  per-request clips deterministically from the base reference (rotation by
+  `index × 37` samples + a 0.1 % gain change per index, re-encoded to WAV), which
+  keeps duration/sample rate and speech shape while guaranteeing a unique
+  `AudioArtifact.content_hash`. Request 0 is the untouched base clip so `same`
+  and `distinct` share a baseline. Families without reference audio ignore the
+  flag (one payload reused).
+- **Cache hits are across requests, not within one batch.** A handler resolves
+  every cache slot before computing any of them, so two identical requests that
+  land in the *same* engine step both miss (and both store). The engine-level
+  test therefore drives request 1 to completion before admitting request 2 —
+  that is the workload the cache targets.
+- **`docs/benchmarks/throughput.md` numbers are `_tbd_`.** Methodology, the four
+  tables (`same`/`distinct` × cache on/off), the scrape fields to record and the
+  reproduce commands are in place; the GPU run was out of scope for this task.

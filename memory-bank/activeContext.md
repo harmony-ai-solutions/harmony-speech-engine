@@ -8,6 +8,18 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 7 (COMPLETE, 2026-11-06)
+
+**Current workstream**: `.current_work/engine-modernization/` — phases 0–5 and 7 are complete; 6 is an opt-in backlog and 8 (batching across all steps) is queued.
+
+- **7-1**: `harmonyspeech/processing/embedding_cache.py` — one `EmbeddingCache` per engine, threaded executor → worker → model runner exactly like the weight registry. Keys are content-addressed over `(model_identity, audio_hash, params)` (`AudioArtifact.content_hash` = sha256 over decoded PCM + sample rate); values are `SpeakerArtifact`s deep-copied on put and on serve (Phase 0-2 isolation). Policy: TTL 300 s (lazy check + sweep every 16 puts), FIFO beyond 1000 entries (never LRU — a hit never reorders), optional 1 GiB byte ceiling; `bump_load_version` makes entries from a previous weight load unreachable.
+- **7-2**: cache seams in four handlers — Chatterbox embedding (`exaggeration` is part of the key), Chatterbox VC target audio, OpenVoice V1/V2 tone-converter encoder (`vad_source` is part of the key), Harmony Speech encoder. `embedding_cache=None` keeps the pre-Phase-7 path byte-for-byte. Config/CLI: `embedding_cache_enabled/ttl_s/max_entries/max_bytes`, `--embedding-cache-ttl-s`, `--embedding-cache-max-entries`, `--no-embedding-cache`.
+- **7-3**: `/metrics` cache series (`engine/embedding_cache_metrics.py`; every `hse_embedding_cache_*` series present — as zeros — when the cache is disabled), `get_embedding_cache_stats()` on the engine, `embedding_cache` block in `/health`, `AsyncHarmonySpeech` telemetry proxies (this also fixed a pre-existing gap: the serving layer holds the async wrapper, so `/health`'s `vram` block and `/metrics`' VRAM series had been silently dropped), `--clone-reference {same,distinct}` in `scripts/bench_throughput.py`, `docs/embedding-cache.md` (with the voice-biometric retention note), the Phase 7 section in `docs/benchmarks/throughput.md`, CHANGELOG.
+- Tests: `tests/unit/processing/test_embedding_cache.py`, `tests/unit/inference_flow/test_embedding_cache_integration.py`, `tests/unit/engine/test_embedding_cache_metrics.py`, `tests/unit/benchmarks/test_bench_throughput_references.py`, `tests/integration/test_embedding_cache_flow.py` (second identical clone request → the embed model runs once; with `embedding_cache_enabled=False` → twice, same audio).
+- Open: the GPU clone-flood measurement (`same`/`distinct` × cache on/off at c={1,4,20}) still has to be recorded in `docs/benchmarks/throughput.md`; the table structure and reproduce commands are in place and the numbers are `_tbd_`.
+
+Next up when work resumes: run the Phase 7 GPU benchmark, then Phase 8.
+
 ### Engine Modernization — Phase 5 (COMPLETE, 2026-11-04)
 
 **Current workstream**: `.current_work/engine-modernization/` — phases 0–5 complete; 6 is an opt-in backlog (not implemented).

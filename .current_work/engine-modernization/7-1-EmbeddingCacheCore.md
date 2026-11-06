@@ -94,7 +94,33 @@ CLI: `--embedding-cache-ttl-s` / `--embedding-cache-max-entries` / `--no-embeddi
 
 ## Checklist
 
-- [ ] `EmbeddingCache` implemented (TTL + FIFO 1000 + byte ceiling, copy-on-serve, lock, counters)
-- [ ] Config keys + CLI overrides wired; engine owns the cache
-- [ ] Unit tests for every policy rule green
-- [ ] `summary.md` Implementation Status updated
+- [x] `EmbeddingCache` implemented (TTL + FIFO 1000 + byte ceiling, copy-on-serve, lock, counters)
+- [x] Config keys + CLI overrides wired; engine owns the cache
+- [x] Unit tests for every policy rule green
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (executor, 2026-11-05)
+
+- **`put` signature**: gained an optional `model_identity` keyword (spec had
+  `put(key, value)`). `invalidate_model` filters entries by identity and a
+  sha256 key cannot be reversed, so `CacheEntry` records the identity it was
+  stored under. All call sites pass it.
+- **Load-version counters live on the cache** (`bump_load_version` /
+  `load_version`, per model name). The counter must be process-wide: a fresh
+  runner object for a reloaded config must not reset it, and the cache is the
+  engine-owned singleton both runner generations share. Not in the spec's
+  method list; runners call `bump_load_version` on every load.
+- **Byte ceiling is a hard bound**: an entry larger than the whole ceiling is
+  stored and then immediately evicted (oldest-first, possibly itself) —
+  documented + tested.
+- **CLI registration point**: the flags live in
+  `engine/args_tools.py::EngineArgs.add_cli_args` (`--embedding-cache-ttl-s`,
+  `--embedding-cache-max-entries`, `--no-embedding-cache`). The plan named
+  `endpoints/args.py`; that file only calls `AsyncEngineArgs.add_cli_args`, so
+  args_tools is the shared registration point (openai args unchanged, both
+  parsers get the flags).
+- **Engine disable semantics**: `embedding_cache_enabled=False` or
+  `ttl_s=0` both leave `engine.embedding_cache = None` (no object); a
+  directly-constructed cache with `ttl_s=0` also never stores.
+- Tests were written but **not executed locally** (no Python environment with
+  torch is available in this checkout); central verification pending.

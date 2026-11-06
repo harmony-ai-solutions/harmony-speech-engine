@@ -17,12 +17,15 @@
 
 ### Security
 
+*   **Voice-biometric retention is now explicit and configurable**: speaker characteristics derived from caller-supplied reference audio (the values that let the engine reproduce a voice) may be retained in process memory for a bounded time to avoid recomputing them. Retention is capped by age and by memory, is never written to disk, and can be tuned or switched off per deployment for environments with strict data-retention requirements. The behaviour and its tuning options are documented in the operations guide.
+
 *   **Hardened payload deserialization**:
     *   Client-supplied voice embeddings are no longer interpreted with arbitrary code execution enabled; unsupported payloads are rejected with a clear error response instead of being executed.
     *   Model checkpoints are loaded in the same restricted mode. A documented opt-in is available for trusted checkpoints that genuinely require the unrestricted format.
 
 ### Performance
 
+*   **Repeated voices are no longer recomputed**: cloning the same reference voice over and over (agent floods, batch jobs, a caller re-sending one voice) now reuses the previously computed speaker representation instead of re-running the embedding step on every request, removing that work from steady-state latency. The reuse is bounded by a default five-minute lifetime, an entry cap and a memory ceiling, is observable on `/health` and `/metrics` (hit ratio, misses, evictions) and can be tuned or disabled per deployment. Requests with distinct reference audio behave exactly as before.
 *   **Batched synthesis for one-shot models**: OpenVoice V1 and MeloTTS requests that arrive together in one engine step are now synthesized as a single padded batch instead of one at a time, with automatic grouping of similar-length texts. Short-request throughput rises (~14 % at concurrency 8 on a RTX 5060 Ti) and tail latency drops; long-form requests are unaffected. A per-model `batched_inference` switch reverts to the previous behaviour.
 *   **Truthful capacity signals**: `max_batch_size` now means "requests admitted per step **and processed together**". Entries whose executor works request-by-request declare 1 (Chatterbox, Harmony Speech, VoiceFixer, tone converters); the one-shot synthesizers declare the measured batch size and Whisper keeps its real internal batching. Chatterbox throughput scales with replicas, not batch size.
 *   **Reproducible sampling controls**: OpenVoice V1 and MeloTTS synthesis accept `noise_scale`, `noise_scale_w` and `sdp_ratio` per request (setting them to 0 makes synthesis deterministic).
@@ -34,6 +37,7 @@
 
 ### Fixes
 
+*   **Health and metrics report engine telemetry reliably**: `/health` now includes the GPU-memory and cache blocks it advertises, and `/metrics` publishes the cache series even while the cache is disabled (as zeros), so dashboards never have to special-case a missing metric family.
 *   **Requests above the batch limit are no longer dropped**: when more requests were waiting for a model than its `max_batch_size`, the surplus left the waiting queue without ever running or reporting an error, leaving the caller waiting until its timeout. They now stay queued for the next engine step.
 *   **Mixed batches cannot duplicate a response**: a response is built at most once per request per engine step, and an inconsistent batch fails the affected requests with a clear error instead of corrupting the pairing or crashing the processing loop.
 *   **Voice isolation between requests**: Speech conditioning is restored after every request, so a request can no longer be synthesized with the previous caller's voice.

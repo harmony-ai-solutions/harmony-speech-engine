@@ -20,6 +20,13 @@ Embedding-producing handlers in `harmonyspeech/task_handler/model_runner_base.py
 | `_execute_chatterbox_embedding` | Chatterbox embed step (used by TTS/VC pipelines and `/v1/embed/speaker`) | `SpeakerArtifact.conditionals` (object with device tensors) |
 | `_execute_chatterbox_vc` (target prep) | VC target voice → `ref_dict`/`set_target_voice` | same conditionals mechanism — **include if the seam is clean** (target audio is the repeated input in VC floods) |
 
+> **Executor note (2026-11-05): the VC seam is INCLUDED — verdict: clean.**
+> The cached value is the `ref_dict` tensor dict wrapped in
+> `SpeakerArtifact.conditionals` (the plain-dict form is an explicitly
+> supported conditionals stand-in); a hit assigns the per-request deep copy to
+> `model.ref_dict` and skips `set_target_voice`. Pre-computed conditionals
+> still take precedence over the cache. See Deviations.
+
 Boundary decode-once (Phase 2) already puts a decoded `AudioArtifact` on every request carrying `input_audio` — the hash is computed there, once.
 
 ## Implementation steps
@@ -83,9 +90,43 @@ Rules:
 
 ## Checklist
 
-- [ ] `AudioArtifact.content_hash` + admission computation
-- [ ] Cache wired into OV TCE (V1/V2), HarmonySpeech encoder, Chatterbox embedding (+VC target if clean — note decision)
-- [ ] Hit/miss batch composition preserves pairing invariants
-- [ ] Determinism + isolation + disabled-path tests green
-- [ ] Integration test proves zero recompute for repeated reference
-- [ ] `summary.md` Implementation Status updated
+- [x] `AudioArtifact.content_hash` + admission computation
+- [x] Cache wired into OV TCE (V1/V2), HarmonySpeech encoder, Chatterbox embedding (+VC target if clean — note decision)
+- [x] Hit/miss batch composition preserves pairing invariants
+- [x] Determinism + isolation + disabled-path tests green
+- [x] Integration test proves zero recompute for repeated reference (`tests/integration/test_embedding_cache_flow.py`)
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (executor, 2026-11-05)
+
+- **VC target seam: included** (verdict recorded in the Context table above).
+  The ref dict is cached as `SpeakerArtifact(conditionals=<ref_dict dict>,
+  backend="chatterbox")`; the cache's dict-aware deep copy provides Phase 0-2
+  isolation on serve.
+- **`load_version` bump seam location**: `ModelRunnerBase._load_model`
+  (`task_handler/model_runner_base.py`). Both `CPUModelRunner.load_model` and
+  `GPUModelRunner.load_model` call `_load_model()`, so one seam covers first
+  boot, reloads, and fresh runner objects for a reloaded config. The plan's
+  file table named `gpu_model_runner.py / cpu_executor.py`; neither needed
+  edits for the bump itself. Threading the cache to the runners follows the
+  weight-registry pattern and therefore touches `executor_base.py`,
+  `cpu_executor.py`, `gpu_executor.py`, `cpu_worker.py`, `gpu_worker.py`
+  (all None-safe).
+- **Failure tolerance**: cache key resolution (make_key + get) runs in a
+  per-request guard that degrades to a plain miss, and `cache.put` failures
+  are logged and dropped — the cache can never fail a request that would
+  otherwise succeed (no-cache fast-path parity).
+- **Admission hash warming** is a post-prefill pass in
+  `endpoints/openai/wire.py::from_wire_audio` (touching each decoded
+  artifact's lazy property). The decode itself lives in
+  `common/inputs.prefill_audio_artifacts`, which is unchanged — the hash is
+  computed lazily on first access anyway, admission only pre-warms it.
+- **Serve-path deep copy**: implemented inside the cache
+  (`EmbeddingCache.get` → `_copy_artifact`, a field-wise clone mirroring
+  `_clone_conditionals` plus CPU moves). It cannot literally import the
+  handler-layer helper (processing ← task_handler would invert the layering),
+  so the clone logic is deliberately duplicated in
+  `processing/embedding_cache.py` and kept structurally identical.
+- Tests were written but **not executed locally** (no Python environment with
+  torch is available in this checkout); central verification pending. The
+  engine-level integration proof is 7-3's exit work.

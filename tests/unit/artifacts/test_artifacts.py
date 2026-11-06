@@ -84,6 +84,50 @@ def test_audio_artifact_to_wav_bytes_is_pcm16():
 
 
 # ---------------------------------------------------------------------------
+# Content hash (Phase 7-2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_audio_artifact_content_hash_is_stable_across_calls():
+    artifact = AudioArtifact.from_numpy(_waveform(), 16000)
+
+    first = artifact.content_hash
+
+    assert artifact.content_hash == first
+    assert artifact._content_hash == first
+    assert len(first) == 64  # sha256 hex digest
+
+
+@pytest.mark.unit
+def test_audio_artifact_content_hash_identical_samples_match():
+    waveform = _waveform()
+
+    left = AudioArtifact.from_numpy(waveform, 16000)
+    right = AudioArtifact.from_numpy(waveform.copy(), 16000)
+
+    assert left.content_hash == right.content_hash
+
+
+@pytest.mark.unit
+def test_audio_artifact_content_hash_same_pcm_different_sample_rate_differs():
+    waveform = _waveform()
+
+    at_16k = AudioArtifact.from_numpy(waveform, 16000)
+    at_24k = AudioArtifact.from_numpy(waveform, 24000)
+
+    assert at_16k.content_hash != at_24k.content_hash
+
+
+@pytest.mark.unit
+def test_audio_artifact_content_hash_different_audio_differs():
+    left = AudioArtifact.from_numpy(_waveform(seconds=0.1), 16000)
+    right = AudioArtifact.from_numpy(_waveform(seconds=0.2), 16000)
+
+    assert left.content_hash != right.content_hash
+
+
+# ---------------------------------------------------------------------------
 # MelArtifact
 # ---------------------------------------------------------------------------
 

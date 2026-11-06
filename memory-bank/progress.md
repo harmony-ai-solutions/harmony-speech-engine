@@ -6,6 +6,20 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 7 (COMPLETE, 2026-11-06)
+
+**Plan folder**: `.current_work/engine-modernization/` (Phase 7 of the modernization; `summary.md` tracks all phases)
+
+- ☑ **7-1 Cache core** — `harmonyspeech/processing/embedding_cache.py`: `EmbeddingCache` (one per engine) keyed by `(model_identity, audio_hash, params)`; values are `SpeakerArtifact`s deep-copied on put and serve (Phase 0-2 isolation). TTL 300 s default (lazy + sweep every 16 puts), FIFO beyond 1000 entries, 1 GiB byte ceiling; per-model load version invalidates old generations.
+- ☑ **7-2 Handler integration** — cache seams in Chatterbox embedding, Chatterbox VC target audio, OpenVoice V1/V2 tone-converter encoder and Harmony Speech encoder; `AudioArtifact.content_hash` (sha256 over decoded PCM + rate) makes the key container-independent. Config keys + CLI (`--embedding-cache-ttl-s`, `--embedding-cache-max-entries`, `--no-embedding-cache`).
+- ☑ **7-3 Metrics, benchmark tooling & exit** — `/metrics` series (`hse_embedding_cache_{enabled,entries,bytes,hits_total,misses_total,stores_total,ttl_expirations_total,fifo_evictions_total,byte_evictions_total,hit_ratio}`) rendered zero-valued when disabled; `get_embedding_cache_stats()`; `embedding_cache` block on `/health`; `--clone-reference {same,distinct}` in `scripts/bench_throughput.py`; `docs/embedding-cache.md` (incl. privacy/retention note); Phase 7 section in `docs/benchmarks/throughput.md`; CHANGELOG.
+
+**Verification**: unit + integration suites green (663 before 7-3; new metrics/benchmark/engine-flow tests added in 7-3). Engine-level proof `tests/integration/test_embedding_cache_flow.py`: two clone requests with the same reference → one embedding pass (cache) vs two (cache disabled), identical synthesized audio. Remaining: the GPU clone-flood numbers (`same`/`distinct` × cache on/off, c={1,4,20}) must be filled into `docs/benchmarks/throughput.md` (structure + reproduce commands already there).
+
+**Deviations**: the cache is FIFO, not LRU (product decision) — a hit never reorders entries. Two extra Prometheus series beyond the plan's list (`_enabled`, `byte_evictions_total`) so "disabled" is distinguishable from "cold". 7-3 also fixed a pre-existing telemetry gap: `AsyncHarmonySpeech` now proxies `get_vram_stats()`/`get_embedding_cache_stats()` and returns the `check_health` payload, so `/health`'s `vram` block and `/metrics`' VRAM series reach the server again.
+
+**Next**: run the Phase 7 GPU benchmark, then Phase 8 (batching across all steps, except Chatterbox).
+
 ## Engine Modernization — Phase 5 (COMPLETE, 2026-11-04)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 5 of a 6-phase modernization; `summary.md` tracks all phases)

@@ -92,7 +92,12 @@ from harmonyspeech.task_handler.batching import (
     plan_batches,
     trim_decoder_output,
 )
-from harmonyspeech.task_handler.inputs import prepare_inputs
+from harmonyspeech.task_handler.inputs import (
+    as_request_input,
+    get_audio_artifact,
+    get_vad_artifact,
+    prepare_inputs,
+)
 
 
 def assert_batch_aligned(handler_name: str, inputs: list, requests: list) -> None:
@@ -212,6 +217,7 @@ class ModelRunnerBase:
         is_driver_worker: bool = False,
         *args,
         weight_registry=None,
+        embedding_cache=None,
         **kwargs,
     ):
         self.model_config = model_config
@@ -219,6 +225,13 @@ class ModelRunnerBase:
         # Engine-owned shared-weight registry (Phase 4-3); optional so tests and
         # standalone runners keep working without one.
         self.weight_registry = weight_registry
+        # Engine-owned cross-request embedding cache (Phase 7-1); None means
+        # disabled — every handler guards once at entry and then behaves
+        # exactly like pre-Phase-7. Also optional for tests/standalone runners.
+        self.embedding_cache = embedding_cache
+        # Cache identity (name/type/dtype/repo + load_version); built on every
+        # model load by `_refresh_model_identity`. None until the first load.
+        self.model_identity: str | None = None
 
         self.device_config = device_config if device_config is not None else DeviceConfig()
         self.device = self.device_config.device
@@ -233,7 +246,108 @@ class ModelRunnerBase:
         self._baseline_state: dict | None = None
 
     def _load_model(self):
+        # Every load (first boot or reload) starts a fresh cache generation:
+        # the per-name load counter bumps, keys derived under the previous
+        # weight load can no longer be produced, and the old identity's entries
+        # are dropped explicitly (Phase 7-1).
+        self._refresh_model_identity()
         return get_model(self.model_config, self.device_config, weight_registry=self.weight_registry)
+
+    # ------------------------------------------------------------------
+    # Cross-request embedding cache (Phase 7-2)
+    # ------------------------------------------------------------------
+
+    def _refresh_model_identity(self) -> None:
+        """(Re)build the embedding-cache identity, bumping the load version."""
+        cache = getattr(self, "embedding_cache", None)
+        previous = getattr(self, "model_identity", None)
+        if cache is None:
+            self.model_identity = None
+            return
+        if previous is not None:
+            cache.invalidate_model(previous)
+        config = self.model_config
+        version = cache.bump_load_version(config.name)
+        self.model_identity = "|".join(
+            (
+                config.name,
+                str(config.model_type),
+                str(config.dtype),
+                f"{config.model}@{config.revision or 'main'}",
+                f"v{version}",
+            )
+        )
+
+    def _embedding_cache_lookup(self, audio_artifact, params: dict) -> tuple:
+        """Resolve one cache slot for a request: ``(key, cached)``.
+
+        ``(None, None)`` means "no cache / not usable" — the caller computes
+        and (when a key exists) stores. A cached serve is a per-request deep
+        copy (Phase 0-2 isolation).
+        """
+        cache = getattr(self, "embedding_cache", None)
+        if cache is None or audio_artifact is None or self.model_identity is None:
+            return None, None
+        key = cache.make_key(
+            model_identity=self.model_identity,
+            audio_hash=audio_artifact.content_hash,
+            params=params,
+        )
+        return key, cache.get(key)
+
+    @staticmethod
+    def _chatterbox_embedding_params(initial_request) -> dict:
+        """Chatterbox cache params: ``exaggeration`` bakes into conditionals.
+
+        Read from the request's generation options (cloning TTS requests carry
+        them; standalone embed requests default to the model's 0.5).
+        """
+        options = getattr(getattr(initial_request, "request_data", None), "generation_options", None)
+        exaggeration = getattr(options, "exaggeration", None)
+        return {"exaggeration": float(exaggeration) if exaggeration is not None else 0.5}
+
+    @staticmethod
+    def _openvoice_encoder_params(initial_request) -> dict:
+        """OpenVoice TCE cache params: the VAD source decides the segment set.
+
+        Whisper and Silero produce different segments for the same audio
+        (Phase 3-4), so the key must never conflate them.
+        """
+        vad = get_vad_artifact(as_request_input(initial_request), initial_request, "input_vad_data")
+        return {"vad_source": vad.source or "unknown"}
+
+    def _store_embedding_cache_entry(self, key, artifact) -> None:
+        """Put a computed artifact, tagged with this runner's identity.
+
+        Storing is best effort: the computation already succeeded, so a cache
+        failure (e.g. an unclonable artifact) is logged and dropped instead of
+        failing the request.
+        """
+        cache = getattr(self, "embedding_cache", None)
+        if cache is None or key is None:
+            return
+        try:
+            cache.put(key, artifact, model_identity=self.model_identity)
+        except Exception as e:  # noqa: BLE001 - the cache must never fail serving
+            logger.debug(f"Embedding cache store failed for {self.model_identity}: {e}")
+
+    @staticmethod
+    def _resolve_cache_slots(handler_cache, requests_to_batch, resolver) -> list:
+        """Per-request cache resolution for one batch (hits before any compute).
+
+        ``resolver(i)`` returns ``(key, cached)`` for request ``i``. A
+        resolution failure can never fail the request — the cache is an
+        optimization, so the slot degrades to "miss, do not store".
+        """
+        slots: list = [(None, None)] * len(requests_to_batch)
+        if handler_cache is None:
+            return slots
+        for index in range(len(requests_to_batch)):
+            try:
+                slots[index] = resolver(index)
+            except Exception:  # noqa: BLE001 - cache resolution must not fail requests
+                slots[index] = (None, None)
+        return slots
 
     def _snapshot_chatterbox_state(self) -> dict:
         """Snapshot the model's conditionals so they can be restored later.
@@ -523,11 +637,24 @@ class ModelRunnerBase:
                 backend="harmonyspeech",
             )
 
+        # Cross-request cache (Phase 7-2): resolve hits for the whole batch
+        # first (guard once at entry — zero cost when no cache is attached),
+        # compute only the misses below; outputs stay in request order.
+        cache = getattr(self, "embedding_cache", None)
+        slots = self._resolve_cache_slots(
+            cache, requests_to_batch, lambda i: self._embedding_cache_lookup(inputs[i], {})
+        )
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                embedding = embed_utterance(x, initial_request)
+                key, cached = slots[i]
+                if cached is not None:
+                    embedding = cached
+                else:
+                    embedding = embed_utterance(x, initial_request)
+                    self._store_embedding_cache_entry(key, embedding)
                 result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
                 result.result_data.embedding_artifact = embedding
             except Exception as e:
@@ -654,11 +781,28 @@ class ModelRunnerBase:
             # Typed embedding artifact (no torch.save/text-encoding on the hop).
             return SpeakerArtifact(embedding=gs.cpu(), backend="openvoice")
 
+        # Cross-request cache (Phase 7-2). The key hashes the request's decoded
+        # input audio (not the VAD-sliced segments) plus the VAD source, which
+        # together determine the segment set the encoder embeds.
+        cache = getattr(self, "embedding_cache", None)
+
+        def _lookup(index):
+            entry = requests_to_batch[index]
+            audio = get_audio_artifact(as_request_input(entry), entry, "input_audio")
+            return self._embedding_cache_lookup(audio, self._openvoice_encoder_params(entry))
+
+        slots = self._resolve_cache_slots(cache, requests_to_batch, _lookup)
+
         outputs = []
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                embedding = run_converter_encoder(x, initial_request)
+                key, cached = slots[i]
+                if cached is not None:
+                    embedding = cached
+                else:
+                    embedding = run_converter_encoder(x, initial_request)
+                    self._store_embedding_cache_entry(key, embedding)
                 result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
                 result.result_data.embedding_artifact = embedding
             except Exception as e:
@@ -1366,9 +1510,11 @@ class ModelRunnerBase:
         still receive the 0-1-safe wire payload — that serialization happens
         only in the serving layer (``wire.to_wire_embedding``), never here.
 
-        A future embedding cache layer can intercept between this step and the
-        TTS re-submission in ``check_forward_processing``; the cache value would
-        be the ``Conditionals`` object / ``SpeakerArtifact``.
+        The cross-request cache (Phase 7-2) sits at this step: repeated
+        reference audio is served as a per-request deep copy of the stored
+        ``Conditionals`` and skips ``prepare_conditionals`` entirely. The
+        ``exaggeration`` option is part of the cache key (it bakes into
+        ``conditionals.t3.emotion_adv``).
 
         Payload format (wire only): ``{"t3": {<T3Cond fields>}, "gen": {<S3Gen ref
         fields>}}`` — a plain dict of tensors/primitives
@@ -1388,11 +1534,28 @@ class ModelRunnerBase:
             conditionals = self.model.conds
             return SpeakerArtifact(conditionals=conditionals, backend="chatterbox")
 
+        # Cross-request cache (Phase 7-2): resolve hits before any compute;
+        # served conditionals are deep copies, so the baseline-restore wrappers
+        # below are untouched (the cache sits above them, not inside).
+        cache = getattr(self, "embedding_cache", None)
+        slots = self._resolve_cache_slots(
+            cache,
+            requests_to_batch,
+            lambda i: self._embedding_cache_lookup(
+                inputs[i], self._chatterbox_embedding_params(requests_to_batch[i])
+            ),
+        )
+
         outputs = []
         for i, audio_artifact in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                embedding = compute_embedding(audio_artifact, initial_request)
+                key, cached = slots[i]
+                if cached is not None:
+                    embedding = cached
+                else:
+                    embedding = compute_embedding(audio_artifact, initial_request)
+                    self._store_embedding_cache_entry(key, embedding)
                 result = self._build_result(initial_request, "", SpeechEmbeddingRequestOutput)
                 result.result_data.embedding_artifact = embedding
             except Exception as e:
@@ -1403,19 +1566,50 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_chatterbox_vc(self, inputs, requests_to_batch):
-        """Execute ChatterboxVC to perform voice conversion."""
+        """Execute ChatterboxVC to perform voice conversion.
+
+        The target-voice preparation (``set_target_voice`` on the decoded
+        target audio) goes through the cross-request cache (Phase 7-2): in a
+        VC flood the *target* clip is the repeated input. The cached value is
+        the ``ref_dict`` tensor dict wrapped in a ``SpeakerArtifact``; a hit
+        assigns the per-request deep copy to ``model.ref_dict`` and skips the
+        audio pass entirely. Pre-computed conditionals always win over the
+        cache (an explicit embedding beats any inference).
+        """
         assert_batch_aligned("_execute_chatterbox_vc", inputs, requests_to_batch)
 
-        def convert(input_params, initial_request):
+        # Cross-request cache (Phase 7-2): only the "target audio" path computes
+        # anything cacheable; precomputed-conditionals and missing-target
+        # requests keep a (None, None) slot.
+        cache = getattr(self, "embedding_cache", None)
+
+        def _lookup(index):
+            _source, target_speaker, target_audio = inputs[index]
+            if target_speaker is not None or target_audio is None:
+                return None, None
+            return self._embedding_cache_lookup(target_audio, {})
+
+        slots = self._resolve_cache_slots(cache, requests_to_batch, _lookup)
+
+        def convert(input_params, initial_request, index):
             source_artifact, target_speaker, target_audio_artifact = input_params
+            key, cached = slots[index]
 
             conditionals = _chatterbox_conditionals(target_speaker, self.device)
             if conditionals is not None:
                 # Pre-computed Conditionals — extract .gen dict and assign to model.ref_dict
                 self.model.ref_dict = conditionals.gen
+            elif cached is not None:
+                # Cache hit on the target voice: the served dict is this
+                # request's own deep copy (Phase 0-2 isolation).
+                self.model.ref_dict = cached.conditionals
             elif target_audio_artifact is not None:
                 # Use the already-decoded target audio artifact to set the target voice
                 self.model.set_target_voice(_wav_buffer(_bind_to_device(target_audio_artifact, "cpu")))
+                self._store_embedding_cache_entry(
+                    key,
+                    SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox"),
+                )
             else:
                 raise ValueError("voice conversion requires target_audio or target_embedding")
 
@@ -1427,7 +1621,7 @@ class ModelRunnerBase:
         for i, x in enumerate(inputs):
             initial_request = requests_to_batch[i]
             try:
-                audio_artifact = convert(x, initial_request)
+                audio_artifact = convert(x, initial_request, i)
                 result = self._build_result(initial_request, "", VoiceConversionRequestOutput)
                 result.result_data.audio_artifact = audio_artifact
             except Exception as e:

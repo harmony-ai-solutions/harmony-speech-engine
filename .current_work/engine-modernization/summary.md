@@ -72,10 +72,10 @@ Track the completion of each phase as implementation progresses:
   - [x] Honest batch config & benchmarks — [5-3-HonestBatchConfigBenchmarks.md](5-3-HonestBatchConfigBenchmarks.md)
 - [ ] **Phase 6: Capabilities backlog (opt-in)**
   - [ ] Overview & prerequisites — [6-1-CapabilitiesBacklog.md](6-1-CapabilitiesBacklog.md)
-- [ ] **Phase 7: Cross-request embedding cache**
-  - [ ] Cache core (TTL 300 s default + FIFO >1000 + byte ceiling) — [7-1-EmbeddingCacheCore.md](7-1-EmbeddingCacheCore.md)
-  - [ ] Executor integration (OV TCE, hs1 encoder, Chatterbox embedding) — [7-2-CacheIntegrationHandlers.md](7-2-CacheIntegrationHandlers.md)
-  - [ ] Metrics, clone-flood benchmark & exit — [7-3-CacheMetricsBenchmark.md](7-3-CacheMetricsBenchmark.md)
+- [x] **Phase 7: Cross-request embedding cache** — **COMPLETE 2026-11-06** (unit 655 / integration 37 / wire-contract e2e 38 + 3 green, incl. CUDA unit tests; VC target voice seam included; clone-flood benchmark tooling + table structure landed, RTX 5060 Ti measurement run deferred).
+  - [x] Cache core (TTL 300 s default + FIFO >1000 + byte ceiling) — [7-1-EmbeddingCacheCore.md](7-1-EmbeddingCacheCore.md)
+  - [x] Executor integration (OV TCE, hs1 encoder, Chatterbox embedding + VC target) — [7-2-CacheIntegrationHandlers.md](7-2-CacheIntegrationHandlers.md)
+  - [x] Metrics, clone-flood benchmark & exit — [7-3-CacheMetricsBenchmark.md](7-3-CacheMetricsBenchmark.md)
 - [ ] **Phase 8: Batching across all steps (except Chatterbox)**
   - [ ] Batching core extensions (mel-frame + waveform axes) — [8-1-BatchingCoreExtensions.md](8-1-BatchingCoreExtensions.md)
   - [ ] Embedder batching (OV TCE v1/v2, hs1 encoder) — [8-2-EmbedderBatching.md](8-2-EmbedderBatching.md)

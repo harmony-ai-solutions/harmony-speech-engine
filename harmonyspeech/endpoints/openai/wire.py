@@ -27,6 +27,7 @@ import io
 import numpy as np
 import torch
 
+from harmonyspeech.common.artifacts import AudioArtifact
 from harmonyspeech.common.inputs import AUDIO_FIELDS, prefill_audio_artifacts
 from harmonyspeech.common.serialization import conditionals_to_payload
 from harmonyspeech.endpoints.openai.output_encoding import EncodedAudio, apply_output_options, encode_artifact
@@ -56,6 +57,12 @@ def from_wire_audio(request_input, artifacts=None, fields: list[str] | None = No
     """
     store = _store_of(artifacts)
     prefill_audio_artifacts(request_input, store)
+    # Phase 7-2: warm each artifact's content hash at admission so every
+    # downstream embedding-cache key computation is a dict lookup, never a
+    # re-hash of the same waveform.
+    for artifact in store.values():
+        if isinstance(artifact, AudioArtifact):
+            _ = artifact.content_hash
     if fields is not None:
         allowed = set(fields)
         for key in list(store):

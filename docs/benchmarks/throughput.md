@@ -173,3 +173,105 @@ long-form synthesis; the batching win lives in short, sentence-sized requests.
   The code path difference is exactly `batched_inference: true` vs `false`.
 * Logs, JSON reports and listening packs from these runs live under `out/`
   (untracked).
+
+## Phase 7 — Cross-request embedding cache (clone flood)
+
+Evidence for Phase 7: the OpenVoice V2 clone toolchain starts with a speaker
+embedding derived from the reference audio. With the cross-request cache enabled
+([`docs/embedding-cache.md`](../embedding-cache.md)) repeated reference audio
+should stop paying for that step; with distinct reference audio on every request
+the cache cannot help and the run should be at parity with the cache disabled.
+
+### Method
+
+* **Tooling.** `scripts/bench_throughput.py --families openvoice_v2` with the new
+  `--clone-reference` mode:
+  * `same` — every concurrent request clones the **same** reference clip
+    (`--reference repo_voice_a`). This is the worker-flood pattern: one voice,
+    many requests.
+  * `distinct` — each request gets a **different** deterministic variant of the
+    base clip (sample-offset rotation + tiny gain change, encoded to WAV), so
+    every request has a unique decoded `content_hash`: a guaranteed cache miss,
+    i.e. the worst case. Variants keep the base clip's duration and sample rate,
+    so VAD and the embedder see normal speech-length audio (no padding, no
+    synthetic silence).
+* **Two sides.** `cache-on` = the shipped default
+  (`embedding_cache_enabled: true`, TTL 300 s, 1000 entries, 1 GiB); `cache-off`
+  = the same build booted with `--no-embedding-cache`. Nothing else differs.
+* **Load.** OpenVoice V2 clone pipeline (Whisper VAD → tone-converter encoder →
+  MeloTTS → tone converter), concurrency {1, 4, 20}, 20 requests per level, 2
+  warmup requests. One text: "The quick brown fox jumps over the lazy dog near
+  the river bank."
+* **Host.** Idle GPU (measured precedent: `CUDA_VISIBLE_DEVICES=1`, RTX 5060 Ti
+  16 GiB), engine booted through the CLI so the measurement includes the serving
+  layer and WAV decoding.
+* **Scrape.** During each `cache-on` level, record
+  `hse_embedding_cache_hit_ratio`, `_hits_total`, `_misses_total`,
+  `_stores_total` and `_bytes` from `/metrics`; they are the proof that the
+  latency delta comes from the cache and not from run-to-run noise.
+
+Reproduce (per side, in two terminals):
+
+```bash
+# terminal 1 — cache on (default)
+CUDA_VISIBLE_DEVICES=1 python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path out/bench/config-post.yml --port 2242
+
+# terminal 2
+python scripts/bench_throughput.py --families openvoice_v2 --concurrency 1,4,20 \
+    --requests 20 --clone-reference same --label phase7-same-cache-on \
+    --config-note "OpenVoice V2 clone, embedding cache on (default)" \
+    --md-out docs/benchmarks/throughput.md
+
+python scripts/bench_throughput.py --families openvoice_v2 --concurrency 1,4,20 \
+    --requests 20 --clone-reference distinct --label phase7-distinct-cache-on \
+    --config-note "OpenVoice V2 clone, embedding cache on (default)" \
+    --md-out docs/benchmarks/throughput.md
+
+# restart terminal 1 with --no-embedding-cache, then repeat both runs with
+# --label phase7-same-cache-off / phase7-distinct-cache-off and the matching
+# --config-note "… embedding cache off (--no-embedding-cache)".
+```
+
+### Results — `same` (one voice, many requests)
+
+| Cache | Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|---|
+| on | 1 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | first request stores, later requests hit |
+| on | 4 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | |
+| on | 20 | _tbd_ | _tbd_ | _tbd_ | _tbd_ | |
+| off | 1 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | baseline: embed every request |
+| off | 4 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+| off | 20 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+
+### Results — `distinct` (a different voice per request)
+
+| Cache | Concurrency | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|---|
+| on | 1 | _tbd_ | _tbd_ | _tbd_ | ~0 | every request a unique clip → miss |
+| on | 4 | _tbd_ | _tbd_ | _tbd_ | ~0 | |
+| on | 20 | _tbd_ | _tbd_ | _tbd_ | ~0 | |
+| off | 1 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | parity expected |
+| off | 4 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+| off | 20 | _tbd_ | _tbd_ | _tbd_ | 0 (disabled) | |
+
+### Expected shape (to be confirmed on the GPU run)
+
+* `same` + cache on: the embedding step disappears from steady state, so p50 at
+  every concurrency level should drop by the embed hop's cost; throughput rises
+  because the tone-converter/synthesis hops that remain are the only per-request
+  work.
+* `distinct` + cache on ≈ `distinct`/`same` + cache off: a key derivation
+  (sha256 over the decoded PCM) per request is microseconds, far below the run-to-run
+  noise of the clone pipeline. Any material regression here is a bug, not a
+  property of the design.
+* `distinct` vs `same` at cache off: identical, which is the control that proves
+  the variant generation itself adds no engine cost.
+* Expect no change to the *tail* behaviour of the per-item tone-converter hops
+  (`max_batch_size: 1`, see Phase 5): the cache removes a serial step, it does
+  not add parallelism.
+
+Numbers are filled in after the measurement run on the idle GPU; the engine
+commit, torch/driver versions and cache settings belong in the block header
+(`--md-out` appends them automatically).
+

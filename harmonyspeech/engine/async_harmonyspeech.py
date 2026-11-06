@@ -553,12 +553,31 @@ class AsyncHarmonySpeech:
     async def do_log_stats(self) -> None:
         self.engine.do_log_stats()
 
-    async def check_health(self) -> None:
-        """Raises an error if engine is unhealthy."""
+    async def check_health(self) -> dict:
+        """Raises an error if the engine is stopped; otherwise returns its payload.
+
+        The structured payload (per-model health, VRAM and embedding-cache
+        accounting) rides along to ``/health``; a dead background loop stays a
+        hard error (Phase 0-5).
+        """
         t = time.perf_counter()
         logger.debug("Starting health check...")
         if self.is_stopped:
             raise AsyncEngineDeadError("Background loop is stopped.")
 
-        await self.engine.check_health_async()
+        payload = await self.engine.check_health_async()
         logger.debug(f"Health check took {time.perf_counter() - t}s")
+        return payload
+
+    # ------------------------------------------------------------------
+    # Observability proxies (Phase 4-5 / 7-3)
+    # ------------------------------------------------------------------
+    # The serving layer holds this wrapper, so the counter surfaces are exposed
+    # here too instead of forcing callers to reach through `.engine`.
+    def get_vram_stats(self) -> dict:
+        """Per-model VRAM accounting of the underlying engine."""
+        return self.engine.get_vram_stats()
+
+    def get_embedding_cache_stats(self) -> dict:
+        """Cross-request embedding-cache accounting of the underlying engine."""
+        return self.engine.get_embedding_cache_stats()

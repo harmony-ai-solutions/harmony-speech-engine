@@ -32,6 +32,7 @@ to be collected".
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -105,6 +106,11 @@ class AudioArtifact:
         if self.sample_rate <= 0:
             raise ValueError(f"AudioArtifact sample_rate must be positive, got {self.sample_rate!r}")
         self.waveform = _as_batched_waveform(self.waveform)
+        # Content hash (Phase 7-2): computed at admission where possible, or
+        # lazily on first :attr:`content_hash` access. Reset by
+        # ``dataclasses.replace`` (e.g. ``to()``), which re-runs ``__init__``;
+        # the recomputation over identical samples yields the same digest.
+        self._content_hash: str | None = None
         if self.device is None:
             self.device = self.waveform.device
         else:
@@ -139,6 +145,29 @@ class AudioArtifact:
     @property
     def duration_s(self) -> float:
         return self.num_samples / float(self.sample_rate)
+
+    @property
+    def content_hash(self) -> str:
+        """Content-addressed id over the decoded PCM + sample rate (Phase 7-2).
+
+        sha256 of the waveform's contiguous float32 bytes with the sample rate
+        mixed in, so a 16 kHz and a 24 kHz decode of one clip can never
+        collide, while two decodes that produced identical samples hash the
+        same regardless of their container (wav/flac/mp3). Computed once and
+        cached; admission (``wire.from_wire_audio``) warms it so downstream
+        cache-key computation never touches the samples again.
+        """
+        cached = getattr(self, "_content_hash", None)
+        if cached is not None:
+            return cached
+        samples = self.waveform.detach().cpu().contiguous().numpy().tobytes()
+        digest = hashlib.sha256()
+        digest.update(str(self.sample_rate).encode("ascii"))
+        digest.update(b"\x00")
+        digest.update(samples)
+        cached = digest.hexdigest()
+        self._content_hash = cached
+        return cached
 
     def resampled(self, sample_rate: int | None) -> AudioArtifact:
         """Return a transient, resampled view without caching it on the request.

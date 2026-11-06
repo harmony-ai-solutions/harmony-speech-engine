@@ -149,6 +149,14 @@ class EngineConfig:
     request_timeout_s: float | None = 120.0
     # Fail boot instead of warning when a declared pipeline is incomplete.
     strict_pipelines: bool = False
+    # Cross-request embedding/conditionals cache (Phase 7-1). `False` (or
+    # `embedding_cache_ttl_s: 0`) disables the cache entirely; product
+    # decision defaults: TTL 300 s, FIFO beyond 1000 entries, 1 GiB byte
+    # ceiling as a safety bound on top of the entry cap.
+    embedding_cache_enabled: bool = True
+    embedding_cache_ttl_s: float = 300.0
+    embedding_cache_max_entries: int = 1000
+    embedding_cache_max_bytes: int = 1073741824
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
@@ -173,6 +181,10 @@ class EngineConfig:
             model_configs=model_configs,
             request_timeout_s=config_data.get("request_timeout_s", 120.0),
             strict_pipelines=bool(config_data.get("strict_pipelines", False)),
+            embedding_cache_enabled=bool(config_data.get("embedding_cache_enabled", True)),
+            embedding_cache_ttl_s=float(config_data.get("embedding_cache_ttl_s", 300.0)),
+            embedding_cache_max_entries=int(config_data.get("embedding_cache_max_entries", 1000)),
+            embedding_cache_max_bytes=int(config_data.get("embedding_cache_max_bytes", 1073741824)),
         )
 
 

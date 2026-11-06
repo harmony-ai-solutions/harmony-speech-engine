@@ -130,6 +130,65 @@ def test_from_wire_audio_fills_an_engine_request_store():
     assert isinstance(engine_request.artifacts["input_audio"], AudioArtifact)
 
 
+@pytest.mark.unit
+def test_from_wire_audio_warms_the_content_hash_at_admission():
+    """The admission decode computes the hash once (Phase 7-2)."""
+
+    def _request(request_id: str) -> TextToSpeechRequestInput:
+        return TextToSpeechRequestInput(
+            request_id=request_id,
+            requested_model="harmonyspeech",
+            model="hs",
+            input_text="hello",
+            mode="voice_cloning",
+            input_audio=tiny_wav_b64(),
+        )
+
+    artifacts = from_wire_audio(_request("wire-3"))
+    artifact = artifacts["input_audio"]
+
+    warmed = artifact.content_hash
+    assert artifact._content_hash == warmed
+    # Two admissions of the identical payload produce the same content id.
+    twin = from_wire_audio(_request("wire-4"))["input_audio"]
+    assert twin.content_hash == warmed
+
+
+@pytest.mark.unit
+def test_content_hash_is_container_independent_for_identical_pcm():
+    """Same clip as WAV and FLAC decodes to one hash (Phase 7-2).
+
+    The clip is quantized to 16-bit PCM *once* and stored losslessly in both
+    containers: libsndfile's FLAC subtype tops out at 24-bit, so a float32
+    master would come back with ~1-LSB encoder differences and no hash could
+    survive the roundtrip. Identical integer PCM in lossless containers
+    decodes bit-exactly in both — that is the property the cache key needs.
+    """
+    waveform = (np.round(_waveform(seconds=0.1) * 32767)).astype(np.int16)
+
+    def _b64_container(fmt: str) -> str:
+        buffer = io.BytesIO()
+        sf.write(buffer, waveform, samplerate=24000, format=fmt, subtype="PCM_16")
+        return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    def _request(payload: str) -> TextToSpeechRequestInput:
+        return TextToSpeechRequestInput(
+            request_id=f"wire-{payload[:8]}",
+            requested_model="harmonyspeech",
+            model="hs",
+            input_text="hello",
+            mode="voice_cloning",
+            input_audio=payload,
+        )
+
+    from_wav = from_wire_audio(_request(_b64_container("WAV")))["input_audio"]
+    from_flac = from_wire_audio(_request(_b64_container("FLAC")))["input_audio"]
+
+    assert from_wav.sample_rate == from_flac.sample_rate
+    np.testing.assert_array_equal(from_flac.waveform.numpy(), from_wav.waveform.numpy())
+    assert from_flac.content_hash == from_wav.content_hash
+
+
 # ---------------------------------------------------------------------------
 # to_wire_audio: artifact path == legacy path (byte-identical default)
 # ---------------------------------------------------------------------------

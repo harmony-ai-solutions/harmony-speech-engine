@@ -20,6 +20,10 @@ class EngineArgs:
     request_timeout_s: float | None = None
     # Turn incomplete-pipeline startup warnings into a boot error.
     strict_pipelines: bool = False
+    # Embedding-cache overrides (Phase 7-1); None keeps the config-file value.
+    embedding_cache_ttl_s: float | None = None
+    embedding_cache_max_entries: int | None = None
+    no_embedding_cache: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -46,6 +50,26 @@ class EngineArgs:
                 "Can also be enabled with HSE_STRICT_PIPELINES=1."
             ),
         )
+        parser.add_argument(
+            "--embedding-cache-ttl-s",
+            type=float,
+            default=None,
+            help=(
+                "Cross-request embedding cache TTL in seconds, overriding the config file. "
+                "0 disables the cache entirely."
+            ),
+        )
+        parser.add_argument(
+            "--embedding-cache-max-entries",
+            type=int,
+            default=None,
+            help="Cross-request embedding cache FIFO cap, overriding the config file.",
+        )
+        parser.add_argument(
+            "--no-embedding-cache",
+            action="store_true",
+            help="Disable the cross-request embedding cache entirely.",
+        )
         return parser
 
     @classmethod
@@ -63,6 +87,12 @@ class EngineArgs:
             overrides["request_timeout_s"] = self.request_timeout_s
         if self.strict_pipelines:
             overrides["strict_pipelines"] = True
+        if self.embedding_cache_ttl_s is not None:
+            overrides["embedding_cache_ttl_s"] = self.embedding_cache_ttl_s
+        if self.embedding_cache_max_entries is not None:
+            overrides["embedding_cache_max_entries"] = self.embedding_cache_max_entries
+        if self.no_embedding_cache:
+            overrides["embedding_cache_enabled"] = False
         if overrides:
             return dataclasses.replace(base_config, **overrides)
         return base_config

@@ -35,6 +35,17 @@ Remaining batching work (explicitly out of scope for Phase 5): Chatterbox AR
 batching with a KV cache; batched tone-converter/encoder hops (they are per-item
 loops and cap end-to-end clone throughput at ~1.9 req/s).
 
+## Phase 7 resolutions (2026-11-06)
+
+| Finding | Status | Fix |
+|---|---|---|
+| Every voice-cloning request re-ran VAD/embedding even for audio the engine had already seen (the planned cache was only a comment) | **RESOLVED** (7-1, 7-2) | engine-owned `EmbeddingCache` keyed by model identity + `AudioArtifact.content_hash` + step params, wired into the Chatterbox embedding, Chatterbox VC target, OpenVoice tone-converter encoder and Harmony Speech encoder handlers; TTL 300 s, FIFO beyond 1000 entries, 1 GiB ceiling, config/CLI tunable, `--no-embedding-cache` to disable |
+| Cache behaviour would have been invisible to operators (and the privacy implications undocumented) | **RESOLVED** (7-3) | `/metrics` `hse_embedding_cache_*` series (zeros when disabled, never absent) + `/health` `embedding_cache` block; `docs/embedding-cache.md` documents what is retained, for how long, and how to disable it |
+| Clone-flood value was unmeasurable | **RESOLVED** (7-3) | `scripts/bench_throughput.py --clone-reference {same,distinct}` (distinct = a deterministic unique clip per request, the miss worst case); methodology + table structure in `docs/benchmarks/throughput.md` (GPU numbers pending) |
+
+Still open after Phase 7: the tone-converter/encoder hops remain per-item loops
+(Phase 8), so the cache removes a serial step but adds no parallelism.
+
 ## Overview
 
 The engine hosts every model in a YAML config as a permanently resident executor, executes batches request-by-request in Python loops, and transports all audio as base64 inside JSON. Three properties dominate the risk profile:
@@ -408,11 +419,12 @@ The engine hosts every model in a YAML config as a permanently resident executor
 - **Files:** `harmonyspeech/endpoints/openai/protocol.py:177-182`, `harmonyspeech/engine/harmonyspeech_engine.py:504`
 - **Blocks:** Declarative denoise/restore/format chains; VoiceFixer exists but must be called manually.
 
-### Embedding Cache
+### Embedding Cache — RESOLVED (Phase 7)
 
-- **Problem:** The embedding path documents a future cache ("Cache key: hash(audio_bytes) or voice_id", `model_runner_base.py:809-821`) but no cache exists. Every voice-cloning request re-runs VAD/embedding.
-- **Files:** `harmonyspeech/task_handler/model_runner_base.py:806-849`, `harmonyspeech/engine/harmonyspeech_engine.py:467-483`
-- **Blocks:** Low-latency repeated voice cloning; unnecessary GPU work.
+- **Was:** The embedding path documented a future cache ("Cache key: hash(audio_bytes) or voice_id", `model_runner_base.py:809-821`) but no cache existed. Every voice-cloning request re-ran VAD/embedding.
+- **Now (Phase 7, 2026-11-06):** the engine owns one `EmbeddingCache` (`harmonyspeech/processing/embedding_cache.py`) keyed by model identity + decoded-audio `content_hash` + step params (Chatterbox `exaggeration`, OpenVoice `vad_source`). TTL 300 s (lazy + sweep), FIFO beyond 1000 entries, 1 GiB byte ceiling; `--no-embedding-cache` / `embedding_cache_enabled: false` disables it (behaviour identical to pre-Phase-7). Observability: `hse_embedding_cache_*` on `/metrics` and an `embedding_cache` block on `/health`. Ops + privacy guidance in `docs/embedding-cache.md`; engine-level proof in `tests/integration/test_embedding_cache_flow.py` (one embedding pass for two identical clone requests, two with the cache disabled).
+- **Files:** `harmonyspeech/processing/embedding_cache.py`, `harmonyspeech/task_handler/model_runner_base.py`, `harmonyspeech/engine/embedding_cache_metrics.py`, `harmonyspeech/engine/harmonyspeech_engine.py`
+- **Residual risk:** derived voice biometrics stay in process memory for up to the TTL — documented, and disable-able for strict retention regimes. A same-batch pair of identical requests both miss (slots are resolved before any store), so the win is across requests, not within one step.
 
 ### `input_vad_mode` Selection — RESOLVED (Phase 3)
 

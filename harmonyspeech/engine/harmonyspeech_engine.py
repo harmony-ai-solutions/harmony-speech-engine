@@ -16,6 +16,7 @@ from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import RequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
+from harmonyspeech.engine.embedding_cache_metrics import embedding_cache_hit_ratio
 from harmonyspeech.engine.metrics import StatLogger, Stats
 from harmonyspeech.processing.pipeline_registry import (
     PipelineExecution,
@@ -47,6 +48,10 @@ class HarmonySpeechEngine:
         log_stats: bool,
         request_timeout_s: float | None = 120.0,
         strict_pipelines: bool = False,
+        embedding_cache_enabled: bool = True,
+        embedding_cache_ttl_s: float = 300.0,
+        embedding_cache_max_entries: int = 1000,
+        embedding_cache_max_bytes: int = 1073741824,
     ):
         self.model_configs = model_configs
         self.log_stats = log_stats
@@ -66,6 +71,22 @@ class HarmonySpeechEngine:
         from harmonyspeech.modeling.weight_registry import WeightRegistry
 
         self.weight_registry = WeightRegistry()
+
+        # One cross-request embedding/conditionals cache per engine (Phase 7-1),
+        # threaded to the runners with the same plumbing as the weight registry.
+        # `embedding_cache_enabled=False` (or `ttl_s=0`) leaves it None: handlers
+        # then take the no-cache fast path and behavior matches pre-Phase-7.
+        from harmonyspeech.processing.embedding_cache import EmbeddingCache
+
+        self.embedding_cache = (
+            EmbeddingCache(
+                ttl_s=embedding_cache_ttl_s,
+                max_entries=embedding_cache_max_entries,
+                max_bytes=embedding_cache_max_bytes,
+            )
+            if embedding_cache_enabled and embedding_cache_ttl_s and embedding_cache_ttl_s > 0
+            else None
+        )
 
         logger.info(
             f"Initializing Harmony Speech Engine (v{harmonyspeech.__version__}) with the following config:\nPreloaded Models = \n"
@@ -138,7 +159,11 @@ class HarmonySpeechEngine:
                 executor_class = GPUExecutorAsync
 
             # Create a new executor for each ModelConfig
-            executor = executor_class(model_config=model_cfg, weight_registry=self.weight_registry)
+            executor = executor_class(
+                model_config=model_cfg,
+                weight_registry=self.weight_registry,
+                embedding_cache=self.embedding_cache,
+            )
             # Append the created executor to the dict of model executors
             self.model_executors[model_cfg.name] = executor
 
@@ -665,8 +690,9 @@ class HarmonySpeechEngine:
 
         Returns ``{"healthy": bool, "models": {<executor name>: {"healthy": bool,
         "model_type": str, "vram_bytes": int, "error": str | None}},
-        "vram": {...}}``. ``vram`` is the Phase 4-5 summary (see
-        :meth:`get_vram_stats`).
+        "vram": {...}, "embedding_cache": {...}}``. ``vram`` is the Phase 4-5
+        summary (see :meth:`get_vram_stats`); ``embedding_cache`` is the Phase
+        7-3 cache accounting (see :meth:`get_embedding_cache_stats`).
         """
         vram = self.get_vram_stats()
         models: dict[str, dict] = {}
@@ -685,7 +711,47 @@ class HarmonySpeechEngine:
                 detail["healthy"] = False
                 detail["error"] = str(e)
             models[name] = detail
-        return {"healthy": healthy, "models": models, "vram": vram}
+        return {
+            "healthy": healthy,
+            "models": models,
+            "vram": vram,
+            "embedding_cache": self.get_embedding_cache_stats(),
+        }
+
+    # ------------------------------------------------------------------
+    # Cross-request embedding cache accounting (Phase 7-3)
+    # ------------------------------------------------------------------
+    def get_embedding_cache_stats(self) -> dict:
+        """Return the embedding-cache accounting used by ``/health`` + ``/metrics``.
+
+        ``enabled`` is ``False`` and every value ``0`` when the cache is disabled
+        at boot, so the exporter can keep every Prometheus series present.
+        Robust on a shell engine (``__new__`` without ``__init__``) and on
+        deployments that never constructed a cache.
+        """
+        cache = getattr(self, "embedding_cache", None)
+        if cache is None:
+            return {
+                "enabled": False,
+                "entries": 0,
+                "bytes": 0,
+                "hits": 0,
+                "misses": 0,
+                "stores": 0,
+                "ttl_expirations": 0,
+                "fifo_evictions": 0,
+                "byte_evictions": 0,
+                "hit_ratio": 0.0,
+            }
+        stats = dict(cache.stats())
+        stats["enabled"] = True
+        # Policy knobs ride along so an operator can see what the counters mean
+        # without re-reading the config file.
+        stats["ttl_s"] = getattr(cache, "ttl_s", None)
+        stats["max_entries"] = getattr(cache, "max_entries", None)
+        stats["max_bytes"] = getattr(cache, "max_bytes", None)
+        stats["hit_ratio"] = embedding_cache_hit_ratio(stats)
+        return stats
 
     # ------------------------------------------------------------------
     # VRAM accounting (Phase 4-5)

@@ -27,6 +27,7 @@ class CPUWorker(WorkerBase):
         distributed_init_method: str,
         is_driver_worker: bool = False,
         weight_registry=None,
+        embedding_cache=None,
     ) -> None:
         self.model_config = model_config
         self.device_config = device_config
@@ -35,11 +36,16 @@ class CPUWorker(WorkerBase):
         self.distributed_init_method = distributed_init_method
         self.is_driver_worker = is_driver_worker
         self.weight_registry = weight_registry
+        self.embedding_cache = embedding_cache
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
 
         self.model_runner = CPUModelRunner(
-            model_config, device_config, is_driver_worker=is_driver_worker, weight_registry=weight_registry
+            model_config,
+            device_config,
+            is_driver_worker=is_driver_worker,
+            weight_registry=weight_registry,
+            embedding_cache=embedding_cache,
         )
         # Uninitialized cache engine. Will be initialized by
         # initialize_cache

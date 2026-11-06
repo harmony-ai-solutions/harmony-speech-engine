@@ -31,6 +31,20 @@ Usage
 
 Reference clips come from ``tests/audio_fixtures`` (synthetic + repository
 samples), so a run needs no external assets.
+
+Clone flood (Phase 7)
+---------------------
+``--clone-reference same`` sends the ``--reference`` clip on every request (a
+worker flood: the same voice cloned concurrently). ``--clone-reference distinct``
+derives a deterministic variant per request, so every request has a different
+``content_hash`` and therefore a guaranteed embedding-cache miss — the worst
+case for the cross-request cache. Run each mode twice, once against a server
+booted with the cache enabled and once with ``--no-embedding-cache``, and record
+the four combinations in ``docs/benchmarks/throughput.md``:
+
+    python scripts/bench_throughput.py --families openvoice_v2 --concurrency 1,4,20 \\
+        --requests 20 --clone-reference same --label phase7-same-cache-on \\
+        --config-note "cache on (default)" --md-out docs/benchmarks/throughput.md
 """
 
 from __future__ import annotations
@@ -179,6 +193,89 @@ def _build_payload(family: str, reference_audio_b64: str, text_override: str | N
     return payload
 
 
+#: ``--clone-reference`` modes for the Phase 7 clone-flood scenario.
+CLONE_REFERENCE_MODES = ("same", "distinct")
+
+#: Samples the per-request distinct variants are rotated by. Any non-zero value
+#: works; 37 is prime relative to typical clip lengths so the rotations do not
+#: line up between requests.
+_DISTINCT_SHIFT_SAMPLES = 37
+
+
+def _variant_waveform(waveform, index: int):
+    """Return a deterministic, speech-length variant of ``waveform`` for request ``index``.
+
+    Index 0 is the untouched base clip (so a ``same`` run and the first
+    ``distinct`` request measure the same audio). Later requests are rotated by a
+    deterministic sample offset plus a small gain change: the clip keeps its
+    duration, sample rate and speech shape (VAD still segments it, the embedder
+    still works) but every request decodes to a different
+    :attr:`~harmonyspeech.common.artifacts.AudioArtifact.content_hash` — i.e. a
+    guaranteed cache miss.
+    """
+    if index == 0:
+        return waveform
+    import numpy as np
+
+    shift = (index * _DISTINCT_SHIFT_SAMPLES) % max(1, len(waveform))
+    variant = np.roll(waveform, shift)
+    variant = variant * np.float32(1.0 + 0.001 * index)
+    peak = float(np.max(np.abs(variant))) or 1.0
+    if peak > 0.99:
+        variant = variant * np.float32(0.99 / peak)
+    return variant.astype(waveform.dtype, copy=False)
+
+
+def distinct_reference_variants(reference_audio_b64: str, count: int) -> list[str]:
+    """Return ``count`` base64 WAVs, each decoding to a unique ``content_hash``.
+
+    Used by ``--clone-reference distinct`` to model the cache-miss worst case:
+    every concurrent request clones a different reference voice. Deterministic
+    per (clip, index) so a repeated run measures the same audio.
+    """
+    import base64
+
+    from harmonyspeech.common import audio_codec
+
+    if count <= 0:
+        return []
+    raw = base64.b64decode(reference_audio_b64)
+    # decode_audio normalises to mono float32, so variants are independent of the
+    # source container (wav/flac/mp3) exactly like the engine's admission decode.
+    waveform, sample_rate = audio_codec.decode_audio(raw)
+    variants: list[str] = []
+    for index in range(count):
+        encoded = audio_codec.encode_audio(_variant_waveform(waveform, index), sample_rate, "wav")
+        variants.append(base64.b64encode(encoded).decode("ascii"))
+    return variants
+
+
+def _reference_payloads(
+    family: str,
+    reference_audio_b64: str,
+    clone_reference: str = "same",
+    count: int = 1,
+    text_override: str | None = None,
+) -> list[dict]:
+    """Build one request payload per slot (``count`` of them) for a family.
+
+    ``same`` repeats the single ``--reference`` clip (the worker-flood pattern);
+    ``distinct`` gives every slot its own deterministic variant (cache-miss path).
+    Families without reference audio ignore the mode.
+    """
+    if clone_reference not in CLONE_REFERENCE_MODES:
+        raise ValueError(f"unknown clone-reference mode: {clone_reference!r}")
+    uses_reference = any(value == "__REFERENCE_AUDIO__" for value in FAMILY_SPECS[family]["payload"].values())
+    if not uses_reference:
+        # Nothing to vary: one payload is reused for every request.
+        return [_build_payload(family, reference_audio_b64, text_override)]
+    if clone_reference == "distinct":
+        references = distinct_reference_variants(reference_audio_b64, max(1, count))
+    else:
+        references = [reference_audio_b64] * max(1, count)
+    return [_build_payload(family, reference, text_override) for reference in references]
+
+
 async def _one_request(client, base_url: str, family: str, payload: dict, timeout: float):
     started = time.perf_counter()
     response = await client.post(base_url + FAMILY_SPECS[family]["path"], json=payload, timeout=timeout)
@@ -190,21 +287,23 @@ async def _one_request(client, base_url: str, family: str, payload: dict, timeou
     return elapsed, ok, response.status_code
 
 
-async def _run_level(client, base_url, family, payload, concurrency: int, total: int, timeout: float):
+async def _run_level(client, base_url, family, payloads, concurrency: int, total: int, timeout: float):
     queue: asyncio.Queue = asyncio.Queue()
-    for _ in range(total):
-        queue.put_nowait(None)
+    for index in range(total):
+        queue.put_nowait(index)
     latencies: list[float] = []
     failures = 0
     lock = asyncio.Lock()
+    payload_count = max(1, len(payloads))
 
     async def worker():
         nonlocal failures
         while True:
             try:
-                queue.get_nowait()
+                index = queue.get_nowait()
             except asyncio.QueueEmpty:
                 return
+            payload = payloads[index % payload_count]
             elapsed, ok, _status = await _one_request(client, base_url, family, payload, timeout)
             async with lock:
                 if ok:
@@ -267,16 +366,23 @@ async def run_benchmark(args) -> dict:
                 skipped[family] = f"model '{model}' is not configured on the target engine"
                 print(f"[bench] {family}: SKIP — {skipped[family]}", flush=True)
                 continue
-            payload = _build_payload(family, reference_audio, args.text)
-            payload["model"] = model
+            payloads = _reference_payloads(
+                family,
+                reference_audio,
+                clone_reference=getattr(args, "clone_reference", "same"),
+                count=args.requests,
+                text_override=args.text,
+            )
+            for payload in payloads:
+                payload["model"] = model
 
             for _ in range(args.warmup):
-                await _one_request(client, args.base_url, family, payload, args.timeout)
+                await _one_request(client, args.base_url, family, payloads[0], args.timeout)
 
             results = []
             for level in levels:
                 result = await _run_level(
-                    client, args.base_url, family, payload, level, args.requests, args.timeout
+                    client, args.base_url, family, payloads, level, args.requests, args.timeout
                 )
                 results.append(result)
                 print(
@@ -295,6 +401,7 @@ async def run_benchmark(args) -> dict:
         "env": _gpu_description(),
         "base_url": args.base_url,
         "requests_per_level": args.requests,
+        "clone_reference": getattr(args, "clone_reference", "same"),
         "families": {
             family: [result.as_dict() for result in results] for family, results in overtime.items()
         },
@@ -311,6 +418,7 @@ def _markdown(report: dict) -> str:
         f"{env.get('gpu') or 'CPU'} · driver {env.get('driver') or 'n/a'} · "
         f"CUDA_VISIBLE_DEVICES={env.get('cuda_visible_devices') or 'all'}",
         f"* config: {report.get('config') or 'n/a'}",
+        f"* clone reference: {report.get('clone_reference') or 'same'}",
         f"* {report['requests_per_level']} requests per concurrency level, HTTP against {report['base_url']}",
         "",
         "| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |",
@@ -330,8 +438,8 @@ def _markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Throughput benchmark against a running engine (Phase 5-3)")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Throughput benchmark against a running engine (Phase 5-3 / 7-3)")
     parser.add_argument("--base-url", default="http://127.0.0.1:2242")
     parser.add_argument("--families", default="melo,openvoice_v2,chatterbox,whisper")
     parser.add_argument("--concurrency", default="1,2,4,8")
@@ -339,6 +447,15 @@ def main(argv=None) -> int:
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--reference", default="repo_voice_a", help="reference clip name from tests/audio_fixtures")
+    parser.add_argument(
+        "--clone-reference",
+        choices=CLONE_REFERENCE_MODES,
+        default="same",
+        help=(
+            "clone-flood reference mode: 'same' sends the --reference clip on every request (worker flood); "
+            "'distinct' gives every request its own deterministic variant (embedding-cache miss worst case)"
+        ),
+    )
     parser.add_argument(
         "--text",
         default=None,
@@ -350,6 +467,11 @@ def main(argv=None) -> int:
     parser.add_argument("--force", action="store_true", help="run every family even if it is not advertised")
     parser.add_argument("--json-out", default="out/bench/throughput-latest.json")
     parser.add_argument("--md-out", default=None, help="append the markdown table to this file")
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     args.model = dict(item.split("=", 1) for item in args.model)
 

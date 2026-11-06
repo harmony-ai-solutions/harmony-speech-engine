@@ -110,11 +110,13 @@ async def lifespan(app: fastapi.FastAPI):
     yield
 
 
-# Prometheus metrics: the default registry's series plus the engine's VRAM
-# gauges (Phase 4-5). Rendered by hand so a scrape never needs a running GPU to
-# return a well-formed body.
-@router.get("/metrics", description="Prometheus metrics (default registry + VRAM gauges).")
+# Prometheus metrics: the default registry's series plus the engine's VRAM and
+# embedding-cache gauges/counters (Phase 4-5, 7-3). Rendered by hand so a scrape
+# never needs a running GPU — or even a live cache — to return a well-formed
+# body with every series present.
+@router.get("/metrics", description="Prometheus metrics (default registry + VRAM + embedding cache).")
 async def metrics() -> Response:
+    from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
     from harmonyspeech.engine.vram_metrics import render_vram_metrics
 
     body = generate_latest().decode("utf-8", errors="replace")
@@ -128,6 +130,16 @@ async def metrics() -> Response:
             body += render_vram_metrics(engine_ref.get_vram_stats())
         except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
             logger.warning(f"Failed to render VRAM metrics: {exc}")
+        try:
+            cache_stats = engine_ref.get_embedding_cache_stats()
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to read embedding cache stats: {exc}")
+            cache_stats = None
+        # Disabled/unavailable cache still renders every series (as zeros) so
+        # dashboards never see an absent metric family.
+        body += render_embedding_cache_metrics(cache_stats)
+    else:
+        body += render_embedding_cache_metrics(None)
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
@@ -147,6 +159,9 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("vram"):
             # Phase 4-5: per-model VRAM accounting rides along with /health.
             health_status["vram"] = result["vram"]
+        if isinstance(result, dict) and result.get("embedding_cache") is not None:
+            # Phase 7-3: cross-request embedding cache accounting.
+            health_status["embedding_cache"] = result["embedding_cache"]
         if isinstance(result, dict) and not result.get("healthy", True):
             health_status["text_to_speech"] = f"unhealthy: {result}"
             status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR
