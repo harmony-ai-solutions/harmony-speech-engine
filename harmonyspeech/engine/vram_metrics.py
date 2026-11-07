@@ -9,11 +9,23 @@ from __future__ import annotations
 _HELP = {
     "hse_model_vram_bytes": "CUDA allocation attributable to one resident model, in bytes.",
     "hse_model_weights_bytes": "Resident parameter/buffer size of one model (host or device), in bytes.",
+    "hse_model_peak_activation_bytes": (
+        "Measured max-shape activation peak of one model (device-level mem_get_info delta), "
+        "in bytes; 0 when the startup probe was skipped."
+    ),
     "hse_vram_allocated_bytes": "torch.cuda.memory_allocated() at scrape time.",
     "hse_vram_reserved_bytes": "torch.cuda.memory_reserved() at scrape time.",
     "hse_vram_peak_allocated_bytes": "Peak torch.cuda.memory_allocated() since boot.",
     "hse_vram_total_bytes": "Total memory of the active CUDA device.",
-    "hse_vram_headroom_bytes": "Free device memory (total minus reserved).",
+    "hse_vram_device_used_bytes": (
+        "Device-level memory in use (total minus free from torch.cuda.mem_get_info), in bytes; "
+        "includes CTranslate2 and CUDA context allocations that torch counters cannot see."
+    ),
+    "hse_vram_headroom_bytes": (
+        "Free device memory in bytes, from torch.cuda.mem_get_info(). Breaking change "
+        "(Phase 10-3): this used to be device total minus torch reserved and overstated "
+        "free memory whenever a non-torch model (CTranslate2/Whisper) held device memory."
+    ),
     "hse_resident_models": "Number of model executors currently resident.",
     "hse_shared_backbone_bytes": "Bytes of deduplicated backbone weights per backbone_group.",
     "hse_shared_total_bytes": "Bytes held by the shared-weight registry (loaded once).",
@@ -58,12 +70,22 @@ def render_vram_metrics(stats: dict) -> str:
         header("hse_model_weights_bytes")
         for name, detail in models.items():
             lines.append(_sample("hse_model_weights_bytes", detail.get("weights_bytes", 0), {"model": name}))
+        header("hse_model_peak_activation_bytes")
+        for name, detail in models.items():
+            lines.append(
+                _sample(
+                    "hse_model_peak_activation_bytes",
+                    detail.get("peak_activation_bytes", 0),
+                    {"model": name},
+                )
+            )
 
     for metric_name, key in (
         ("hse_vram_allocated_bytes", "allocated_bytes"),
         ("hse_vram_reserved_bytes", "reserved_bytes"),
         ("hse_vram_peak_allocated_bytes", "peak_allocated_bytes"),
         ("hse_vram_total_bytes", "total_bytes"),
+        ("hse_vram_device_used_bytes", "device_used_bytes"),
         ("hse_vram_headroom_bytes", "headroom_bytes"),
         ("hse_resident_models", "resident_models"),
     ):

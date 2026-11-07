@@ -52,13 +52,106 @@ Prove the phase's claims with the concurrency story the research promised, set m
 ## Tests / validation
 
 - Honesty + matrix tests green locally.
-- Benchmark set recorded (incl. the fairness proof and the memory-budget hold); all suites green.
+- Full local suites green: `tests/unit` **974 passed**, `tests/integration`
+  **59 passed**, `tests/e2e/wire_contract` **50 passed + 3 skipped**
+  (model-gated). The 4 pre-existing `tests/e2e/tts/test_harmonyspeech.py`
+  checkpoint-load errors are unchanged on this box (no weights).
+- Exhaustion proof green locally (`tests/integration/test_whisper_exhaustion.py`,
+  6 cases): 100-request tight-cap flood with zero loss/zero pairing errors,
+  timeout storm, waiting+in-flight abort storm, mocked-`mem_get_info` budget trip
+  (admission 6→2→1→0) and batch-level fallback counter.
+- Benchmark set recorded (incl. the fairness proof and the memory-budget hold);
+  all suites green. **Benchmark-host cells remain `_tbd_`** (no weights
+  downloaded); the structure + reproduce commands are in
+  `docs/benchmarks/throughput.md` §Phase 10.
 
 ## Checklist
 
 - [ ] `{lanes}` vs `{lanes+windows}` throughput + fairness percentiles recorded
+      — **structure + reproduce commands landed; host cells `_tbd_`**
 - [ ] M-sweep + window sweep → measured config values (honesty tests in sync)
+      — **initial values kept (turbo 2 / tiny 4 / windows 8); sweeps are `_tbd_`**
 - [ ] Device-memory budget held under load (10-3 validation)
+      — **local mocked-`mem_get_info` proof green; host trip run `_tbd_`**
 - [ ] 10-4 real-model spot-check green; docs + knowledge updated
-- [ ] Exhaustion scenarios recorded (100-request tight-cap flood + memory-budget trip) + local stubbed degradation tests green
-- [ ] Full suites green; Phase 10 ticked in summary.md
+      — **docs + knowledge updated; real-model spot-check `_tbd_`**
+- [x] Exhaustion scenarios recorded (100-request tight-cap flood + memory-budget
+      trip) + local stubbed degradation tests green
+      — **local tests green; host cells `_tbd_`**
+- [x] Full suites green; Phase 10 ticked in summary.md
+
+## Decisions (2026-11-07)
+
+1. **`batched_inference` stays opt-in for Whisper.** The window batcher has a
+   hermetic parity harness, per-request isolation and three safe fallbacks
+   (`len == 1`, flag off, batch-level failure), but the **B=1 real-model parity
+   gate has not run**. Flipping the shipped default now would make an
+   unvalidated re-implementation of faster-whisper's window formation/stitching
+   the default path; the phase's honesty principle says behaviour that changes
+   output semantics ships only after its gate. The shipped configs therefore
+   keep the flag unset, and the benchmark-host B=1 table in
+   `docs/benchmarks/throughput.md` §Phase 10 is the flip condition. Fallback
+   correctness and zero-loss degradation are proven locally
+   (`tests/integration/test_whisper_exhaustion.py`).
+2. **`num_workers` ships unmeasured.** Width only changes how many independent
+   requests overlap on shared weights; each request still runs the proven
+   per-request path, and the lane/isolation tests pin the M bound, per-thread
+   pipeline state and abort semantics. Owner-approved initial values stay:
+   turbo `2`, tiny `4`. The M-sweep tunes them on the host.
+3. **Window cap stays 8** (owner-approved initial) and remains a module constant
+   (`WHISPER_WINDOW_BATCH_SIZE`). The exhaustion scenario exercises 4 via the
+   batcher's constructor; making it operator-tunable is a small follow-up if the
+   host sweep shows a per-deployment win.
+4. **The five-class execution-model table is authoritative** for the config
+   honesty test; `ar_decode` has no shipped member until Phase 9-6 moves the
+   English/Turbo Chatterbox roles into it (the test asserts that pending state).
+
+## Deviations (2026-11-07)
+
+1. **Benchmark script scenarios are a new `--scenario` axis, not a new family.**
+   `scripts/bench_throughput.py` gained `--scenario {throughput,whisper-flood,
+   whisper-fairness,whisper-budget-trip}` plus the duration generator, audio
+   tiler, `/metrics` sampler/parser and per-request trace summary. The default
+   remains `throughput`, so every Phase 5/7/8 invocation is unchanged.
+   `--print-whisper-scenarios` is separate from `--print-scenarios` so the
+   existing Phase 8 recipe test keeps its exact output.
+2. **Per-request queue-wait is captured as the engine's histogram delta, not a
+   per-request log line.** The engine exposes
+   `hse_whisper_queue_wait_seconds_{sum,count,bucket}`; the harness records the
+   delta next to client wall time. True per-request pairing is proven by the
+   local engine tests, which have request ids and expected transcripts.
+3. **Local exhaustion tests use the real engine/scheduler/handler with stubbed
+   CT2, VAD and feature extraction** (no weights, CPU only). They mirror the
+   100-request heterogeneous flood, a timeout storm, a waiting+in-flight abort
+   storm and a batch-level fallback. The 8-minute request is included; total
+   runtime is ~14 s.
+4. **The memory-budget trip test mocks `torch.cuda.mem_get_info` but keeps the
+   real `get_whisper_admission` → `Scheduler.schedule()` path**, so the
+   observable is admitted requests per step (6 → 2 → 1 → 0), not a private
+   counter.
+5. **`docs/batching.md` gained a five-class table before the model matrix** (the
+   matrix section must stay the first table under its heading for the docs lint).
+   The Whisper row is the final "lanes M × windows B" wording and still declares
+   `16`; the docs-matrix test gained a Phase 10 assertion.
+6. **No config values changed.** The four owner-approved initial values are
+   already in `config.yml` / `config.gpu.yml` (turbo 2, tiny 4, window 8 as a
+   module constant, admission 16); this task only decides what ships unmeasured
+   and records it.
+7. **CHANGELOG needed no new entry.** The user-visible Phase 10 changes
+   (concurrent transcription + fairness, `srt`/`vtt`, `/v1/audio/translations`)
+   landed in 10-1/10-2/10-4; adding benchmark placeholders would be noise.
+8. **Measurement cells remain `_tbd_`.** No model weights were downloaded and
+   the benchmark-host session (Phase 7/8 piggyback) is outstanding; every table
+   structure and reproduce command is in place.
+9. **KittenTTS is classed `lanes_windows`** even though the task table's members
+   cell names only Faster-Whisper. The five classes have no separate "lanes"
+   class and every registered type must map to exactly one; KittenTTS is a
+   lanes-only member (its validator pins `max_batch_size` to the lane count and
+   forbids a batch flag), while Whisper is lanes × windows. The docs table states
+   both.
+10. **`whisper_max_audio_seconds` is documented as the probe's max shape, not an
+    admission rejection.** The 10-3 key is stamped onto the config for the
+    startup probe and is not enforced as a request-size limit today; the
+    exhaustion boot therefore sets it to 480 s so the probe covers the 8-minute
+    request. This corrects the earlier "request-size cap" wording rather than
+    adding a new admission rejection outside this task's files.

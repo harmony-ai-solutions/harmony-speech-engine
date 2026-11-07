@@ -20,6 +20,7 @@ instead of silently duplicating weights.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 
@@ -44,6 +45,23 @@ def module_nbytes(module: nn.Module) -> int:
     return total
 
 
+def _path_nbytes(path: str) -> int:
+    """Sum the size of a file or every file under a directory."""
+    try:
+        if os.path.isfile(path):
+            return int(os.path.getsize(path))
+    except OSError:
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += int(os.path.getsize(os.path.join(root, name)))
+            except OSError:
+                continue
+    return total
+
+
 def model_nbytes(model) -> int:
     """Resident weight bytes of a model object, shared submodules counted once.
 
@@ -52,11 +70,21 @@ def model_nbytes(model) -> int:
     *shared* between roles. Walking the attributes with identity de-duplication
     keeps the accounting honest (and keeps shared bytes out of per-model totals
     only when they are genuinely the same object).
+
+    Native models (CTranslate2 Whisper, Phase 10-3) have no torch tensors to
+    walk. Their loader attaches the resolved checkpoint directory as
+    ``model_path``; summing the files on disk is the checkpoint size the plan
+    asks ``hse_model_weights_bytes`` to report. A model without a resolvable
+    local path honestly reports ``0`` rather than a guess.
     """
     if model is None:
         return 0
     if isinstance(model, nn.Module):
         return module_nbytes(model)
+
+    model_path = getattr(model, "model_path", None)
+    if isinstance(model_path, str) and model_path:
+        return _path_nbytes(model_path)
 
     seen: set[int] = set()
     total = 0

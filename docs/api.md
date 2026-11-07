@@ -123,6 +123,8 @@ Returns the health status of all engine subsystems. Does not require authenticat
 
 If any subsystem is unhealthy, the response includes the error message and the HTTP status is `503`.
 
+The payload also carries a `vram` block (per-model memory, device-level used/free headroom, and each Whisper model's measured max-shape probe with a `probe_measured` annotation) and a `whisper_vram` block (the boot-time Whisper budget verdict). `vram.headroom_bytes` is **true free device memory** (`torch.cuda.mem_get_info`); the torch-scoped counters remain available as `allocated_bytes` / `reserved_bytes` / `peak_allocated_bytes`. See [VRAM profiles](benchmarks/vram-profiles.md#phase-10-3--device-level-truth).
+
 
 ### Version
 
@@ -425,8 +427,26 @@ Based on the [OpenAI Transcription API](https://platform.openai.com/docs/api-ref
 |-----------|------|----------|---------|-------------|
 | `model` | string | Yes | - | Name of the transcription model (e.g. `"faster-whisper-large-v3-turbo"`, `"faster-whisper-tiny"`) |
 | `input_audio` | string | Yes | - | Base64-encoded audio data to transcribe |
-| `get_language` | boolean | No | false | Whether to return the detected source language tag |
-| `get_timestamps` | boolean | No | false | Whether to return word-level timestamps |
+| `language` | string | No | null | Source-language hint (ISO 639-1, e.g. `"en"`, `"de"`). Omitted → detected automatically. |
+| `prompt` | string | No | null | Optional initial prompt (vocabulary/style) forwarded to the model. |
+| `response_format` | string | No | `json` | `json`, `text`, `srt` or `vtt`. `srt`/`vtt` are served as `text/plain`. Unknown values are rejected with HTTP 400. |
+| `get_language` | boolean | No | false | Whether to return the detected source language tag (JSON format only) |
+| `get_timestamps` | boolean | No | false | Whether to return word-level timestamps (JSON format only) |
+
+`response_format` values:
+
+| Value | Response |
+|---|---|
+| `json` | The `SpeechToTextResponse` object below (default; unchanged) |
+| `text` | The plain transcript as `text/plain` |
+| `srt` | SubRip subtitles (`HH:MM:SS,mmm` timings) as `text/plain` |
+| `vtt` | WebVTT subtitles (`WEBVTT` header, `HH:MM:SS.mmm` timings) as `text/plain` |
+
+Subtitle timings are rendered from the model's segment timestamps (rounded to the
+nearest millisecond); an empty transcript produces an empty document, not an
+error. Cue text keeps its internal line breaks, and a literal `-->` in the
+transcript is rendered as `- ->` so it cannot be mistaken for a timing line.
+
 
 **Example Request:**
 
@@ -463,6 +483,38 @@ curl -X POST "http://localhost:12080/v1/audio/transcriptions" \
 **GET /v1/audio/transcriptions/models**
 
 Returns the list of available transcription models.
+
+---
+
+### Speech Translation
+
+**POST /v1/audio/translations**
+
+Translates speech in an audio file into **English** text. Mirrors the
+transcription endpoint: the same request model, upload aliases (`file`, `audio`,
+`input_audio`), `response_format` values and `text/plain` subtitle output. The
+same Whisper pipeline runs with `task=translate`; `language` is a *source*
+hint only (the output language is always English, as in the OpenAI API).
+
+Based on the [OpenAI Translation API](https://platform.openai.com/docs/api-reference/audio/createTranslation).
+
+**Request Body Parameters:** identical to the transcription endpoint above
+(`model`, `input_audio`/file upload, `language` source hint, `prompt`,
+`response_format`, `get_language`, `get_timestamps`).
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:12080/v1/audio/translations" \
+  -F "file=@german_speech.mp3" \
+  -F "model=faster-whisper-large-v3-turbo" \
+  -F "response_format=vtt"
+```
+
+**Response:** the same formats as transcription — `json` returns a
+`SpeechToTextResponse` whose `text` is the English translation and whose
+`language` (with `get_language`) is the detected source language; `text`, `srt`
+and `vtt` return `text/plain`.
 
 ---
 

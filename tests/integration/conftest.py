@@ -67,6 +67,7 @@ def mock_engine_app():
     mock_stt.get_model_list = AsyncMock(return_value=ModelList(data=[ModelCard(id="test-stt-model")]))
     mock_stt.show_available_models = AsyncMock(return_value=ModelList(data=[ModelCard(id="test-stt-model")]))
     mock_stt.create_transcription = AsyncMock(return_value=SpeechToTextResponse(text="test transcription"))
+    mock_stt.create_translation = AsyncMock(return_value=SpeechToTextResponse(text="test translation"))
     mock_stt.engine = MagicMock()
     mock_stt.engine.check_health = AsyncMock(return_value=None)
 

@@ -51,13 +51,23 @@ until Phase 8 gave them a padded-batch forward.
 | Finding | Status | Fix |
 |---|---|---|
 | Clone path throughput flat (Phase 5-3: OV2 ~1.9 req/s at c=8, bound by the per-item tone-converter/encoder loops) | **ADDRESSED** (8-2, 8-3, 8-4, 8-6) | the OpenVoice tone-converter encoders/converters, Harmony Speech encoder/vocoder and VoiceFixer restorer/vocoder now run padded-batch forwards; the shipped configs declare `max_batch_size: 8` for those families (initial value, tuning pending the benchmark-host run). Measurement recorded at the benchmark host — `docs/benchmarks/throughput.md` §Phase 8 |
-| VAD/STT steps could only be "batched" by reimplementing upstream internals | **DOCUMENTED SKIP** (8-5) | faster-whisper batches *within* one audio (admission width `16`, one pipeline per step); Silero is single-stream and its lanes measured below break-even (0.95× at 8), so its loop stays with `16` as queue depth |
+| VAD/STT steps could only be "batched" by reimplementing upstream internals | **ADDRESSED** (8-5 → 10-1/10-2) | faster-whisper batches *within* one audio; Phase 10-1 adds M CTranslate2 lanes (3:1 short/long fairness) and Phase 10-2 an opt-in cross-request window batcher (≤8 windows, one `encode` + one `generate` per formed batch). Silero remains a documented skip (single-stream; lanes measured 0.95× at 8), so its loop stays with `16` as queue depth |
 | KittenTTS could not batch at all (static ONNX batch dim 1) | **RESOLVED** (8-5) | parallel lanes over one shared session: `max_batch_size` *is* the lane count (`4`), 1.71× at 4 lanes through the HTTP path is re-measured in §Phase 8 |
 | HarmonySpeech synthesizer stayed a loop | **DOCUMENTED SKIP** (8-4) | vendored ForwardTacotron drifts 0.16 peak under padding (bidirectional predictors/postnet); `max_batch_size: 1` is the honest value |
 
 Remaining batching work after Phase 8: the Chatterbox family only (per-sequence
 KV-cache scheduler, a separate workstream). Everything else is either batched,
 laned, or a documented skip in `docs/batching.md`.
+
+## Phase 10 resolutions (2026-11-07)
+
+| Finding | Status | Fix |
+|---|---|---|
+| Whisper requests piled up behind one sequentially executed model; a long recording could block every short clip (head-of-line) | **RESOLVED** (10-1, 10-2) | per-model `num_workers` → CT2 `inter_threads` with an M-worker dispatch pool and an M-bound semaphore; capacity admission fills each step from a `<=30 s` and a `>30 s` lane at 3:1; an opt-in cross-request window batcher forms one CT2 `encode` + one `generate` per ≤8-window batch. Headline metric is short-clip p95 under mixed load (Phase 10-5 tables, `_tbd_` on the host) |
+| CTranslate2 (Faster-Whisper) memory was invisible to every VRAM series, so reported headroom could not be trusted | **RESOLVED** (10-3) | `hse_vram_device_used_bytes` / `hse_vram_headroom_bytes` are device-level truth from `torch.cuda.mem_get_info` (torch + CT2 + CUDA contexts); a startup max-shape Whisper probe records per-model activation peaks; an optional `whisper_vram_budget_bytes` turns an overshoot into a boot error; runtime admission scales concurrent windows as device memory fills (pure `allowed_windows()`, mocked-`mem_get_info` proof in `tests/integration/test_whisper_exhaustion.py`) |
+| Whisper's `max_batch_size` had no shared semantic contract and the STT wire surface lacked subtitles/translation | **RESOLVED** (10-4, 10-5) | `response_format` json/text/srt/vtt + `/v1/audio/translations`; the config honesty test is now the declarative five-class table (`padded_batch` / `loop` / `queue_depth` / `lanes_windows` / `ar_decode`) with per-class validators, and Whisper is `lanes_windows` with its real knobs (`num_workers`, window cap) |
+| The window batcher changes output semantics and has not been parity-gated on real weights | **OPEN BY DECISION** (10-5, dated 2026-11-07) | stays **opt-in** (`batched_inference` unset in shipped configs) until the benchmark-host B=1 parity gate passes; hermetic parity harness + three safe fallbacks are in place |
+| Phase 10 measurements | **PENDING** | every Phase 10 table cell is `_tbd_` until the benchmark-host session (piggyback on the Phase 7/8 run) |
 
 ## Overview
 
@@ -259,7 +269,7 @@ The engine hosts every model in a YAML config as a permanently resident executor
 ### Per-Request Batching in Name Only — RESOLVED (Phases 5 & 8; Chatterbox excepted by decision)
 
 - **Was:** The scheduler built per-model batches up to `max_batch_size`, but every `_execute_*` method looped `for i, x in enumerate(inputs)` and ran the model once per item; `max_batch_size` was decorative for most families.
-- **Now:** the one-shot synthesizers (Phase 5-2), the speaker embedders (8-2), the tone converters (8-3), the HarmonySpeech vocoder and VoiceFixer restorer/vocoder (8-4) forward padded sub-batches; KittenTTS runs parallel lanes (8-5); whisper's CT2 pipeline and Silero's sequential queue are documented skips. Every remaining `1` in the configs is a measured decision (`docs/batching.md`). The Chatterbox family stays a per-request loop by product decision (KV-cache workstream).
+- **Now:** the one-shot synthesizers (Phase 5-2), the speaker embedders (8-2), the tone converters (8-3), the HarmonySpeech vocoder and VoiceFixer restorer/vocoder (8-4) forward padded sub-batches; KittenTTS runs parallel lanes (8-5); Whisper runs M CTranslate2 lanes with an opt-in cross-request window batcher (10-1/10-2); Silero's sequential queue is a documented skip. Every remaining `1` in the configs is a measured decision (`docs/batching.md`). The Chatterbox family stays a per-request loop by product decision (KV-cache workstream, Phase 9).
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py`, `harmonyspeech/task_handler/batching.py`, `docs/batching.md`
 - **Remaining:** remove the historical `# FIXME: This is not properly batched` comments that still sit on migrated handlers, and the Comment/Chapter GPU runner stub (already tracked above).
 

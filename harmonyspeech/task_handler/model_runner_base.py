@@ -59,12 +59,33 @@ Phase 5 invariants (honest batching)
   session/serialised phonemizer, per-request error isolation, results in input
   order). Silero lanes measured below break-even and stay sequential; the numbers
   and the mechanism are documented in ``docs/batching.md``.
+
+Phase 10 invariants (Whisper serving)
+-------------------------------------
+* **M-worker dispatch, not an unbounded thread pool.** A Whisper step runs at
+  most ``num_workers`` concurrent ``transcribe()`` calls through the runner's
+  own :class:`WhisperLanePool`; a semaphore makes the bound real even if two
+  callers race. ``num_workers`` is CT2 ``inter_threads`` (shared weights).
+* **Generators are consumed inside the worker.** The segment generator is
+  iterated in the worker thread, so compute time and exceptions belong to that
+  request; nothing is handed back to the engine half-consumed.
+* **Cancellation is cooperative at segment granularity.** faster-whisper has no
+  mid-``generate`` abort, so the worker checks the request state between
+  segments. An aborted request errors alone; its neighbours complete.
+* **Cross-request window batches (Phase 10-2).** A step with more than one
+  request folds every admitted request's ≤30 s windows into one CT2
+  ``encode`` + one ``generate`` per formed batch (≤8 windows), with per-request
+  prompts and segment stitching. ``len == 1``, ``batched_inference: false`` and
+  any batch-level batcher failure keep the per-request pipeline path; a single
+  poisoned request/window errors alone.
 """
 
 import copy
 import io
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
 import numpy as np
@@ -94,6 +115,7 @@ from harmonyspeech.common.request import EngineRequest, ExecutorResult
 # implementations live in ``common.serialization`` (weights_only=True loaders).
 from harmonyspeech.common.serialization import conditionals_to_payload as _conditionals_to_payload  # noqa: F401
 from harmonyspeech.common.serialization import load_embedding_tensor as _load_embedding_tensor  # noqa: F401
+from harmonyspeech.engine.whisper_lane_metrics import WHISPER_QUEUE_WAIT_BUCKETS
 from harmonyspeech.modeling.loader import get_model, get_model_config, get_model_flavour
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
@@ -115,6 +137,12 @@ from harmonyspeech.task_handler.inputs import (
     get_audio_artifact,
     get_vad_artifact,
     prepare_inputs,
+)
+from harmonyspeech.task_handler.whisper_batching import (
+    WhisperRequestAbortedError,
+    WhisperWindowBatcher,
+    whisper_batched_inference_enabled,
+    whisper_request_options,
 )
 
 
@@ -268,6 +296,250 @@ def _finalize_encoder_embedding(partial_embeds) -> SpeakerArtifact:
     )
 
 
+#: faster-whisper's intra-audio clip batch: one request's audio is cut into
+#: <=30 s clips and forwarded in groups of this size. Unrelated to
+#: ``max_batch_size`` (the scheduler's admission width) and to ``num_workers``
+#: (how many requests transcribe at once).
+WHISPER_CLIP_BATCH_SIZE = 16
+
+
+# ``WhisperRequestAbortedError`` is defined in ``whisper_batching`` (Phase 10-2)
+# and re-exported here for the Phase 10-1 callers/tests that import it from this
+# module. Its contract is unchanged: cancellation is cooperative (segment
+# granularity in the lane pool, batch granularity in the window batcher).
+
+
+def _request_finished(request) -> bool:
+    """True when the engine already aborted/finished ``request``."""
+    is_finished = getattr(request, "is_finished", None)
+    if not callable(is_finished):
+        return False
+    try:
+        return bool(is_finished())
+    except Exception:  # pragma: no cover - defensive on odd request stand-ins
+        return False
+
+
+def _ct2_queue_state(model) -> dict:
+    """Read CTranslate2's native batch counters when the binding exposes them.
+
+    CT2 4.4.0's ``Whisper`` exposes ``num_queued_batches`` /
+    ``num_active_batches`` (verified 2026-11-07); older/newer bindings may not,
+    so an absent or unreadable counter reports ``available: False`` with zeros
+    instead of raising inside a metrics scrape.
+    """
+    native = getattr(model, "model", None)
+    queued_attr = getattr(native, "num_queued_batches", None)
+    active_attr = getattr(native, "num_active_batches", None)
+    available = queued_attr is not None or active_attr is not None
+
+    def _int(value) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):  # pragma: no cover - odd binding state
+            return 0
+
+    return {"available": available, "queued": _int(queued_attr), "active": _int(active_attr)}
+
+
+class WhisperLanePool:
+    """M-worker dispatch for one Whisper model (Phase 10-1).
+
+    Owns a **persistent** ``ThreadPoolExecutor(max_workers=M)`` and a
+    ``threading.BoundedSemaphore(M)``. M is the model's ``num_workers`` (the
+    value faster-whisper forwards to CTranslate2 ``inter_threads``), never an
+    executor/anyio default: the point is to run exactly as many transcribes as
+    the card was sized for.
+
+    Each pool thread keeps its own ``BatchedInferencePipeline`` — a thin view
+    over the shared model that carries a word-timestamp cursor — so the
+    per-request cursor reset stays race-free while the CT2 weights stay shared.
+
+    Cancellation is cooperative at segment granularity: the worker checks the
+    request's engine state between segments and raises
+    :class:`WhisperRequestAbortedError`, which the handler turns into an error result
+    for that request only.
+
+    The pool is created lazily so ``ModelRunnerBase.__new__``-style test runners
+    (which bypass ``__init__``) keep working.
+    """
+
+    def __init__(self, model, num_workers: int = 1, clip_batch_size: int = WHISPER_CLIP_BATCH_SIZE) -> None:
+        self.model = model
+        self.num_workers = max(1, int(num_workers or 1))
+        self.clip_batch_size = max(1, int(clip_batch_size or WHISPER_CLIP_BATCH_SIZE))
+        self._pool: ThreadPoolExecutor | None = None
+        self._pool_lock = threading.Lock()
+        self._semaphore = threading.BoundedSemaphore(self.num_workers)
+        self._in_flight = 0
+        self._in_flight_lock = threading.Lock()
+        self._local = threading.local()
+        self._stats_lock = threading.Lock()
+        self._queue_wait_sum = 0.0
+        self._queue_wait_count = 0
+        self._queue_wait_max = 0.0
+        self._queue_wait_buckets = [0] * (len(WHISPER_QUEUE_WAIT_BUCKETS) + 1)
+
+    # -- pool lifecycle --------------------------------------------------
+    def _ensure_pool(self) -> ThreadPoolExecutor:
+        if self._pool is not None:
+            return self._pool
+        with self._pool_lock:
+            if self._pool is None:
+                self._pool = ThreadPoolExecutor(
+                    max_workers=self.num_workers,
+                    thread_name_prefix="whisper-worker",
+                )
+            return self._pool
+
+    def close(self) -> None:
+        """Drop the worker pool (model reload / runner teardown)."""
+        with self._pool_lock:
+            pool, self._pool = self._pool, None
+        if pool is not None:
+            pool.shutdown(wait=False)
+
+    def _pipeline(self):
+        """Return this thread's pipeline, creating it on first use."""
+        pipeline = getattr(self._local, "pipeline", None)
+        if pipeline is None:
+            pipeline = BatchedInferencePipeline(model=self.model)
+            self._local.pipeline = pipeline
+        return pipeline
+
+    # -- accounting ------------------------------------------------------
+    def _enter(self) -> None:
+        with self._in_flight_lock:
+            self._in_flight += 1
+
+    def _leave(self) -> None:
+        with self._in_flight_lock:
+            self._in_flight -= 1
+
+    def record_queue_wait(self, seconds) -> None:
+        """Record one request's admission-to-scheduling wait (histogram)."""
+        try:
+            value = float(seconds)
+        except (TypeError, ValueError):
+            return
+        if value < 0:
+            value = 0.0
+        with self._stats_lock:
+            self._queue_wait_sum += value
+            self._queue_wait_count += 1
+            self._queue_wait_max = max(self._queue_wait_max, value)
+            for index, edge in enumerate(WHISPER_QUEUE_WAIT_BUCKETS):
+                if value <= edge:
+                    self._queue_wait_buckets[index] += 1
+                    break
+            else:
+                self._queue_wait_buckets[-1] += 1
+
+    def stats(self) -> dict:
+        with self._in_flight_lock:
+            in_flight = self._in_flight
+        with self._stats_lock:
+            queue_wait = {
+                "sum": self._queue_wait_sum,
+                "count": self._queue_wait_count,
+                "max": self._queue_wait_max,
+                "buckets": list(self._queue_wait_buckets),
+            }
+        return {
+            "workers": self.num_workers,
+            "in_flight": in_flight,
+            "queue_wait": queue_wait,
+            "ct2": _ct2_queue_state(self.model),
+        }
+
+    # -- execution -------------------------------------------------------
+    def transcribe(self, audio_artifact, initial_request):
+        """Transcribe one request, consuming the generator fully in this thread.
+
+        Returns ``(json_payload, vad_artifact)``. The timestamp cursor reset is
+        preserved per invocation (Phase 0-2/8-5): the pipeline instance is
+        per-thread, and the cursor is zeroed before every call so one request's
+        segments can never shift the next request's timestamps.
+        """
+        if _request_finished(initial_request):
+            raise WhisperRequestAbortedError(
+                f"request {getattr(initial_request, 'request_id', '?')} was aborted before transcription"
+            )
+        pipeline = self._pipeline()
+        # faster-whisper takes a mono numpy array; the artifact already holds the
+        # boundary-decoded 16 kHz waveform.
+        audio_ref = _bind_to_device(audio_artifact, "cpu").numpy
+        # Task / source-language hint / initial prompt travel on the request
+        # input (Phase 10-4). `task` selects the `<|transcribe|>` or
+        # `<|translate|>` prompt token inside faster-whisper's tokenizer, exactly
+        # as the window batcher does.
+        task, language, prompt = whisper_request_options(initial_request)
+        pipeline.last_speech_timestamp = 0.0
+        segments, info = pipeline.transcribe(
+            audio_ref,
+            batch_size=self.clip_batch_size,
+            task=task,
+            language=language,
+            initial_prompt=prompt,
+        )
+
+        text = ""
+        segment_data = []
+        # Consume the generator *here*, inside the worker, so the GPU time lands
+        # in this worker's accounting (and so an exception surfaces in this
+        # request's result, not in a shared step).
+        for segment in segments:
+            if _request_finished(initial_request):
+                raise WhisperRequestAbortedError(
+                    f"request {getattr(initial_request, 'request_id', '?')} was aborted during transcription"
+                )
+            text += segment.text
+            segment_data.append(asdict(segment))
+
+        response = {"text": text, "segments": segment_data, "info": asdict(info)}
+        return json.dumps(response), VadArtifact.from_payload(response)
+
+    def _run_task(self, function, audio_artifact, initial_request):
+        """Run one transcribe under the M-bound semaphore, isolating failures."""
+        with self._semaphore:
+            self._enter()
+            try:
+                metrics = getattr(initial_request, "metrics", None)
+                wait = getattr(metrics, "time_in_queue", None)
+                if wait is not None:
+                    self.record_queue_wait(wait)
+                # `execute_model` runs under torch.inference_mode(), but that is
+                # thread-local; re-enter it in the worker thread.
+                with torch.inference_mode():
+                    return function(audio_artifact, initial_request), None
+            except Exception as error:  # noqa: BLE001 - becomes this request's error result
+                return None, error
+            finally:
+                self._leave()
+
+    def run(self, inputs, requests_to_batch, function) -> list[tuple]:
+        """Run ``function(input, request)`` per request, at most M at a time.
+
+        Returns one ``(payload, error)`` pair per request **in input order**.
+        ``len(inputs) == 1`` is a direct call on the calling thread (the fast
+        path, and the fallback); larger steps go through the owned pool.
+        """
+        if len(inputs) == 1:
+            return [self._run_task(function, inputs[0], requests_to_batch[0])]
+        pool = self._ensure_pool()
+        futures = [
+            pool.submit(self._run_task, function, audio_artifact, request)
+            for audio_artifact, request in zip(inputs, requests_to_batch, strict=True)
+        ]
+        results: list[tuple] = []
+        for future in futures:
+            try:
+                results.append(future.result())
+            except Exception as error:  # noqa: BLE001 - isolate an unexpected worker failure
+                results.append((None, error))
+        return results
+
+
 class ModelRunnerBase:
     def __init__(
         self,
@@ -297,6 +569,17 @@ class ModelRunnerBase:
 
         self.model = None
         self.model_memory_usage = 0
+        # Startup max-shape probe record for a CTranslate2 Whisper config
+        # (Phase 10-3). `None` means "not a whisper runner or not probed";
+        # `get_vram_stats` renders it as an explicit "not probed" annotation.
+        self.whisper_probe: dict | None = None
+        # M-worker dispatch pool for a Whisper config (Phase 10-1), created on
+        # first use; None until then (and for every non-Whisper runner).
+        self._whisper_pool: WhisperLanePool | None = None
+        # Cross-request window batcher (Phase 10-2), created on first use, and
+        # the count of batcher failures that fell back to the sequential path.
+        self._whisper_batcher_obj: WhisperWindowBatcher | None = None
+        self._whisper_batch_fallbacks = 0
 
         # Baseline Chatterbox conditioning state, captured right after the
         # model is loaded (see `_capture_baseline_state`). None means "not
@@ -630,20 +913,27 @@ class ModelRunnerBase:
         ids.add(request_id)
         return True
 
-    def _build_error_result(self, initial_request, exception: Exception):
+    def _build_error_result(self, initial_request, exception: Exception, *, log_exception: bool = True):
         """Build an error ExecutorResult for a single request that failed during inference.
         Wraps in ExecutorResult so _process_model_outputs / check_forward_processing can handle it
         without crashing. The serving layer then checks finish_reason == 'error' on result_data
         and returns an HTTP error to the caller.
+
+        ``log_exception=False`` is used for expected cooperative cancellations
+        (an aborted Whisper request): the request errors, but the server log
+        should not carry a traceback for a client-initiated abort.
         """
         request_id = initial_request.request_id
         self._register_result_id(request_id, raise_on_duplicate=False)
         metrics = initial_request.metrics
         metrics.finished_time = time.time()
         # Log full stack trace so the server-side cause is always visible in logs.
-        logger.opt(exception=exception).error(
-            f"Inference error for request {request_id}: {exception}"
-        )
+        if log_exception:
+            logger.opt(exception=exception).error(
+                f"Inference error for request {request_id}: {exception}"
+            )
+        else:
+            logger.info(f"Request {request_id} did not complete: {exception}")
         error_output = RequestOutput(
             request_id=request_id, finish_reason="error", error=str(exception), metrics=metrics
         )
@@ -1231,67 +1521,138 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
-    def _execute_faster_whisper(self, inputs, requests_to_batch):
-        """Transcribe (and segment, for the pipeline's VAD step) per request.
+    def _whisper_lane_pool(self) -> WhisperLanePool:
+        """Return this runner's Whisper lane pool, rebuilding it if M changed.
 
-        Phase 8-5 audit — **there is no cross-request batch to fold into one
-        call here.** In the installed ``faster_whisper`` (1.2.1),
-        ``BatchedInferencePipeline`` batches *within a single audio*:
-        ``transcribe(audio, ...)`` takes one path / file object / mono ndarray,
-        cuts it into <=30 s clips with faster-whisper's own VAD and pushes those
-        clips through ``forward()`` in groups of ``batch_size``
-        (``_batched_segments_generator`` → ``forward`` →
-        ``generate_segment_batched``). Neither ``transcribe()`` nor
-        ``WhisperModel.generate_segments()`` accepts a list of audios.
-
-        One handler call == one request's audio (``prepare_faster_whisper_inputs``
-        returns one ``AudioArtifact`` per request), and that holds for both
-        request paths: STT requests and the pipeline's whisper-segmentation VAD
-        step (a ``DetectVoiceActivityRequestInput`` routed to this model type)
-        arrive through the same prepare function, so both take this loop. Batching
-        across requests would mean re-implementing ``transcribe()`` — per-audio
-        VAD chunking, feature extraction, per-audio language detection (hence a
-        per-request tokenizer and prompt) and timestamp restoration — on top of
-        upstream internals. That trades a stable public API for a drifting copy,
-        so the loop stays and the skip is documented in ``docs/batching.md``.
+        The pool is owned by the runner (not created per step), so the worker
+        threads — and their per-thread pipelines — survive across engine steps
+        instead of being torn down and re-created. A model reload or a config
+        change swaps it.
         """
-        assert_batch_aligned("_execute_faster_whisper", inputs, requests_to_batch)
+        workers = max(1, int(getattr(self.model_config, "num_workers", 1) or 1))
+        model = getattr(self, "model", None)
+        pool = getattr(self, "_whisper_pool", None)
+        if pool is None or pool.num_workers != workers or pool.model is not model:
+            if pool is not None:
+                pool.close()
+            pool = WhisperLanePool(model, num_workers=workers)
+            self._whisper_pool = pool
+        return pool
 
-        # One pipeline per step (it is a thin view over the shared model). The
-        # clip batch is *intra-audio*, unrelated to ``max_batch_size``, which is
-        # the scheduler's admission width.
-        pipeline = BatchedInferencePipeline(model=self.model)
-        clip_batch_size = 16
+    def _whisper_window_batcher(self) -> WhisperWindowBatcher:
+        """Return this runner's cross-request window batcher (Phase 10-2).
 
-        def run_batched_transcribe(audio_artifact, initial_request):
-            # faster-whisper takes a mono numpy array; the artifact already holds
-            # the boundary-decoded 16 kHz waveform.
-            audio_ref = _bind_to_device(audio_artifact, "cpu").numpy
-            # The pipeline carries a word-timestamp cursor across calls; reset it
-            # per request so one request's segments can never shift the next
-            # request's timestamps (per-request state isolation, Phase 0-2).
-            pipeline.last_speech_timestamp = 0.0
-            segments, info = pipeline.transcribe(audio_ref, batch_size=clip_batch_size)
-            segment_data = []
-            text = ""
-            for segment in segments:
-                text += segment.text
-                segment_data.append(asdict(segment))
+        Stateless across steps, so it is simply rebuilt when the loaded model
+        changes (model reload / config swap). Kept on the runner so tests can
+        patch ``model_runner_base.WhisperWindowBatcher``.
+        """
+        model = getattr(self, "model", None)
+        batcher = getattr(self, "_whisper_batcher_obj", None)
+        if batcher is None or batcher.model is not model:
+            batcher = WhisperWindowBatcher(model)
+            self._whisper_batcher_obj = batcher
+        return batcher
 
-            response = {"text": text, "segments": segment_data, "info": asdict(info)}
-            return json.dumps(response), VadArtifact.from_payload(response)
+    def whisper_lane_stats(self) -> dict:
+        """Phase 10-1 lane accounting for ``/metrics`` (see ``get_whisper_lane_stats``)."""
+        pool = getattr(self, "_whisper_pool", None)
+        batch_fallbacks = int(getattr(self, "_whisper_batch_fallbacks", 0) or 0)
+        if pool is None:
+            return {
+                "workers": max(1, int(getattr(self.model_config, "num_workers", 1) or 1)),
+                "in_flight": 0,
+                "queue_wait": {"sum": 0.0, "count": 0, "max": 0.0, "buckets": []},
+                "ct2": _ct2_queue_state(getattr(self, "model", None)),
+                "batch_fallbacks": batch_fallbacks,
+            }
+        stats = dict(pool.stats())
+        stats["batch_fallbacks"] = batch_fallbacks
+        return stats
 
+    def _record_whisper_batch_fallback(self, request_count: int, error: Exception) -> None:
+        """Count + log a window-batcher failure that triggered the sequential fallback."""
+        self._whisper_batch_fallbacks = int(getattr(self, "_whisper_batch_fallbacks", 0) or 0) + 1
+        logger.opt(exception=error).warning(
+            f"Whisper window batcher failed for {request_count} request(s) ({error}); "
+            "falling back to per-request pipeline.transcribe for this step"
+        )
+
+    def _whisper_batched_pairs(self, inputs, requests_to_batch):
+        """Run the cross-request window batcher, normalized to the lane-pool contract."""
+        batcher = self._whisper_window_batcher()
+        pairs = []
+        for payload, error in batcher.transcribe_batch(inputs, requests_to_batch):
+            if error is not None:
+                pairs.append((None, error))
+                continue
+            pairs.append(((json.dumps(payload), VadArtifact.from_payload(payload)), None))
+        return pairs
+
+    def _build_whisper_outputs(self, requests_to_batch, pairs):
+        """Turn ``(payload, error)`` pairs into one result per request, in input order."""
         outputs = []
-        for i, x in enumerate(inputs):
-            initial_request = requests_to_batch[i]
+        for initial_request, (payload, error) in zip(requests_to_batch, pairs, strict=True):
+            if error is not None:
+                if isinstance(error, WhisperRequestAbortedError):
+                    result = self._build_error_result(initial_request, error, log_exception=False)
+                else:
+                    result = self._build_error_result(initial_request, error)
+                outputs.append(result)
+                continue
             try:
-                inference_result, vad_artifact = run_batched_transcribe(x, initial_request)
+                inference_result, vad_artifact = payload
                 result = self._build_result(initial_request, inference_result, SpeechTranscriptionRequestOutput)
                 result.result_data.vad_artifact = vad_artifact
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - pairing/result-building failure for this request only
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
+
+    def _execute_faster_whisper(self, inputs, requests_to_batch):
+        """Transcribe (and segment, for the pipeline's VAD step) per request.
+
+        Two execution paths share this handler (Phase 10-2):
+
+        * **Cross-request window batch** — when a step holds more than one
+          request and ``batched_inference`` is enabled. ``WhisperWindowBatcher``
+          collects every admitted request's ≤30 s windows, tags each row with
+          ``(request, window_index, offset)`` and issues one CT2
+          ``encode(batch)`` + one ``generate(encoder_output, prompts, …)`` per
+          formed batch (≤8 windows, owner-approved). CT2 owns the KV cache and
+          beam search; this handler only forms batches and stitches segments
+          back per request. Language detection reuses the batch's encoder
+          output (no second encoder pass).
+        * **Per-request pipeline** — the ``len == 1`` fast path, an explicit
+          ``batched_inference: false``, and the fallback when the batcher raises
+          (batch-level CT2 failure). A step of N requests is dispatched to the
+          runner's M-worker pool (M = ``num_workers`` = CT2 ``inter_threads``;
+          same-device workers share weights), each worker consuming its own
+          segment generator to the end (Phase 10-1).
+
+        Failure isolation: a request whose window collection/decoding fails is
+        returned as that request's error and never de-batches its neighbours.
+        A batch-level failure falls back to the per-request path for the whole
+        step, where the poisoned request errors alone — never a user-visible
+        error for the neighbours (Phase 8-3 deviation-6 discipline).
+
+        Cancellation is cooperative: the lane pool checks between segments, the
+        window batcher between formed batches (faster-whisper has no
+        mid-``generate`` abort), so an aborted request errors on its own while
+        the rest of the step completes.
+        """
+        assert_batch_aligned("_execute_faster_whisper", inputs, requests_to_batch)
+
+        if len(inputs) > 1 and whisper_batched_inference_enabled(self.model_config):
+            try:
+                return self._build_whisper_outputs(
+                    requests_to_batch, self._whisper_batched_pairs(inputs, requests_to_batch)
+                )
+            except Exception as error:  # noqa: BLE001 - never user-visible; sequential fallback
+                self._record_whisper_batch_fallback(len(requests_to_batch), error)
+
+        pool = self._whisper_lane_pool()
+        pairs = pool.run(inputs, requests_to_batch, pool.transcribe)
+        return self._build_whisper_outputs(requests_to_batch, pairs)
 
     def _execute_openvoice_synthesizer(self, inputs, requests_to_batch):
         assert_batch_aligned("_execute_openvoice_synthesizer", inputs, requests_to_batch)

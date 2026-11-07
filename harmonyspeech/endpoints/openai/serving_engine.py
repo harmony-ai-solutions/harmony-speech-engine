@@ -13,6 +13,7 @@ from harmonyspeech.endpoints.openai.protocol import (
 )
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 from harmonyspeech.processing.pipeline_registry import (
+    capabilities_for_model_type,
     model_types_advertising,
     specs_for_capabilities,
     validate_families,
@@ -265,7 +266,12 @@ class OpenAIServing:
         for config in configured_models:
             if config.model_type not in individual_types or config.name in individual_cards:
                 continue
-            individual_cards[config.name] = OpenAIServing.model_card_from_config(config)
+            card = OpenAIServing.model_card_from_config(config)
+            # Additive capability metadata, derived from the registry steps
+            # (Phase 10-4): a Whisper card reports stt/translation/vad without a
+            # hand-written list.
+            card.capabilities = sorted(capabilities_for_model_type(config.model_type))
+            individual_cards[config.name] = card
 
         cards: list[ModelCard] = list(individual_cards.values())
         for spec in specs_for_capabilities(wanted):

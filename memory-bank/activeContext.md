@@ -8,6 +8,18 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 10 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
+
+**Current workstream**: `.current_work/engine-modernization/` — Phase 10 is Whisper serving. 10-1 (lanes), 10-2 (cross-request window batcher), 10-3 (memory governance), 10-4 (STT wire formats) and 10-5 (gates/benchmarks/exit) are code-complete.
+
+- **10-1**: per-model `num_workers` → CT2 `inter_threads`; runner-owned M-worker pool + semaphore; two-lane (≤30 s vs >30 s, 3:1) capacity admission; lane/queue/CT2 metrics; segment-bound abort.
+- **10-3**: device-level VRAM truth (`mem_get_info`), startup max-shape Whisper probe, optional budget boot check, pure `allowed_windows()` admission hook.
+- **10-2**: opt-in `batched_inference: true` forms one CT2 `encode` + one `generate` per ≤8-window batch across all admitted requests (windows via faster-whisper's VAD/`collect_chunks`), per-request prompts, upstream timestamp restoration/stitching, identical payload; fallbacks `len==1`/flag off/batch failure; admission counts `ceil(seconds/30)` windows; `hse_whisper_batch_fallbacks_total`. API verified against CT2 4.4.0 (encode output accepted by generate/detect_language).
+- **10-4**: `response_format` json/text/srt/vtt with admission 400s (json unchanged); pure SRT/WebVTT renderer (≥1 h, sub-ms, empty, cue-text rules); `/v1/audio/translations` with `task=translate` threaded through the sequential lane and 10-2's batcher prompts (faster-whisper encodes task via `Tokenizer.sot_sequence`); `language` source hint + `prompt`; `translation` capability on the Whisper spec surfaced on individual cards.
+- **10-5**: `scripts/bench_throughput.py` gained the Phase 10 scenario family (100-request heterogeneous tight-cap flood with per-request traces + `/metrics` lane-depth sampling, long-first fairness, memory-budget trip, lanes-vs-windows/M/window sweeps; `--print-whisper-scenarios`). Local CPU proof `tests/integration/test_whisper_exhaustion.py`: zero loss/zero pairing under the flood, timeout storm, waiting+in-flight abort storm, batch-failure fallback counter, mocked-`mem_get_info` budget trip (admission 6→2→1→0). The config honesty test is the declarative five-class table (`padded_batch`/`loop`/`queue_depth`/`lanes_windows`/`ar_decode`; `ar_decode` pending until 9-6). **Dated decision 2026-11-07:** `batched_inference` stays opt-in until the B=1 real-model parity gate; `num_workers` (turbo 2 / tiny 4) and window cap 8 ship unmeasured. Docs: `docs/benchmarks/throughput.md` §Phase 10, `vram-profiles.md` budget trip, `docs/models.md` capacity; all measurement cells `_tbd_`.
+
+Next up when work resumes: the benchmark-host session (piggyback on Phase 7/8) fills the Phase 10 `_tbd_` cells, including the B=1 parity gate that flips `batched_inference`.
+
 ### Engine Modernization — Phase 8 (CODE COMPLETE, 2026-11-06; measurement run pending)
 
 **Current workstream**: `.current_work/engine-modernization/` — phases 0–5, 7 and 8 are code-complete; 6 is an opt-in backlog. Phase 8's GPU measurements are queued for the benchmark host.

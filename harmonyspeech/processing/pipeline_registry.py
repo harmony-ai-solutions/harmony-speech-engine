@@ -68,6 +68,7 @@ __all__ = [
     "Step",
     "advance",
     "available_model_types",
+    "capabilities_for_model_type",
     "completed_step_state",
     "field_present",
     "format_missing_step",
@@ -90,11 +91,12 @@ TTS = "tts"
 EMBED = "embed"
 VC = "vc"
 STT = "stt"
+TRANSLATION = "translation"
 VAD = "vad"
 RESTORE = "restore"
 
 #: Every capability a pipeline can advertise on ``/v1/models``.
-CAPABILITIES: frozenset[str] = frozenset({TTS, EMBED, VC, STT, VAD, RESTORE})
+CAPABILITIES: frozenset[str] = frozenset({TTS, EMBED, VC, STT, TRANSLATION, VAD, RESTORE})
 
 
 # ---------------------------------------------------------------------------
@@ -709,18 +711,18 @@ _KITTEN_TTS = PipelineSpec(
 
 _FASTERWHISPER = PipelineSpec(
     id="fasterwhisper",
-    description="Faster-Whisper transcription / VAD single-step pipeline",
+    description="Faster-Whisper transcription / translation / VAD single-step pipeline",
     steps=(
         Step(
             name="transcribe",
             requires=("FasterWhisper",),
             needs=frozenset({"input_audio"}),
             produces=(("vad_artifact", "input_vad_data"),),
-            advertises=(STT, VAD),
+            advertises=(STT, TRANSLATION, VAD),
         ),
     ),
     final_step="transcribe",
-    capabilities=frozenset({STT, VAD}),
+    capabilities=frozenset({STT, TRANSLATION, VAD}),
     entry_rules=(EntryRule("transcribe", lambda request, artifacts: True, "transcribe", "transcribe"),),
     advertise_toolchain=False,
 )
@@ -812,6 +814,21 @@ def model_types_advertising(capabilities: str | Iterable[str]) -> set[str]:
             if set(step.advertises) & wanted:
                 types.update(step.requires)
     return types
+
+
+def capabilities_for_model_type(model_type: str) -> set[str]:
+    """Return every capability a configured ``model_type`` advertises.
+
+    Individual model cards carry this set additively (Phase 10-4), so a card
+    never needs a hand-written capability list: a Whisper executor advertises
+    ``stt``, ``translation`` and ``vad`` because the registry's step says so.
+    """
+    capabilities: set[str] = set()
+    for spec in PIPELINE_SPECS.values():
+        for step in spec.steps:
+            if model_type in step.requires:
+                capabilities.update(step.advertises)
+    return capabilities
 
 
 # ---------------------------------------------------------------------------

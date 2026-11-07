@@ -135,6 +135,76 @@ def test_tts_reference_audio_format_and_transport(wire, test_data_dir, input_for
 
 
 # ---------------------------------------------------------------------------
+# STT response formats (Phase 10-4): both endpoints x {json, text, srt, vtt}
+# ---------------------------------------------------------------------------
+
+STT_ENDPOINTS = ["/v1/audio/transcriptions", "/v1/audio/translations"]
+STT_RESPONSE_CASES = [
+    ("json", "application/json"),
+    ("text", "text/plain"),
+    ("srt", "text/plain"),
+    ("vtt", "text/plain"),
+]
+
+_SRT_DOCUMENT = "1\n00:00:00,000 --> 00:00:01,000\nhello world\n"
+_VTT_DOCUMENT = "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhello world\n"
+
+
+@pytest.mark.parametrize("endpoint", STT_ENDPOINTS)
+@pytest.mark.parametrize(("response_format", "media_type"), STT_RESPONSE_CASES)
+def test_stt_response_format_matrix(wire, endpoint, response_format, media_type):
+    response = wire.client.post(
+        endpoint,
+        json={
+            "model": WireApp.MODEL_IDS["stt"],
+            "input_audio": sample_b64("codec_tone.wav"),
+            "response_format": response_format,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(media_type)
+
+    if response_format == "json":
+        body = response.json()
+        assert set(body) == {"id", "model", "created", "text", "language", "timestamps"}
+        assert body["text"] == TRANSCRIPTION_PAYLOAD["text"]
+    elif response_format == "text":
+        assert response.text == TRANSCRIPTION_PAYLOAD["text"]
+    elif response_format == "srt":
+        assert response.text == _SRT_DOCUMENT
+    else:
+        assert response.text == _VTT_DOCUMENT
+
+
+@pytest.mark.parametrize("endpoint", STT_ENDPOINTS)
+def test_stt_response_format_via_multipart(wire, test_data_dir, endpoint):
+    response = wire.client.post(
+        endpoint,
+        files={"file": ("tone.wav", (test_data_dir / "samples" / "codec_tone.wav").read_bytes(), "audio/wav")},
+        data={"model": WireApp.MODEL_IDS["stt"], "response_format": "vtt"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.text == _VTT_DOCUMENT
+
+
+@pytest.mark.parametrize("endpoint", STT_ENDPOINTS)
+def test_unknown_stt_response_format_is_rejected(wire, endpoint):
+    before = len(wire.engine.requests)
+    response = wire.client.post(
+        endpoint,
+        json={
+            "model": WireApp.MODEL_IDS["stt"],
+            "input_audio": sample_b64("codec_tone.wav"),
+            "response_format": "ass",
+        },
+    )
+    assert response.status_code == 400
+    assert "Unsupported response_format" in response.json()["message"]
+    assert len(wire.engine.requests) == before, "admission must reject before inference"
+
+
+# ---------------------------------------------------------------------------
 # Output format x sample rate
 # ---------------------------------------------------------------------------
 

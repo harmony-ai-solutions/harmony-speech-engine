@@ -39,8 +39,31 @@ class GPUModelRunner(ModelRunnerBase):
         self._capture_baseline_state()
 
         self.model_memory_usage = m.consumed_memory
+        # CTranslate2 allocates outside the torch allocator, so `consumed_memory`
+        # above is 0 for Whisper. Measure the real device-level footprint with a
+        # max-shape probe instead (Phase 10-3); it is CPU-safe and never fails
+        # boot.
+        self.whisper_probe = self._probe_whisper_memory()
         logger.info(
             f"Model weights loaded. Memory usage: {self.model_memory_usage / float(2**30):.2f} GiB = {self.model_memory_usage / float(2**30):.2f} GiB"
+        )
+
+    def _probe_whisper_memory(self) -> dict | None:
+        """Run the Phase 10-3 max-shape probe for a Whisper config, if any."""
+        if getattr(self.model_config, "model_type", None) != "FasterWhisper":
+            return None
+        from harmonyspeech.modeling.whisper_probe import probe_whisper_peak
+
+        return probe_whisper_peak(
+            self.model,
+            workers=getattr(self.model_config, "num_workers", 1),
+            window_batch=getattr(
+                self.model_config, "window_batch", getattr(self.model_config, "max_batch_size", 1)
+            ),
+            beam_size=getattr(self.model_config, "beam_size", 5),
+            max_audio_seconds=getattr(
+                self.model_config, "whisper_max_audio_seconds", 300.0
+            ),
         )
 
     # @torch.inference_mode()

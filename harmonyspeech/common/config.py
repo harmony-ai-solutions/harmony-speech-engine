@@ -68,6 +68,15 @@ class ModelConfig:
             same length vector the handler passes to ``plan_batches``, so pick
             a value in that unit. ``None`` derives
             ``max_batch_size × median length`` per step.
+        num_workers: CTranslate2 worker count for a ``FasterWhisper`` entry
+            (Phase 10-1). faster-whisper passes it straight through as CT2
+            ``inter_threads``: same-device workers **share the model weights**
+            and run on separate CUDA streams, so the cost is activations, not a
+            second copy of the model. It is also the width of the handler's
+            dispatch pool and the in-flight bound, so it must never exceed what
+            the card can hold (see ``whisper_vram_budget_bytes``). Default ``1``
+            reproduces the pre-Phase-10 behaviour exactly (CT2 serialises).
+            Inert for every other model type.
     """
 
     def __init__(
@@ -91,6 +100,7 @@ class ModelConfig:
         backbone_group: str | None = None,
         batched_inference: bool | None = None,
         batch_token_budget: int | None = None,
+        num_workers: int = 1,
     ) -> None:
         self.name = name
         self.model = model
@@ -123,6 +133,14 @@ class ModelConfig:
                     f"batch_token_budget must be a positive int or None, got {batch_token_budget!r}"
                 )
         self.batch_token_budget = batch_token_budget
+
+        # Phase 10-1: CTranslate2 worker count (faster-whisper `num_workers`,
+        # i.e. CT2 `inter_threads`). `1` is the pre-Phase-10 behaviour.
+        if isinstance(num_workers, bool) or not isinstance(num_workers, int):
+            raise ValueError(f"num_workers must be a positive int, got {num_workers!r}")
+        if num_workers < 1:
+            raise ValueError(f"num_workers must be a positive int, got {num_workers!r}")
+        self.num_workers = num_workers
 
         self.dtype = _get_and_verify_dtype(dtype)
 
@@ -166,10 +184,39 @@ class EngineConfig:
     embedding_cache_ttl_s: float = 300.0
     embedding_cache_max_entries: int = 1000
     embedding_cache_max_bytes: int = 1073741824
+    # Optional hard bound for the projected Whisper device footprint (Phase
+    # 10-3). `None` keeps the boot check advisory (warn when the projected peak
+    # exceeds the measured free device headroom); a value turns an overshoot
+    # into a boot error. The runtime admission governor also uses it as its
+    # device-level used-memory ceiling.
+    whisper_vram_budget_bytes: int | None = None
+    # Longest audio a single Whisper request may carry (Phase 10-3). The startup
+    # probe runs this shape and the value is the whisper-side request-size cap.
+    whisper_max_audio_seconds: float = 300.0
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
         # self.model_config.verify_with_parallel_config(self.parallel_config)
+        budget = self.whisper_vram_budget_bytes
+        if budget is not None and (
+            isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0
+        ):
+            raise ValueError(
+                "whisper_vram_budget_bytes must be a positive int or None, "
+                f"got {budget!r}"
+            )
+        try:
+            max_audio = float(self.whisper_max_audio_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "whisper_max_audio_seconds must be a positive number, "
+                f"got {self.whisper_max_audio_seconds!r}"
+            ) from exc
+        if max_audio <= 0:
+            raise ValueError(
+                "whisper_max_audio_seconds must be a positive number, "
+                f"got {self.whisper_max_audio_seconds!r}"
+            )
 
     def to_dict(self):
         """Return the configs as a dictionary, for use in **kwargs."""
@@ -194,6 +241,12 @@ class EngineConfig:
             embedding_cache_ttl_s=float(config_data.get("embedding_cache_ttl_s", 300.0)),
             embedding_cache_max_entries=int(config_data.get("embedding_cache_max_entries", 1000)),
             embedding_cache_max_bytes=int(config_data.get("embedding_cache_max_bytes", 1073741824)),
+            whisper_vram_budget_bytes=(
+                None
+                if config_data.get("whisper_vram_budget_bytes") is None
+                else int(config_data["whisper_vram_budget_bytes"])
+            ),
+            whisper_max_audio_seconds=float(config_data.get("whisper_max_audio_seconds", 300.0)),
         )
 
 

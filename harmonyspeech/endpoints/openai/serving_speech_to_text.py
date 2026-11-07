@@ -1,8 +1,9 @@
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncIterator
 
 from fastapi import Request
+from fastapi.responses import PlainTextResponse
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import SpeechTranscribeRequestInput
@@ -13,8 +14,15 @@ from harmonyspeech.endpoints.openai.protocol import (
     ModelCard,
     SpeechToTextResponse,
     SpeechTranscribeRequest,
+    SpeechTranslationRequest,
 )
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.stt_formats import (
+    normalize_response_format,
+    segments_to_srt,
+    segments_to_vtt,
+    validate_response_format,
+)
 from harmonyspeech.endpoints.openai.wire import from_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
 
@@ -28,21 +36,47 @@ class OpenAIServingSpeechToText(OpenAIServing):
 
     @staticmethod
     def models_from_config(configured_models: list[ModelConfig]) -> list[ModelCard]:
-        # Advertised cards come from the pipeline registry (Phase 3-3).
-        return OpenAIServing.model_cards_from_specs(configured_models, "stt")
+        # Advertised cards come from the pipeline registry (Phase 3-3). The same
+        # Whisper executors serve transcription and translation, so both
+        # capabilities drive the card set (Phase 10-4).
+        return OpenAIServing.model_cards_from_specs(configured_models, ("stt", "translation"))
 
     async def create_transcription(
         self, request: SpeechTranscribeRequest, raw_request: Request
-    ) -> ErrorResponse | AsyncGenerator[str, None] | SpeechToTextResponse:
+    ) -> ErrorResponse | PlainTextResponse | SpeechToTextResponse:
+        return await self._create_stt(request, raw_request, task="transcribe")
+
+    async def create_translation(
+        self, request: SpeechTranslationRequest, raw_request: Request
+    ) -> ErrorResponse | PlainTextResponse | SpeechToTextResponse:
+        return await self._create_stt(request, raw_request, task="translate")
+
+    async def _create_stt(
+        self, request: SpeechTranscribeRequest, raw_request: Request, *, task: str
+    ) -> ErrorResponse | PlainTextResponse | SpeechToTextResponse:
+        """Shared transcription/translation entry point.
+
+        ``task`` is ``"transcribe"`` or ``"translate"`` and is threaded onto the
+        request input so the executor (both the sequential pipeline and the
+        Phase 10-2 window batcher) selects the matching Whisper prompt token.
+        """
         error_check_ret = await self._check_model(request)
         if error_check_ret is not None:
             return error_check_ret
+
+        # Validate response_format at admission (Phase 1-2 pattern): an unknown
+        # format is a 400 before any inference is queued.
+        error_check_format = validate_response_format(getattr(request, "response_format", "json"))
+        if error_check_format is not None:
+            return self.create_error_response(error_check_format)
 
         # TODO: Basic checks for Embedding Generate request
 
         request_id = f"stt-{random_uuid()}"
 
-        request_data = SpeechTranscribeRequestInput.from_openai(request_id=request_id, request=request)
+        request_data = SpeechTranscribeRequestInput.from_openai(
+            request_id=request_id, request=request, task=task
+        )
         artifacts = from_wire_audio(request_data)
         result_generator = self.engine.generate(
             request_id=request_id,
@@ -62,7 +96,7 @@ class OpenAIServingSpeechToText(OpenAIServing):
         raw_request: Request,
         result_generator: AsyncIterator[RequestOutput],
         request_id: str,
-    ) -> ErrorResponse | SpeechToTextResponse:
+    ) -> ErrorResponse | PlainTextResponse | SpeechToTextResponse:
 
         model_name = request.model
         created_time = int(time.time())
@@ -84,13 +118,25 @@ class OpenAIServingSpeechToText(OpenAIServing):
         # load result data and determine what will be returned
         result_data = json.loads(final_res.output)
 
-        response = SpeechToTextResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            text=result_data["text"] if "text" in result_data else "",
-            language=result_data["info"]["language"] if "info" in result_data and request.get_language else None,
-            timestamps=result_data["segments"] if "segments" in result_data and request.get_timestamps else None,
-        )
+        response_format = normalize_response_format(getattr(request, "response_format", "json"))
 
-        return response
+        if response_format == "json":
+            # Byte-identical to the pre-10-4 shape: do not add, rename or
+            # reorder fields here.
+            response = SpeechToTextResponse(
+                id=request_id,
+                created=created_time,
+                model=model_name,
+                text=result_data.get("text", ""),
+                language=result_data["info"]["language"] if "info" in result_data and request.get_language else None,
+                timestamps=result_data["segments"] if "segments" in result_data and request.get_timestamps else None,
+            )
+            return response
+
+        if response_format == "text":
+            return PlainTextResponse(result_data.get("text", ""))
+
+        segments = result_data.get("segments") or []
+        if response_format == "srt":
+            return PlainTextResponse(segments_to_srt(segments))
+        return PlainTextResponse(segments_to_vtt(segments))

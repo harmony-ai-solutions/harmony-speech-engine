@@ -277,7 +277,7 @@ class _CountingPipeline:
         self.calls: list[dict] = []
         type(self).instances.append(self)
 
-    def transcribe(self, audio, batch_size=16):
+    def transcribe(self, audio, batch_size=16, **kwargs):
         self.calls.append(
             {
                 "seconds": len(audio) / 16000.0,
@@ -384,6 +384,139 @@ def test_whisper_vad_step_takes_the_same_per_request_path():
     assert [round(call["seconds"], 1) for call in pipeline.calls] == [0.1, 0.4]
     assert all(call["batch_size"] == 16 for call in pipeline.calls)
     assert all(call["cursor_at_entry"] == 0.0 for call in pipeline.calls)
+
+
+@pytest.mark.integration
+def test_whisper_four_mixed_requests_pair_correctly():
+    """A mixed short/long step runs on M workers and keeps request pairing."""
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0, "pipelines": 0}
+
+    class _MixedPipeline:
+        def __init__(self, model=None):
+            self.model = model
+            self.last_speech_timestamp = 0.0
+            with lock:
+                state["pipelines"] += 1
+
+        def transcribe(self, audio, batch_size=16, **kwargs):
+            seconds = len(audio) / 16000.0
+            with lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+
+            def generator():
+                try:
+                    for part in (f"t{seconds:.2f}", "|"):
+                        time.sleep(0.02)
+                        yield _FakeSegment(part)
+                finally:
+                    with lock:
+                        state["active"] -= 1
+
+            return generator(), _FakeInfo()
+
+    config = _model_config("whisper", "FasterWhisper", max_batch_size=4)
+    runner = _runner(object(), "FasterWhisper", 4, "whisper")
+    runner.model_config.num_workers = 2
+    engine = _build_engine(config, runner)
+
+    requests = [("mix-s1", 0.10), ("mix-l1", 0.60), ("mix-s2", 0.12), ("mix-l2", 0.55)]
+    with patch.object(model_runner_base, "BatchedInferencePipeline", _MixedPipeline):
+        for request_id, seconds in requests:
+            request = _transcribe_request(request_id, seconds)
+            engine.add_request(request_id, request.request_data)
+        outputs = _drive(engine)
+
+    assert sorted(outputs) == sorted(request_id for request_id, _seconds in requests)
+    for request_id, seconds in requests:
+        assert outputs[request_id][0].finish_reason == "stop"
+        assert json.loads(outputs[request_id][0].output)["text"] == f"t{seconds:.2f}|"
+
+    # M = num_workers: exactly two transcribes overlap, and the per-thread
+    # pipelines stay below the worker count.
+    assert state["peak"] == 2
+    assert state["pipelines"] == 2
+
+
+@pytest.mark.integration
+def test_whisper_long_first_queue_does_not_starve_the_short_lane():
+    """A long request queued first is served after at most the short credit."""
+    seen: list[list[str]] = []
+
+    class _RecordingExecutor(StubExecutor):
+        def execute_model(self, requests_to_batch):
+            seen.append([request.request_id for request in requests_to_batch])
+            return super().execute_model(requests_to_batch)
+
+    class _TextPipeline:
+        def __init__(self, model=None):
+            self.model = model
+            self.last_speech_timestamp = 0.0
+
+        def transcribe(self, audio, batch_size=16, **kwargs):
+            seconds = len(audio) / 16000.0
+            return [_FakeSegment(f"t{seconds:.2f}")], _FakeInfo()
+
+    config = _model_config("whisper", "FasterWhisper", max_batch_size=3)
+    runner = _runner(object(), "FasterWhisper", 3, "whisper")
+    engine = _build_engine(config, runner)
+    engine.model_executors = {"whisper": _RecordingExecutor(runner)}
+
+    requests = [("long", 60.0)] + [(f"short-{index}", 0.10 + index * 0.01) for index in range(6)]
+    with patch.object(model_runner_base, "BatchedInferencePipeline", _TextPipeline):
+        for request_id, seconds in requests:
+            request = _transcribe_request(request_id, seconds)
+            engine.add_request(request_id, request.request_data)
+        outputs = _drive(engine, max_steps=10)
+
+    assert sorted(outputs) == sorted(request_id for request_id, _seconds in requests)
+    assert all(entries[0].finish_reason == "stop" for entries in outputs.values())
+    # The first step is filled from the short lane even though the long request
+    # arrived first; the long request then takes its credit slot in step two.
+    assert seen[0] == ["short-0", "short-1", "short-2"]
+    assert seen[1][0] == "long"
+
+
+@pytest.mark.integration
+def test_whisper_abort_between_segments_errors_only_that_request():
+    """A self-aborted request errors; its step neighbour completes normally."""
+
+    class _SelfAbortingPipeline:
+        engine = None
+
+        def __init__(self, model=None):
+            self.model = model
+            self.last_speech_timestamp = 0.0
+
+        def transcribe(self, audio, batch_size=16, **kwargs):
+            seconds = len(audio) / 16000.0
+
+            def generator():
+                yield _FakeSegment("first")
+                if seconds > 0.2:
+                    type(self).engine.abort_request("victim")
+                yield _FakeSegment("second")
+
+            return generator(), _FakeInfo()
+
+    config = _model_config("whisper", "FasterWhisper", max_batch_size=4)
+    runner = _runner(object(), "FasterWhisper", 4, "whisper")
+    runner.model_config.num_workers = 2
+    engine = _build_engine(config, runner)
+    _SelfAbortingPipeline.engine = engine
+
+    with patch.object(model_runner_base, "BatchedInferencePipeline", _SelfAbortingPipeline):
+        for request_id, seconds in (("victim", 0.60), ("ok", 0.10)):
+            request = _transcribe_request(request_id, seconds)
+            engine.add_request(request_id, request.request_data)
+        outputs = _drive(engine)
+
+    assert sorted(outputs) == ["ok", "victim"]
+    assert outputs["ok"][0].finish_reason == "stop"
+    assert json.loads(outputs["ok"][0].output)["text"] == "firstsecond"
+    assert outputs["victim"][0].finish_reason == "error"
+    assert "aborted" in outputs["victim"][0].error
 
 
 if __name__ == "__main__":  # pragma: no cover - debugging aid

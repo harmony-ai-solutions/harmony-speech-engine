@@ -6,6 +6,82 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 10 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `10-5-WhisperGatesBenchmarksExit.md`
+
+- ✅ **Exhaustion scenarios** — `scripts/bench_throughput.py` gained `--scenario {whisper-flood,whisper-fairness,whisper-budget-trip}`: a 100-request heterogeneous flood (durations 2 s–8 min, mixed languages, transcription + translation, `json`/`text`/`srt`/`vtt`) against tight caps (M=2, window batch=4, queue 16), per-request wall-time traces, `/metrics` lane-depth sampling, timeout/loss/pairing accounting; a long-first fairness proof; a memory-budget trip run; and the lanes-vs-windows / M-sweep / window-sweep cells (`--print-whisper-scenarios`). The default `throughput` path is unchanged.
+- ✅ **Local degradation proof** — `tests/integration/test_whisper_exhaustion.py` drives the real engine loop, scheduler, lane admission and window batcher with stubbed CT2/VAD/features: the 100-request flood completes with **zero loss and zero pairing errors** (each transcript is checked against its own window markers), a timeout storm resolves every request as a typed error, a waiting+in-flight abort storm loses no unrelated request, a batch-level batcher failure falls back and counts once, and a mocked-`mem_get_info` budget trip shrinks admission 6→2→1→0 without a crash.
+- ✅ **Five-class execution-model table** — `tests/unit/initialization/test_config.py` now maps every registered type to `padded_batch` / `loop` / `queue_depth` / `lanes_windows` / `ar_decode` with per-class semantic validators; `ar_decode` is asserted pending until 9-6. Whisper is `lanes_windows` with its real knobs. `docs/batching.md` carries the class table and the final "lanes M × windows B" Whisper row; the docs-matrix lint gained a Phase 10 assertion.
+- ✅ **Dated config decision (2026-11-07)** — `batched_inference` stays **opt-in** until the benchmark-host B=1 real-model parity gate (the batcher re-implements window formation/stitching; fallbacks protect availability, not output correctness). `num_workers` (turbo 2 / tiny 4) and the window cap 8 ship unmeasured; width is behaviour-safe and tested.
+- ✅ **Docs + knowledge** — `docs/benchmarks/throughput.md` §Phase 10 (lanes vs windows, fairness, M/window sweeps, 200-connection, exhaustion, budget trip, parity, reproduce commands; every cell `_tbd_`), `vram-profiles.md` budget-trip validation, `docs/models.md` capacity honesty, CONCERNS retired, CHANGELOG already carried the user-visible entries.
+
+**Verification**: unit 974 / integration 59 / wire-contract e2e 50 passed + 3 model-gated skips (4 pre-existing TTS e2e weight/checkpoint errors unchanged). No weights downloaded; every measurement table is `_tbd_` for the benchmark-host session (same idle RTX 5060 Ti run as Phase 7/8).
+
+**Deviations**: benchmark scenarios are a new `--scenario` axis (default unchanged); queue-wait is the engine histogram delta (true per-request pairing is proven locally); local tests include the 8-minute request but run in ~14 s; the class table lives before the model matrix so the docs lint still parses the matrix; no config values changed.
+
+**Next**: benchmark-host run fills the Phase 10 `_tbd_` cells, including the B=1 parity gate that flips `batched_inference`.
+
+## Engine Modernization — Phase 10-4 (CODE COMPLETE, 2026-11-07; real-model spot-check pending 10-5)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `10-4-STTWireFormats.md`
+
+- ✅ **`response_format`** — `SpeechTranscribeRequest` accepts `json` (default, byte-identical shape pinned by a test), `text`, `srt`, `vtt`; validated at admission (HTTP 400 before inference, Phase 1-2 pattern). `text`/`srt`/`vtt` return `text/plain`; JSON stays the unchanged `SpeechToTextResponse`.
+- ✅ **Pure renderer** — `harmonyspeech/endpoints/openai/stt_formats.py`: SRT (`HH:MM:SS,mmm`, numbered blocks) and WebVTT (`WEBVTT`, `HH:MM:SS.mmm`), `Decimal`-based half-up millisecond rounding, ≥1 h (hours grow past 99), empty input → empty document, CRLF normalisation and `-->` → `- ->` in cue text.
+- ✅ **`/v1/audio/translations`** — mirrors the transcription route/model; `create_translation` shares `_create_stt(..., task="translate")`. `SpeechTranscribeRequestInput` gained `task`/`language`/`prompt`; `prepare_faster_whisper_inputs` normalises/validates `task`; the lane pool passes `task`/`language`/`initial_prompt` to `pipeline.transcribe`, and 10-2's batcher builds its `Tokenizer` with the request task and encodes `prompt` as previous tokens. Verified faster-whisper 1.2.1 encodes `task` through `Tokenizer.sot_sequence` (`<|transcribe|>`/`<|translate|>`), not `TranscriptionOptions`.
+- ✅ **Registry** — `translation` capability on the Faster-Whisper step/spec; new `capabilities_for_model_type()` gives individual cards spec-derived capabilities (`["stt","translation","vad"]`), so `/v1/models` advertises translation without hand lists.
+- ✅ **Docs** — `docs/api.md` (response formats + translation endpoint), `docs/audio-io-contract.md` (endpoint/upload tables + STT format table), `docs/models.md`, `docs/routing.md`, CHANGELOG.
+
+**Verification**: `tests/unit` 958 passed (33 new in `tests/unit/wire_contract/test_stt_formats.py`, +4 batcher, +1 lane, +1 cards), `tests/integration` 53 passed (+1 translations route), wire-contract e2e 50 passed / 3 model-only skips (+12 matrix/admission cases). No weights downloaded; real-model translation/subtitle spot-checks remain `_tbd_` for the benchmark host (10-5).
+
+**Deviations**: `prepare_faster_whisper_inputs` keeps returning audio artifacts (options resolved on the request input) to preserve the 10-1/10-2 input contract; `language`/`prompt` are threaded too (source hint / initial prompt); individual cards now carry additive spec-derived capabilities.
+
+**Next**: 10-5 benchmark-host gates (including real translation + subtitle spot-checks).
+
+## Engine Modernization — Phase 10-2 (CODE COMPLETE, 2026-11-07; benchmark-host parity/throughput pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `10-2-WhisperWindowBatcher.md`
+
+- ✅ **API verified** — CT2 4.4.0 `Whisper.encode(features[B,n_mels,3000])` → stacked encoder output; `generate(encoder_output, prompts: list[list[int]], beam_size=…)` takes the encoded output + one prompt per row (native beam search inside CT2); `detect_language(encoder_output)` reuses the same encoder pass. No hard blocker; the API table is in the task file.
+- ✅ **`harmonyspeech/task_handler/whisper_batching.py`** — collects every admitted request's ≤30 s windows through faster-whisper's own VAD/`collect_chunks`/`pad_or_trim`, tags rows `(request, window_index, offset)`, forms ≤8-window batches (owner-approved initial 8), issues one `encode` + one `generate` per batch with per-request prompts (detected language), and stitches with upstream `_split_segments_by_timestamps` + `restore_speech_timestamps`. Payload is the same `{"text","segments","info"}` shape, so VadArtifact/wire are untouched.
+- ✅ **Handler wiring** — opt-in `batched_inference: true`; `len==1`, flag off, and any batch-level batcher failure use the per-request `pipeline.transcribe` path. Per-request collection/decode failures error alone; abort is cooperative at formed-batch boundaries.
+- ✅ **Admission counts windows** — `whisper_window_count(request) = ceil(seconds/30)` feeds the 10-3 governor composition (`allowed_windows - running_windows`), with a liveness floor when a single long request would otherwise starve; `plan_lane_admission` gained an optional window budget.
+- ✅ **Metrics** — `hse_whisper_batch_fallbacks_total{model}`.
+- ✅ **Docs** — `docs/batching.md` whisper row + window-batching section; `docs/benchmarks/throughput.md` Phase 10-2 with `_tbd_` parity/throughput cells; CHANGELOG.
+
+**Verification**: `tests/unit` 919 passed (26 new in `tests/unit/inference_flow/test_whisper_window_batching.py`), `tests/integration` 52 passed (3 new in `tests/integration/test_whisper_window_batching.py`). Real-model B=1 parity harness `tests/e2e/stt/test_whisper_window_parity.py` skips unless `HSE_WHISPER_PARITY_MODEL` is set; no weights downloaded. Benchmark-host parity/throughput + `batching:1-vs-N`-style gates outstanding (10-5).
+
+**Deviations**: Whisper batching is opt-in (unset = previous path) per the phase wording; window cap is a module constant (no config key in the spec's files table); language detection reuses the first window's encoder output (documented edge on multi-window requests whose first window <30 s); `WhisperRequestAbortedError` moved to `whisper_batching` and re-exported.
+
+**Next**: 10-5 fills the `_tbd_` parity/throughput cells and decides whether to set `batched_inference: true` in the shipped configs.
+
+## Engine Modernization — Phase 10-1 (CODE COMPLETE, 2026-11-07; benchmark-host width sanity pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `10-1-WhisperLanes.md`
+
+- ✅ **`num_workers` plumbing** — per-`FasterWhisper` `ModelConfig` key (default `1` = unchanged behaviour) forwarded to `WhisperModel(..., num_workers=...)`, which maps it to CT2 `inter_threads` (verified: faster-whisper 1.2.1 `transcribe.py:628/695`). Shipped initial values, owner-approved 2026-11-07: turbo `2`, tiny `4`.
+- ✅ **M-worker handler** — `_execute_faster_whisper` dispatches a step to the runner-owned `WhisperLanePool` (`ThreadPoolExecutor(max_workers=M)` + `BoundedSemaphore(M)`), one per-thread pipeline each, generators consumed inside the worker, `len == 1` direct path kept, segment-bound cooperative abort (`WhisperRequestAborted`, error isolated to that request).
+- ✅ **Two-lane fairness admission** — Whisper models are capacity-based; `<=30 s` vs `>30 s` lanes drained at 3 short : 1 long with persistent per-model credits; width composes capacity × Phase 10-3 `get_whisper_admission()` minus running × lane credits. Non-Whisper models keep the boolean rule unchanged.
+- ✅ **Metrics** — `hse_whisper_{workers,in_flight,lane_short_depth,lane_long_depth}` per model, `hse_whisper_queue_wait_seconds` histogram, plus `hse_whisper_ct2_{queued,active}_batches` (CT2 4.4.0 exposes `num_queued_batches` / `num_active_batches`).
+- ✅ **Docs** — `docs/batching.md` whisper row + lanes section, `docs/models.md` knob, `CHANGELOG.md` entry.
+
+**Verification**: `tests/unit` 893 passed (36 new in `tests/unit/inference_flow/test_whisper_lanes.py`), `tests/integration` 49 passed (3 new in `test_parallel_lanes.py`). No model weights downloaded; the handler is exercised with stubbed pipelines. Benchmark-host width sanity (c=4, M=1 vs 2 vs 4) outstanding (10-5).
+
+**Next**: 10-2 window batcher consumes the lane in-flight accounting; 10-5 measures the real width.
+
+## Engine Modernization — Phase 10-3 (CODE COMPLETE, 2026-11-07; benchmark-host run pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `10-3-WhisperMemoryGovernance.md`
+
+- ✅ **Device-level VRAM truth** — `get_vram_stats()` now reads `torch.cuda.mem_get_info()`: `device_used_bytes` / `free_bytes` / `hse_vram_device_used_bytes` include CTranslate2 + CUDA contexts; `hse_vram_headroom_bytes` is redefined in place as true free device memory (breaking change, documented in `_HELP`, CHANGELOG and `docs/benchmarks/vram-profiles.md`). Torch-scoped counters kept.
+- ✅ **Whisper max-shape probe** — `harmonyspeech/modeling/whisper_probe.py` runs a synthetic max-shape transcription (workers × window batch × `whisper_max_audio_seconds`) after a CUDA Whisper load and records the device-level delta; CPU/missing-import/CPU-placed-model paths skip explicitly. Reported per model on `/health` (`probe_measured`, `probe_reason`) and as `hse_model_peak_activation_bytes{model}`.
+- ✅ **Budget + admission governance** — optional `whisper_vram_budget_bytes` turns a projected-peak overshoot into a boot error (otherwise it warns against the measured free headroom); `whisper_max_audio_seconds` is the whisper request-size cap; the runtime hook `get_whisper_admission(active_windows)` is driven by the pure `allowed_windows()` in `harmonyspeech/engine/vram_budget.py` (ready for 10-1/10-2 and 10-5's mocked-`mem_get_info` floods).
+- ✅ **Docs** — `docs/benchmarks/vram-profiles.md` §Phase 10-3 carries the corrected semantics, the `_tbd_` device-level/probe cells and the Phase 9 pool-sizing input; `docs/models.md` documents the knobs.
+
+**Verification**: `tests/unit` 857 passed (45 new in `tests/unit/engine/test_vram_stats.py`; existing `test_vram.py`, `test_measure_vram.py`, config/loader/weight-registry suites green) and `tests/integration` 46 passed. Benchmark-host device-level figures and real Whisper probe peaks outstanding (no weights downloaded).
+
+**Next**: benchmark host fills the `_tbd_` cells, then 10-1/10-2 consume `get_whisper_admission()`.
+
 ## Engine Modernization — Phase 8 (CODE COMPLETE, 2026-11-06; benchmark-host run pending)
 
 **Plan folder**: `.current_work/engine-modernization/` (Phase 8 of the modernization; `summary.md` tracks all phases)

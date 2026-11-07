@@ -275,12 +275,42 @@ class SpeechTranscribeRequest(BaseRequest):
         default="",
         description="Binary audio data of the reference speaker for synthesizing the text, encoded in base64",
     )
+    language: str | None = Field(
+        default=None,
+        description=(
+            "Source-language hint (ISO 639-1, e.g. 'en', 'de'). When omitted the model detects it. "
+            "For translations this is only a hint about the spoken language — the output is always translated "
+            "to English; it is never a target language."
+        ),
+    )
+    prompt: str | None = Field(
+        default=None,
+        description="Optional text used as an initial prompt to guide the transcription/translation (vocabulary, style).",
+    )
+    response_format: str = Field(
+        default="json",
+        description=(
+            "Response format: 'json' (default, the SpeechToTextResponse object), 'text' (plain transcript), "
+            "'srt' or 'vtt' (subtitle documents rendered from the segment timestamps). "
+            "The subtitle formats are served as text/plain. Unknown values are rejected with HTTP 400."
+        ),
+    )
     get_language: bool | None = Field(
         default=False, description="whether to return the source language tag. Check model description if supported."
     )
     get_timestamps: bool | None = Field(
         default=False, description="whether to return the word timestamps. Check model description if supported."
     )
+
+
+class SpeechTranslationRequest(SpeechTranscribeRequest):
+    """
+    SpeechTranslationRequest
+    Used to translate speech in a provided audio file into English text.
+    Mirrors :class:`SpeechTranscribeRequest`; the serving layer runs the same
+    pipeline with ``task="translate"``. ``language`` is a source-language hint
+    only (the output language is always English, matching the OpenAI API).
+    """
 
 
 class SpeechToTextResponse(BaseResponse):

@@ -67,7 +67,7 @@ def test_format_table_lists_models_and_totals():
     assert "kitten-tts-mini" in table
     assert "float16" in table
     assert "resident models: 2" in table
-    assert "headroom (total - reserved) 12.00 GiB" in table
+    assert "headroom (device free) 12.00 GiB" in table
     assert "nvidia-smi used 5.00 GiB of 15.93 GiB" in table
 
 

@@ -35,6 +35,7 @@ from harmonyspeech.endpoints.openai.protocol import (
     ModelList,
     SpeechToTextResponse,
     SpeechTranscribeRequest,
+    SpeechTranslationRequest,
     TextToSpeechRequest,
     TextToSpeechResponse,
     VoiceConversionRequest,
@@ -110,14 +111,15 @@ async def lifespan(app: fastapi.FastAPI):
     yield
 
 
-# Prometheus metrics: the default registry's series plus the engine's VRAM and
-# embedding-cache gauges/counters (Phase 4-5, 7-3). Rendered by hand so a scrape
-# never needs a running GPU — or even a live cache — to return a well-formed
-# body with every series present.
-@router.get("/metrics", description="Prometheus metrics (default registry + VRAM + embedding cache).")
+# Prometheus metrics: the default registry's series plus the engine's VRAM,
+# embedding-cache and Whisper-lane gauges/counters (Phase 4-5, 7-3, 10-1).
+# Rendered by hand so a scrape never needs a running GPU — or even a live cache
+# — to return a well-formed body with every series present.
+@router.get("/metrics", description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes).")
 async def metrics() -> Response:
     from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
     from harmonyspeech.engine.vram_metrics import render_vram_metrics
+    from harmonyspeech.engine.whisper_lane_metrics import render_whisper_lane_metrics
 
     body = generate_latest().decode("utf-8", errors="replace")
     engine_ref = None
@@ -138,8 +140,15 @@ async def metrics() -> Response:
         # Disabled/unavailable cache still renders every series (as zeros) so
         # dashboards never see an absent metric family.
         body += render_embedding_cache_metrics(cache_stats)
+        try:
+            lane_stats = engine_ref.get_whisper_lane_stats()
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to read Whisper lane stats: {exc}")
+            lane_stats = None
+        body += render_whisper_lane_metrics(lane_stats)
     else:
         body += render_embedding_cache_metrics(None)
+        body += render_whisper_lane_metrics(None)
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
@@ -159,6 +168,9 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("vram"):
             # Phase 4-5: per-model VRAM accounting rides along with /health.
             health_status["vram"] = result["vram"]
+        if isinstance(result, dict) and result.get("whisper_vram") is not None:
+            # Phase 10-3: boot-time Whisper probe/budget report.
+            health_status["whisper_vram"] = result["whisper_vram"]
         if isinstance(result, dict) and result.get("embedding_cache") is not None:
             # Phase 7-3: cross-request embedding cache accounting.
             health_status["embedding_cache"] = result["embedding_cache"]
@@ -298,8 +310,33 @@ async def create_transcription(raw_request: Request, x_api_key: str | None = Hea
     generator = await openai_serving_stt.create_transcription(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    if isinstance(generator, Response):
+        # text/srt/vtt response formats are served as text/plain (Phase 10-4).
+        return generator
     # if request.output_options and request.output_options.stream:
     #     return StreamingResponse(content=generator, media_type="text/event-stream")
+    else:
+        return JSONResponse(content=generator.model_dump())
+
+
+@router.post(
+    "/v1/audio/translations",
+    response_model=SpeechToTextResponse,
+    openapi_extra=dual_body_openapi(SpeechTranslationRequest, _AUDIO_UPLOAD_DOCS),
+)
+async def create_translation(raw_request: Request, x_api_key: str | None = Header(None)):
+    """Translate speech in audio into English text.
+
+    Mirrors ``/v1/audio/transcriptions`` (same request model, upload aliases and
+    response formats) and runs the same Whisper pipeline with ``task=translate``.
+    ``language`` is a source-language hint only; the output is always English.
+    """
+    request = await parse_dual_request(raw_request, SpeechTranslationRequest, upload_fields=_AUDIO_UPLOAD_FIELDS)
+    generator = await openai_serving_stt.create_translation(request, raw_request)
+    if isinstance(generator, ErrorResponse):
+        return JSONResponse(content=generator.model_dump(), status_code=generator.code)
+    if isinstance(generator, Response):
+        return generator
     else:
         return JSONResponse(content=generator.model_dump())
 

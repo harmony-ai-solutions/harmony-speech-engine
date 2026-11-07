@@ -18,6 +18,11 @@ from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestS
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.embedding_cache_metrics import embedding_cache_hit_ratio
 from harmonyspeech.engine.metrics import StatLogger, Stats
+from harmonyspeech.engine.vram_budget import (
+    allowed_windows,
+    evaluate_whisper_budget,
+    projected_whisper_peak,
+)
 from harmonyspeech.processing.pipeline_registry import (
     PipelineExecution,
     PipelineRoutingError,
@@ -52,6 +57,8 @@ class HarmonySpeechEngine:
         embedding_cache_ttl_s: float = 300.0,
         embedding_cache_max_entries: int = 1000,
         embedding_cache_max_bytes: int = 1073741824,
+        whisper_vram_budget_bytes: int | None = None,
+        whisper_max_audio_seconds: float = 300.0,
     ):
         self.model_configs = model_configs
         self.log_stats = log_stats
@@ -59,6 +66,13 @@ class HarmonySpeechEngine:
         self.request_timeout_s = request_timeout_s
         # Turn "pipeline incomplete" startup warnings into a boot error.
         self.strict_pipelines = strict_pipelines
+        # Whisper VRAM governance (Phase 10-3): optional hard device-memory
+        # budget for the projected Whisper footprint, and the longest audio a
+        # single request may carry (the probe's max shape).
+        self.whisper_vram_budget_bytes = whisper_vram_budget_bytes
+        self.whisper_max_audio_seconds = whisper_max_audio_seconds
+        # Boot-time governance report, populated after the executors load.
+        self.whisper_vram_report: dict | None = None
         # Requests rejected before ever entering the scheduler (unresolvable
         # routing, expired deadlines). Drained into the next step's outputs so
         # their HTTP call resolves with an error instead of hanging.
@@ -99,18 +113,46 @@ class HarmonySpeechEngine:
         For each provided model config we will create a separate executor.
         Models may allocate across multiple devices based on DeviceConfig.
         """
+        # The probe needs the engine-level audio cap; attach it to the Whisper
+        # configs before the executors (and their runners) are constructed.
+        self._apply_whisper_probe_defaults()
         self.model_executors = {}
         self.init_custom_executors()
 
         # Startup validation: which declared toolchains are complete?
         self.available_families: list[str] = self._validate_family_configuration()
 
-        # Initialize Scheduler for requests across models
-        self.scheduler = Scheduler(model_configs=self.model_configs)
+        # Initialize Scheduler for requests across models. Phase 10-1: the
+        # Whisper lanes consult the Phase 10-3 memory governor at admission, so
+        # lane credit × capacity × measured VRAM compose into one width.
+        self.scheduler = Scheduler(
+            model_configs=self.model_configs,
+            whisper_admission=self.get_whisper_admission,
+        )
+
+        # Whisper VRAM governance (Phase 10-3): compare the measured/projected
+        # Whisper footprint with the free device headroom and the optional
+        # budget. May raise when `whisper_vram_budget_bytes` is exceeded.
+        self.whisper_vram_report = self._evaluate_whisper_memory_governance()
 
         # Metric Logging.
         if self.log_stats:
             self.stat_logger = StatLogger(local_interval=_LOCAL_LOGGING_INTERVAL_SEC, labels=dict())
+
+    def _apply_whisper_probe_defaults(self) -> None:
+        """Give Whisper configs the engine-level audio cap the probe needs.
+
+        10-1/10-2 add per-model worker/window/beam knobs; until then the probe
+        reads them through ``getattr`` defaults. The audio cap is engine-level
+        (``whisper_max_audio_seconds``), so it is stamped onto each Whisper
+        config before the runner is built.
+        """
+        for config in self.model_configs or []:
+            if getattr(config, "model_type", None) != "FasterWhisper":
+                continue
+            if not hasattr(config, "whisper_max_audio_seconds"):
+                config.whisper_max_audio_seconds = self.whisper_max_audio_seconds
+
 
     def _validate_family_configuration(self) -> list[str]:
         """Log incomplete toolchains and return the complete family ids.
@@ -690,20 +732,30 @@ class HarmonySpeechEngine:
 
         Returns ``{"healthy": bool, "models": {<executor name>: {"healthy": bool,
         "model_type": str, "vram_bytes": int, "error": str | None}},
-        "vram": {...}, "embedding_cache": {...}}``. ``vram`` is the Phase 4-5
-        summary (see :meth:`get_vram_stats`); ``embedding_cache`` is the Phase
-        7-3 cache accounting (see :meth:`get_embedding_cache_stats`).
+        "vram": {...}, "whisper_vram": {...} | None, "embedding_cache": {...}}``.
+        ``vram`` is the Phase 4-5/10-3 summary (see :meth:`get_vram_stats`);
+        ``whisper_vram`` is the Phase 10-3 boot governance report;
+        ``embedding_cache`` is the Phase 7-3 cache accounting (see
+        :meth:`get_embedding_cache_stats`).
         """
         vram = self.get_vram_stats()
         models: dict[str, dict] = {}
         healthy = True
         for name, model_executor in getattr(self, "model_executors", {}).items():
             model_config = getattr(model_executor, "model_config", None)
+            vram_detail = vram["models"].get(name, {})
             detail: dict = {
                 "model_type": getattr(model_config, "model_type", None),
                 "healthy": True,
-                "vram_bytes": vram["models"].get(name, {}).get("vram_bytes", 0),
+                "vram_bytes": vram_detail.get("vram_bytes", 0),
             }
+            # Phase 10-3: carry the measured (or explicitly skipped) Whisper
+            # probe so /health never implies an attribution it does not have.
+            if "peak_activation_bytes" in vram_detail:
+                detail["peak_activation_bytes"] = vram_detail.get("peak_activation_bytes", 0)
+                detail["probe_measured"] = vram_detail.get("probe_measured", False)
+                detail["probe_reason"] = vram_detail.get("probe_reason")
+                detail["per_window_bytes"] = vram_detail.get("per_window_bytes", 0)
             try:
                 model_executor.check_health()
             except Exception as e:  # noqa: BLE001 - health probes must not raise
@@ -715,6 +767,7 @@ class HarmonySpeechEngine:
             "healthy": healthy,
             "models": models,
             "vram": vram,
+            "whisper_vram": self.get_whisper_vram_report(),
             "embedding_cache": self.get_embedding_cache_stats(),
         }
 
@@ -754,17 +807,28 @@ class HarmonySpeechEngine:
         return stats
 
     # ------------------------------------------------------------------
-    # VRAM accounting (Phase 4-5)
+    # VRAM accounting (Phase 4-5) and device-level truth (Phase 10-3)
     # ------------------------------------------------------------------
     def get_vram_stats(self) -> dict:
         """Return per-model VRAM accounting plus shared-backbone group totals.
 
         Per-model ``vram_bytes`` is the CUDA allocation delta measured while
         that model loaded (``GPUModelRunner.model_memory_usage``); on CPU it is
-        ``0`` and ``weights_bytes`` (host-resident parameter/buffer size) is
-        still reported. Shared backbone components are listed once under
-        ``shared`` and aggregated per ``backbone_group`` so a deduplicated
-        deployment is not counted twice.
+        ``0`` and ``weights_bytes`` (host-resident parameter/buffer size, or the
+        checkpoint size for native CTranslate2 models) is still reported.
+        Shared backbone components are listed once under ``shared`` and
+        aggregated per ``backbone_group`` so a deduplicated deployment is not
+        counted twice.
+
+        Device-level truth (Phase 10-3): ``device_used_bytes`` / ``free_bytes``
+        come from ``torch.cuda.mem_get_info`` and include everything on the
+        device — torch allocations, CTranslate2 (Whisper) weights/activations
+        and CUDA contexts. ``headroom_bytes`` is therefore the **true free
+        device memory** (a documented breaking change: it used to be
+        ``total - torch_reserved`` and overstated free memory whenever a
+        non-torch model held memory). The torch-scoped counters
+        (``allocated_bytes`` / ``reserved_bytes`` / ``peak_allocated_bytes``)
+        are kept because they still answer "what does torch hold".
 
         Safe on CPU-only builds: CUDA fields are ``0``/``None`` and nothing
         here raises.
@@ -773,6 +837,8 @@ class HarmonySpeechEngine:
 
         cuda = False
         allocated = reserved = peak = total = 0
+        free_bytes = device_used_bytes = 0
+        device_used_source = None
         device_name = None
         device_index = torch.cuda.current_device() if torch.cuda.is_available() else None
         if torch.cuda.is_available():
@@ -783,8 +849,25 @@ class HarmonySpeechEngine:
                 peak = int(torch.cuda.max_memory_allocated(device_index))
                 total = int(torch.cuda.get_device_properties(device_index).total_memory)
                 device_name = torch.cuda.get_device_name(device_index)
+                try:
+                    # Device-level truth: captures torch + CTranslate2 + CUDA
+                    # contexts. `mem_get_info` returns (free, total).
+                    free_raw, total_raw = torch.cuda.mem_get_info(device_index)
+                    free_bytes = int(free_raw)
+                    total = int(total_raw)
+                    device_used_bytes = max(0, total - free_bytes)
+                    device_used_source = "mem_get_info"
+                except Exception:  # pragma: no cover - defensive on odd driver states
+                    # Best-effort fallback: the old torch-scoped number is still
+                    # an honest lower bound on non-torch usage (it cannot see
+                    # CTranslate2), so mark the source explicitly.
+                    free_bytes = max(0, total - reserved)
+                    device_used_bytes = max(0, total - free_bytes)
+                    device_used_source = "torch_reserved_fallback"
             except Exception:  # pragma: no cover - defensive on odd driver states
                 cuda = False
+                free_bytes = device_used_bytes = 0
+                device_used_source = None
 
         registry = getattr(self, "weight_registry", None)
         shared = registry.stats() if registry is not None else {
@@ -818,14 +901,49 @@ class HarmonySpeechEngine:
             repo = getattr(model_config, "model", None)
             if group and repo:
                 repo_to_group[_repo_key(repo)] = group
-            models[name] = {
+            # A native model can be configured for CUDA but fall back to CPU
+            # (CTranslate2/cuDNN guard); report where it actually runs so the
+            # governance does not count host-resident Whisper as VRAM.
+            native_device = getattr(getattr(model, "model", None), "device", None)
+            detail = {
                 "model_type": getattr(model_config, "model_type", None),
                 "device": str(getattr(getattr(model_config, "device_config", None), "device", "")),
+                "runtime_device": str(native_device) if native_device else None,
                 "dtype": str(getattr(model_config, "dtype", "")) or None,
                 "vram_bytes": int(getattr(runner, "model_memory_usage", 0) or 0),
                 "weights_bytes": int(weights_bytes),
                 "backbone_group": group,
+                "max_batch_size": getattr(model_config, "max_batch_size", None),
             }
+            # Phase 10-3: CTranslate2 Whisper memory is invisible to torch, so
+            # the runner records a measured max-shape probe instead. Absent or
+            # skipped probes stay explicit ("not-probed") — never guessed.
+            probe = getattr(runner, "whisper_probe", None)
+            if probe is not None:
+                detail.update(
+                    {
+                        "peak_activation_bytes": int(probe.get("peak_activation_bytes", 0) or 0),
+                        "per_window_bytes": int(probe.get("per_window_bytes", 0) or 0),
+                        "probe_measured": bool(probe.get("measured")),
+                        "probe_reason": probe.get("reason"),
+                        "probe_method": probe.get("method"),
+                        "workers": probe.get("workers"),
+                        "window_batch": probe.get("window_batch"),
+                        "beam_size": probe.get("beam_size"),
+                        "max_audio_seconds": probe.get("max_audio_seconds"),
+                        "windows_probed": probe.get("windows_probed"),
+                    }
+                )
+            else:
+                detail.update(
+                    {
+                        "peak_activation_bytes": 0,
+                        "per_window_bytes": 0,
+                        "probe_measured": False,
+                        "probe_reason": "not-probed",
+                    }
+                )
+            models[name] = detail
 
         groups: dict[str, int] = {}
         dedup_saved = 0
@@ -846,13 +964,256 @@ class HarmonySpeechEngine:
             "allocated_bytes": allocated,
             "reserved_bytes": reserved,
             "peak_allocated_bytes": peak,
-            "headroom_bytes": max(0, total - reserved) if cuda else 0,
+            # Phase 10-3: device-level truth (torch + CT2 + CUDA contexts).
+            "device_used_bytes": device_used_bytes if cuda else 0,
+            "free_bytes": free_bytes if cuda else 0,
+            "device_used_source": device_used_source,
+            # Redefined in place: true device free memory, not total-reserved.
+            "headroom_bytes": free_bytes if cuda else 0,
             "resident_models": len(models),
             "models": models,
             "shared": shared,
             "groups": groups,
             "dedup_saved_bytes": dedup_saved,
+            "whisper_budget_bytes": getattr(self, "whisper_vram_budget_bytes", None),
+            "whisper_governance": getattr(self, "whisper_vram_report", None),
         }
+
+    # ------------------------------------------------------------------
+    # Whisper memory governance (Phase 10-3)
+    # ------------------------------------------------------------------
+    def _whisper_vram_entries(self, stats: dict | None = None) -> list[dict]:
+        """Return the CUDA-placed Whisper model entries from VRAM stats."""
+        stats = stats if stats is not None else self.get_vram_stats()
+        entries = []
+        for name, detail in (stats.get("models") or {}).items():
+            if detail.get("model_type") != "FasterWhisper":
+                continue
+            # Prefer the actual device: a CUDA-configured Whisper that fell back
+            # to CPU (cuDNN guard) must not be counted as VRAM.
+            device = detail.get("runtime_device") or detail.get("device")
+            if not str(device or "").startswith("cuda"):
+                continue
+            entries.append({"name": name, **detail})
+        return entries
+
+    def _evaluate_whisper_memory_governance(self) -> dict:
+        """Boot-time Whisper budget check + probe table (Phase 10-3).
+
+        Compares the projected Whisper footprint (checkpoint weights + measured
+        max-shape probe peaks) with the true free device headroom. With
+        ``whisper_vram_budget_bytes`` configured an overshoot is a hard boot
+        error; without it the check only warns. On a CPU-only build there is no
+        device-level VRAM story, so the check is skipped explicitly.
+        """
+        stats = self.get_vram_stats()
+        entries = self._whisper_vram_entries(stats)
+        if not stats.get("cuda"):
+            report = {
+                "enabled": False,
+                "status": "cpu",
+                "message": "Device-level VRAM governance is unavailable without CUDA.",
+                "projected_peak_bytes": 0,
+                "free_headroom_bytes": 0,
+                "budget_bytes": getattr(self, "whisper_vram_budget_bytes", None),
+                "budget_configured": getattr(self, "whisper_vram_budget_bytes", None) is not None,
+                "exceeded_budget": False,
+                "exceeded_headroom": False,
+                "models": [],
+                "measured_models": 0,
+            }
+            logger.info(report["message"])
+            return report
+
+        if not entries:
+            report = {
+                "enabled": False,
+                "status": "no-whisper",
+                "message": "No CUDA-placed Whisper config is resident; VRAM governance is idle.",
+                "projected_peak_bytes": 0,
+                "free_headroom_bytes": int(stats.get("free_bytes") or 0),
+                "budget_bytes": getattr(self, "whisper_vram_budget_bytes", None),
+                "budget_configured": getattr(self, "whisper_vram_budget_bytes", None) is not None,
+                "exceeded_budget": False,
+                "exceeded_headroom": False,
+                "models": [],
+                "measured_models": 0,
+            }
+            logger.info(report["message"])
+            return report
+
+        projected = projected_whisper_peak(entries)
+        free_headroom = int(stats.get("free_bytes") or 0)
+        budget = getattr(self, "whisper_vram_budget_bytes", None)
+        if stats.get("device_used_source") == "torch_reserved_fallback":
+            logger.warning(
+                "Device-level VRAM truth (torch.cuda.mem_get_info) is unavailable; "
+                "Whisper governance is using the torch-reserved fallback, so the "
+                "free-headroom figure may be too high while CTranslate2 holds memory."
+            )
+        verdict = evaluate_whisper_budget(projected, free_headroom, budget)
+
+        logger.info("Whisper VRAM governance (Phase 10-3):")
+        logger.info(
+            f"{'config':<34} {'workers':>7} {'windows':>7} {'beam':>4} "
+            f"{'max audio s':>11} {'weights MiB':>11} {'probe peak MiB':>14} {'probe':>10}"
+        )
+        for entry in entries:
+            if entry.get("probe_measured"):
+                probe_state = "measured"
+            else:
+                probe_state = f"skipped:{entry.get('probe_reason') or 'unknown'}"
+            logger.info(
+                f"{str(entry.get('name')):<34} "
+                f"{str(entry.get('workers') if entry.get('workers') is not None else '-'):>7} "
+                f"{str(entry.get('window_batch') if entry.get('window_batch') is not None else '-'):>7} "
+                f"{str(entry.get('beam_size') if entry.get('beam_size') is not None else '-'):>4} "
+                f"{float(entry.get('max_audio_seconds') or 0.0):>11.0f} "
+                f"{int(entry.get('weights_bytes') or 0) / 2**20:>11.1f} "
+                f"{int(entry.get('peak_activation_bytes') or 0) / 2**20:>14.1f} "
+                f"{probe_state:>10}"
+            )
+
+        report = {
+            "enabled": True,
+            **verdict,
+            "models": entries,
+            "measured_models": sum(1 for entry in entries if entry.get("probe_measured")),
+        }
+        if verdict["status"] == "error":
+            raise RuntimeError(verdict["message"])
+        if verdict["status"] == "warn":
+            logger.warning(verdict["message"])
+        else:
+            logger.info(verdict["message"])
+        return report
+
+    def get_whisper_vram_report(self) -> dict | None:
+        """Return the boot-time Whisper governance report (``None`` on a shell engine)."""
+        return getattr(self, "whisper_vram_report", None)
+
+    def get_whisper_admission(self, active_windows: int = 0, *, min_windows: int = 1) -> dict:
+        """Runtime admission-scaling hook for 10-1/10-2 (Phase 10-3).
+
+        Reads device-level used memory (``torch.cuda.mem_get_info``), the
+        optional budget (or the device total when unset) and the measured
+        per-window cost, then returns how many Whisper windows may be in flight.
+        The decision itself is the pure
+        :func:`~harmonyspeech.engine.vram_budget.allowed_windows` function, so
+        10-5 can drive it with a mocked ``mem_get_info``.
+
+        ``min_windows`` is the draining floor (default ``1``); pass ``0`` for a
+        hard stop when testing exhaustion behaviour.
+
+        Returns a dict with ``enabled``, ``allowed_windows`` and every input
+        used, so the caller (and tests) can explain the decision.
+        """
+        stats = self.get_vram_stats()
+        entries = self._whisper_vram_entries(stats)
+        if not entries:
+            return {
+                "enabled": False,
+                "allowed_windows": 0,
+                "cap": 0,
+                "budget_bytes": getattr(self, "whisper_vram_budget_bytes", None),
+                "budget_source": "none",
+                "device_used_bytes": int(stats.get("device_used_bytes") or 0),
+                "free_bytes": int(stats.get("free_bytes") or 0),
+                "per_window_bytes": 0,
+                "active_windows": int(active_windows or 0),
+            }
+
+        cap = max(int(entry.get("max_batch_size") or 0) for entry in entries) or 1
+        cost = max(int(entry.get("per_window_bytes") or 0) for entry in entries)
+        budget = getattr(self, "whisper_vram_budget_bytes", None)
+        if budget is None:
+            budget = int(stats.get("total_bytes") or 0)
+            budget_source = "device_total"
+        else:
+            budget_source = "config"
+        used = int(stats.get("device_used_bytes") or 0)
+        allowed = allowed_windows(
+            budget,
+            used,
+            active_windows,
+            cap,
+            per_window_bytes=cost,
+            min_windows=min_windows,
+        )
+        return {
+            "enabled": True,
+            "allowed_windows": allowed,
+            "cap": cap,
+            "budget_bytes": budget,
+            "budget_source": budget_source,
+            "device_used_bytes": used,
+            "free_bytes": int(stats.get("free_bytes") or 0),
+            "per_window_bytes": cost,
+            "active_windows": int(active_windows or 0),
+        }
+
+    # ------------------------------------------------------------------
+    # Whisper execution lanes (Phase 10-1)
+    # ------------------------------------------------------------------
+    def get_whisper_lane_stats(self) -> dict:
+        """Return the Whisper lane accounting rendered by ``/metrics``.
+
+        Shape::
+
+            {"enabled": bool,
+             "models": {<executor name>: {
+                 "workers": int,              # configured CT2 inter_threads
+                 "in_flight": int,            # transcribe calls executing now
+                 "lane_short_depth": int,     # waiting <=30 s requests
+                 "lane_long_depth": int,      # waiting >30 s requests
+                 "queue_wait": {"sum", "count", "max", "buckets"},
+                 "ct2": {"available", "queued", "active"},
+                 "batch_fallbacks": int,        # window-batcher → sequential fallbacks
+             }}}
+
+        Robust on a shell engine (``__new__`` without ``__init__``) and on a
+        deployment without a Whisper config: ``enabled`` is then ``False`` and
+        the renderer emits explicit zero samples.
+        """
+        lane_depths: dict[str, dict[str, int]] = {}
+        scheduler = getattr(self, "scheduler", None)
+        if scheduler is not None:
+            try:
+                lane_depths = scheduler.whisper_lane_depths() or {}
+            except Exception as error:  # noqa: BLE001 - metrics must never break a scrape
+                logger.warning(f"Failed to read Whisper lane depths: {error}")
+
+        models: dict[str, dict] = {}
+        for name, model_executor in getattr(self, "model_executors", {}).items():
+            config = getattr(model_executor, "model_config", None)
+            if getattr(config, "model_type", None) != "FasterWhisper":
+                continue
+            runner = getattr(getattr(model_executor, "driver_worker", None), "model_runner", None)
+            if runner is None:
+                # Test harnesses and shell engines expose the runner directly.
+                runner = getattr(model_executor, "runner", None)
+            stats: dict = {}
+            reader = getattr(runner, "whisper_lane_stats", None)
+            if callable(reader):
+                try:
+                    stats = dict(reader() or {})
+                except Exception as error:  # noqa: BLE001 - metrics must never break a scrape
+                    logger.warning(f"Failed to read Whisper lane stats for '{name}': {error}")
+            workers = stats.get("workers")
+            if not workers:
+                workers = getattr(config, "num_workers", 1)
+            depths = lane_depths.get(name) or {}
+            models[name] = {
+                "workers": max(1, int(workers or 1)),
+                "in_flight": int(stats.get("in_flight") or 0),
+                "lane_short_depth": int(depths.get("short") or 0),
+                "lane_long_depth": int(depths.get("long") or 0),
+                "queue_wait": stats.get("queue_wait")
+                or {"sum": 0.0, "count": 0, "max": 0.0, "buckets": []},
+                "ct2": stats.get("ct2") or {"available": False, "queued": 0, "active": 0},
+                "batch_fallbacks": int(stats.get("batch_fallbacks") or 0),
+            }
+        return {"enabled": bool(models), "models": models}
 
 
 setup_logger()

@@ -1,3 +1,4 @@
+import math
 import time
 from collections import deque
 from collections.abc import Iterable
@@ -7,6 +8,170 @@ from loguru import logger
 
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.request import EngineRequest, RequestStatus
+
+#: faster-whisper cuts audio into <=30 s clips, so that is also the boundary
+#: between the two fairness lanes (Phase 10-1). The duration is already known at
+#: admission: the artifact bus decoded the audio exactly once in
+#: ``add_request``/``from_wire_audio``, so lane selection costs no extra decode.
+WHISPER_SHORT_LANE_MAX_SECONDS = 30.0
+
+#: Credit ratio used to drain the two Whisper lanes: three short requests for
+#: every long one. When one lane is empty the other is served without idling, so
+#: a burst of long audio can never starve short requests beyond this ratio (and
+#: vice versa).
+WHISPER_SHORT_CREDIT = 3
+WHISPER_LONG_CREDIT = 1
+
+#: faster-whisper's windowing scale (one 30 s clip). A request's admission cost
+#: is the number of such windows its audio can produce (Phase 10-2): the memory
+#: governor bounds *windows* in flight, not requests.
+WHISPER_WINDOW_SECONDS = 30.0
+
+
+def _artifact_duration(request) -> float | None:
+    """Admission-time audio duration in seconds, or ``None`` when unknown."""
+    artifacts = getattr(request, "artifacts", None) or {}
+    artifact = artifacts.get("input_audio") if hasattr(artifacts, "get") else None
+    try:
+        return float(artifact.duration_s)
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def whisper_lane(request) -> str:
+    """Classify a request into the ``"short"`` (<=30 s) or ``"long"`` lane.
+
+    Reads the admission-time audio artifact (``request.artifacts["input_audio"]``)
+    — no decode happens here. A request whose duration cannot be determined is
+    treated as long: it is the conservative choice (it never gets the short
+    lane's priority), and a missing artifact is an input-plumbing bug rather than
+    a reason to guess.
+    """
+    seconds = _artifact_duration(request)
+    if seconds is None:
+        return "long"
+    return "short" if seconds <= WHISPER_SHORT_LANE_MAX_SECONDS else "long"
+
+
+def whisper_window_count(request) -> int:
+    """Estimated 30 s windows a request will form (Phase 10-2 admission cost).
+
+    Uses the admission-time audio duration: ``ceil(seconds / 30)``. VAD can only
+    remove audio, so this is an **upper bound** on the windows the collector
+    will actually form — conservative for a memory bound, and cheap (no decode,
+    no VAD at admission). Unknown/zero durations cost one window.
+    """
+    seconds = _artifact_duration(request)
+    if seconds is None or seconds <= 0:
+        return 1
+    return max(1, int(math.ceil(seconds / WHISPER_WINDOW_SECONDS)))
+
+
+class LaneCredits:
+    """Credit-bucket drain policy for the two Whisper lanes (Phase 10-1).
+
+    Picks from the short lane until its credit is spent, then one long-lane
+    request, refilling both buckets when they are empty. This is the "3 short :
+    1 long" ratio: within any round of four picks a long request is guaranteed a
+    slot as soon as one is waiting, while short audio still gets the bulk of the
+    capacity. When a lane is empty the other lane is served and its bucket
+    refills on demand, so capacity is never left idle.
+
+    Credits persist across engine steps for a model (a scheduler owns one
+    instance per Whisper model), so the ratio holds over time and not just
+    inside one step.
+    """
+
+    def __init__(self, short_credit: int = WHISPER_SHORT_CREDIT, long_credit: int = WHISPER_LONG_CREDIT) -> None:
+        self.short_credit = max(1, int(short_credit))
+        self.long_credit = max(1, int(long_credit))
+        self._short = self.short_credit
+        self._long = self.long_credit
+
+    def reset(self) -> None:
+        self._short = self.short_credit
+        self._long = self.long_credit
+
+    def pick(self, short_available: bool, long_available: bool) -> str | None:
+        """Return the lane to serve next, or ``None`` when both are empty."""
+        if not short_available and not long_available:
+            return None
+        if short_available and long_available:
+            if self._short <= 0 and self._long <= 0:
+                self.reset()
+            if self._short > 0:
+                self._short -= 1
+                return "short"
+            self._long -= 1
+            return "long"
+        if short_available:
+            if self._short <= 0:
+                self._short = self.short_credit
+            self._short -= 1
+            return "short"
+        if self._long <= 0:
+            self._long = self.long_credit
+        self._long -= 1
+        return "long"
+
+
+def plan_lane_admission(
+    candidates,
+    capacity: int,
+    credits: LaneCredits,
+    *,
+    window_costs: dict[int, int] | None = None,
+    window_budget: int | None = None,
+) -> tuple[list, list]:
+    """Pick up to ``capacity`` requests, draining the two lanes by credit.
+
+    ``candidates`` is an arrival-ordered ``[(request, lane)]`` list. Returns
+    ``(selected, leftover)``: both preserve arrival order within their lane, so
+    FIFO fairness inside a lane is untouched and only the inter-lane ratio is
+    new.
+
+    Phase 10-2 adds an optional **window budget**: ``window_costs`` maps
+    ``id(request)`` to its 30 s window count, and ``window_budget`` caps the sum
+    of admitted windows this step (the memory governor's allowance). A request
+    that would exceed the remaining budget is left for a later step while the
+    planner keeps scanning the other lane, so a large request cannot block a
+    small one behind it. ``capacity`` remains the request-count bound
+    (``max_batch_size``).
+    """
+    capacity = max(0, int(capacity or 0))
+    if capacity == 0:
+        return [], [request for request, _lane in candidates]
+
+    costs = window_costs or {}
+    budget = None if window_budget is None else max(0, int(window_budget))
+
+    def cost(request) -> int:
+        return max(1, int(costs.get(id(request), 1)))
+
+    short = [request for request, lane in candidates if lane == "short"]
+    longs = [request for request, lane in candidates if lane != "short"]
+    selected: list = []
+    used_windows = 0
+    short_index = long_index = 0
+    while len(selected) < capacity and (short_index < len(short) or long_index < len(longs)):
+        choice = credits.pick(short_index < len(short), long_index < len(longs))
+        if choice == "short":
+            request = short[short_index]
+            short_index += 1
+        else:
+            request = longs[long_index]
+            long_index += 1
+        request_windows = cost(request)
+        if budget is not None and used_windows + request_windows > budget:
+            # Does not fit this step; leave it for the next one and keep
+            # scanning so the other lane (and smaller requests) can proceed.
+            continue
+        selected.append(request)
+        used_windows += request_windows
+
+    selected_ids = {id(request) for request in selected}
+    leftover = [request for request, _lane in candidates if id(request) not in selected_ids]
+    return selected, leftover
 
 
 @dataclass
@@ -74,7 +239,11 @@ class SchedulerWaitingOutputs:
 
 
 class Scheduler:
-    def __init__(self, model_configs: list[ModelConfig] | None) -> None:
+    def __init__(
+        self,
+        model_configs: list[ModelConfig] | None,
+        whisper_admission=None,
+    ) -> None:
         self.model_configs = model_configs
 
         # Requests in the WAITING state.
@@ -84,6 +253,17 @@ class Scheduler:
 
         # Time at previous scheduling step
         self.prev_time = 0.0
+
+        # Phase 10-1: per-model lane credits + the engine's memory governor.
+        # `whisper_admission(active_windows) -> dict` is
+        # `HarmonySpeechEngine.get_whisper_admission` (Phase 10-3); None keeps
+        # the scheduler standalone (tests, tooling) with capacity-only admission.
+        self.whisper_admission = whisper_admission
+        self._model_types = {
+            getattr(config, "name", None): getattr(config, "model_type", None)
+            for config in (model_configs or [])
+        }
+        self._whisper_credits: dict[str, LaneCredits] = {}
 
     def add_request(self, request: EngineRequest) -> None:
         # Add sequence groups to the waiting queue.
@@ -141,25 +321,33 @@ class Scheduler:
     def _schedule_waiting_requests(
         self, waiting_queue: deque, budget: SchedulingBudget
     ) -> tuple[deque, SchedulerWaitingOutputs]:
-        """Schedule sequence groups that are in prefill stage.
+        """Schedule waiting requests, preserving the historical per-model rule.
 
-        Note that the current scheduler treats PREEMPTED_FOR_RECOMPUTE
-        as a new prefill (that starts from beginning -> most recently generated
-        tokens).
+        Two admission regimes share this method (Phase 10-1):
 
-        It schedules waiting requests as long as it fits `budget` and
-        curr_loras <= max_lora from the scheduling config. The input arguments
-        `budget` and `curr_loras` are updated based on scheduled seq_groups.
+        * **Every non-Whisper model keeps the boolean rule**: a model that still
+          has running requests is skipped this step, and it admits in arrival
+          order up to its ``max_batch_size``. This is exactly the pre-Phase-10
+          behaviour.
+        * **Whisper models are capacity-based**: they keep admitting while the
+          budget allows, and the step is filled from two fairness lanes
+          (``<=30 s`` vs ``>30 s``) drained at the credit ratio. The final width
+          composes three bounds — the configured capacity
+          (``max_batch_size``), the memory governor's allowed in-flight windows
+          (Phase 10-3 ``get_whisper_admission``) minus the windows already
+          running (Phase 10-2: a request costs ``ceil(seconds / 30)`` windows,
+          not one), and the lane credits that decide *which* requests fill it.
+          The executor's own worker semaphore (``num_workers``) is the hard
+          in-flight bound below all of this.
 
         Args:
-            waiting_queue: The queue that contains prefill requests.
-                The given arguments are NOT in-place modified.
+            waiting_queue: The queue that contains prefill requests. The given
+                argument is NOT in-place modified.
             budget: The scheduling budget. The argument is in-place updated
                 when any requests are scheduled.
 
         Returns:
-            A tuple of remaining waiting_queue after scheduling and
-            SchedulerSwappedInOutputs.
+            A tuple of the remaining waiting queue and the scheduled requests.
         """
         ignored_requests: list[EngineRequest] = []
         requests: list[EngineRequest] = []
@@ -167,15 +355,11 @@ class Scheduler:
         # Copy the queue so that the input queue is not modified.
         waiting_queue = deque([s for s in waiting_queue])
 
-        new_scheduled_for_models = []
-        leftover_waiting_requests = deque()
-        while waiting_queue:
-            # Get Request and model name
-            request = waiting_queue[0]
+        # Group in arrival order so per-model FIFO order (and the old boolean
+        # rule) is untouched; only the inter-lane selection is new.
+        by_model: dict[str, list[EngineRequest]] = {}
+        for request in waiting_queue:
             model_name = request.request_data.model
-            # Remove from queue
-            waiting_queue.popleft()
-
             # Defence in depth (Phase 0-4): a request whose model is not part of
             # the scheduling budget at all can never be scheduled. Surface it as
             # an ignored request instead of requeueing it forever.
@@ -186,23 +370,43 @@ class Scheduler:
                 )
                 ignored_requests.append(request)
                 continue
+            by_model.setdefault(model_name, []).append(request)
 
-            # Do not schedule if there are already running requests for that model currently
-            if budget.current_num_requests(model_name) > 0 and model_name not in new_scheduled_for_models:
-                leftover_waiting_requests.append(request)
-                continue
-            # Ignore if budget for this model is exceeded
-            if budget.remaining_request_budget(model_name) <= 0:
-                leftover_waiting_requests.append(request)
+        leftover_waiting_requests: deque = deque()
+        for model_name, model_requests in by_model.items():
+            if not self._is_whisper_model(model_name):
+                # Boolean admission: a model with running work waits a step.
+                if budget.current_num_requests(model_name) > 0:
+                    leftover_waiting_requests.extend(model_requests)
+                    continue
+                remaining = budget.remaining_request_budget(model_name)
+                for request in model_requests:
+                    if remaining <= 0:
+                        leftover_waiting_requests.append(request)
+                        continue
+                    requests.append(request)
+                    budget.add_num_requests(model_name, 1)
+                    remaining -= 1
                 continue
 
-            # Can schedule this request.
-            requests.append(request)
-            budget.add_num_requests(model_name, 1)
-            # Keep track of model name in the new scheduled list
-            # This way we know it's safe to add new requests for this model
-            if model_name not in new_scheduled_for_models:
-                new_scheduled_for_models.append(model_name)
+            # Capacity-based admission for Whisper models. The request cap is
+            # `max_batch_size` minus running requests; the memory governor adds
+            # a *window* budget (Phase 10-2: a request costs ceil(seconds/30)
+            # windows, not one).
+            remaining = budget.remaining_request_budget(model_name)
+            window_budget = self._whisper_window_budget(model_name, model_requests)
+            credits = self._whisper_credits.setdefault(model_name, LaneCredits())
+            selected, rejected = plan_lane_admission(
+                [(request, whisper_lane(request)) for request in model_requests],
+                remaining,
+                credits,
+                window_costs={id(request): whisper_window_count(request) for request in model_requests},
+                window_budget=window_budget,
+            )
+            for request in selected:
+                requests.append(request)
+                budget.add_num_requests(model_name, 1)
+            leftover_waiting_requests.extend(rejected)
 
         # Phase 5-1: requests that did not fit this step stay in the waiting
         # queue. Returning the (popped) input deque here used to drop every
@@ -211,6 +415,74 @@ class Scheduler:
         return leftover_waiting_requests, SchedulerWaitingOutputs(
             requests=requests, ignored_requests=ignored_requests
         )
+
+    # ------------------------------------------------------------------
+    # Whisper lane admission (Phase 10-1)
+    # ------------------------------------------------------------------
+    def _is_whisper_model(self, model_name: str | None) -> bool:
+        """True when ``model_name`` is a configured ``FasterWhisper`` entry."""
+        return self._model_types.get(model_name) == "FasterWhisper"
+
+    def _whisper_window_budget(self, model_name: str, candidates) -> int | None:
+        """Window allowance for this step's new admissions, or ``None``.
+
+        ``get_whisper_admission`` (Phase 10-3) returns the total number of
+        Whisper windows that may be in flight. Phase 10-2 counts a request as
+        the windows it will form (``ceil(seconds / 30)``), subtracts the windows
+        already running, and returns the remaining allowance for new requests.
+
+        A governor that is disabled (CPU, no resident Whisper, no measured cost)
+        returns ``None`` so the caller falls back to plain capacity.
+
+        **Progress floor.** When nothing is in flight and a request needs more
+        windows than the current allowance (a long request against a small
+        headroom), the budget is raised to that request's cost — otherwise its
+        own size would starve it forever. This mirrors Phase 10-1's
+        one-request-one-window behaviour for the degenerate case, while the
+        governor's own ``min_windows`` floor still applies (``allowed == 0`` is
+        a hard stop and is respected).
+        """
+        hook = getattr(self, "whisper_admission", None)
+        if hook is None:
+            return None
+
+        running_windows = sum(
+            whisper_window_count(request)
+            for request in self.running
+            if getattr(request.request_data, "model", None) == model_name
+        )
+        try:
+            decision = hook(active_windows=running_windows) or {}
+        except Exception as error:  # noqa: BLE001 - admission must never break scheduling
+            logger.warning(f"Whisper admission governor failed ({error}); using capacity only")
+            return None
+        if not decision.get("enabled"):
+            return None
+        try:
+            allowed = int(decision.get("allowed_windows") or 0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive on odd hook output
+            return None
+
+        headroom = max(0, allowed - running_windows)
+        if running_windows == 0 and allowed > 0 and candidates:
+            headroom = max(headroom, min(whisper_window_count(request) for request in candidates))
+        return headroom
+
+    def whisper_lane_depths(self) -> dict[str, dict[str, int]]:
+        """Waiting-request depth per Whisper lane: ``{model: {"short", "long"}}``.
+
+        Feeds the ``hse_whisper_lane_{short,long}_depth`` gauges. Only requests
+        still waiting count: a running request is no longer queued behind
+        anything.
+        """
+        depths: dict[str, dict[str, int]] = {}
+        for request in self.waiting:
+            model_name = getattr(request.request_data, "model", None)
+            if not self._is_whisper_model(model_name):
+                continue
+            entry = depths.setdefault(model_name, {"short": 0, "long": 0})
+            entry[whisper_lane(request)] += 1
+        return depths
 
     def get_scheduling_budget(self) -> SchedulingBudget:
         """Calculate the overall scheduling Budget for requests per Model"""

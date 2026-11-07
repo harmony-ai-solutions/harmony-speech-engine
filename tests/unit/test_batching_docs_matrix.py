@@ -110,3 +110,20 @@ def test_matrix_documents_the_phase_8_5_skip_evidence():
     # Chatterbox: the product decision, quoted verbatim (allow line wrapping).
     normalized = " ".join(text.replace(">", " ").split())
     assert "explicitly out of scope** per the product decision (2026-11-05)" in normalized
+
+
+@pytest.mark.unit
+def test_matrix_documents_the_five_execution_classes_and_the_whisper_final_row():
+    """Phase 10-5: the class table and Whisper's final row are the operator contract."""
+    text = DOCS.read_text(encoding="utf-8")
+    assert "## Execution-model classes" in text
+    for class_name in ("padded_batch", "loop", "queue_depth", "lanes_windows", "ar_decode"):
+        assert f"`{class_name}`" in text, f"docs/batching.md is missing the {class_name} class"
+    # Whisper's final mechanism wording (lanes M × windows B, intra-audio 16).
+    whisper_row = next(row for row in _matrix_rows() if _mentions(row, "FasterWhisper"))
+    assert "lanes M × windows B" in whisper_row
+    assert "intra-audio CT2 batch is 16" in whisper_row
+    assert "opt-in" in whisper_row
+    # The window batcher is documented as opt-in until the B=1 parity gate.
+    normalized = " ".join(text.split())
+    assert "Phase 10-5 kept it opt-in (dated decision 2026-11-07)" in normalized

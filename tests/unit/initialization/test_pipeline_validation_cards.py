@@ -226,6 +226,20 @@ def test_advertised_types_match_the_old_hand_maintained_lists():
 
 
 @pytest.mark.unit
+def test_translation_capability_is_declared_and_advertised():
+    """Phase 10-4: the Whisper spec advertises translation without hand lists."""
+    from harmonyspeech.processing.pipeline_registry import CAPABILITIES, capabilities_for_model_type
+
+    assert "translation" in CAPABILITIES
+    assert model_types_advertising("translation") == {"FasterWhisper"}
+    assert capabilities_for_model_type("FasterWhisper") == {"stt", "translation", "vad"}
+
+    cards = OpenAIServingSpeechToText.models_from_config([_cfg("whisper", "FasterWhisper")])
+    assert [card.id for card in cards] == ["whisper"]
+    assert cards[0].capabilities == ["stt", "translation", "vad"]
+
+
+@pytest.mark.unit
 def test_no_serving_module_keeps_a_hand_maintained_model_list():
     import pathlib
 

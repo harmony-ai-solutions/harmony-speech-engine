@@ -599,15 +599,26 @@ class SpeechTranscribeRequestInput(RequestInput):
         input_audio: str | None = None,
         get_language: bool | None = False,
         get_timestamps: bool | None = False,
+        task: str = "transcribe",
+        language: str | None = None,
+        prompt: str | None = None,
         metrics: RequestMetrics | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio
         self.get_language = get_language
         self.get_timestamps = get_timestamps
+        # ``task`` is faster-whisper's transcription task ("transcribe" or
+        # "translate"); the handler turns it into the matching prompt token
+        # (<|transcribe|> / <|translate|>) in both execution paths (Phase 10-4).
+        self.task = task or "transcribe"
+        # Source-language hint (never a translation target) and optional
+        # initial prompt, both forwarded to faster-whisper when set.
+        self.language = language
+        self.prompt = prompt
 
     @classmethod
-    def from_openai(cls, request_id: str, request: "SpeechTranscribeRequest"):
+    def from_openai(cls, request_id: str, request: "SpeechTranscribeRequest", task: str = "transcribe"):
         return cls(
             request_id=request_id,
             requested_model=getattr(request, "model", ""),
@@ -615,6 +626,9 @@ class SpeechTranscribeRequestInput(RequestInput):
             input_audio=getattr(request, "input_audio", None),
             get_language=getattr(request, "get_language", False),
             get_timestamps=getattr(request, "get_timestamps", False),
+            task=task,
+            language=getattr(request, "language", None),
+            prompt=getattr(request, "prompt", None),
         )
 
 

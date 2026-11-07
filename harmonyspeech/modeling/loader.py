@@ -2,6 +2,7 @@
 
 import contextlib
 import ctypes
+import os
 import sys
 
 import perth
@@ -71,6 +72,29 @@ def _check_ctranslate2_cuda_available() -> bool:
         except OSError:
             return False
     return True
+
+
+def _resolve_native_model_path(size_or_id: str) -> str | None:
+    """Return a local checkpoint directory for a native model, without downloading.
+
+    ``faster_whisper`` resolves short names (``tiny``, ``large-v3-turbo``) to a
+    Hugging Face cache directory internally but does not keep the path on the
+    model object. The VRAM accounting (Phase 10-3) needs the checkpoint size, so
+    the loader asks the same resolver with ``local_files_only=True``: a cached
+    model yields its directory, an uncached one yields ``None`` (reported as 0
+    weights rather than a guess) and no network call is made.
+    """
+    try:
+        if os.path.isdir(size_or_id):
+            return size_or_id
+    except OSError:
+        return None
+    try:
+        from faster_whisper.utils import download_model
+
+        return download_model(size_or_id, local_files_only=True)
+    except Exception:  # noqa: BLE001 - best-effort accounting only
+        return None
 
 
 @contextlib.contextmanager
@@ -313,7 +337,17 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                         model_config.model,
                         device=device_str,
                         compute_type=compute_type,
+                        # Phase 10-1: faster-whisper forwards this straight to
+                        # CTranslate2 `inter_threads`, so same-device workers
+                        # share the loaded weights and get separate CUDA
+                        # streams. `1` (the default) is today's behaviour.
+                        num_workers=max(1, int(getattr(model_config, "num_workers", 1) or 1)),
                     )
+                    # VRAM accounting (Phase 10-3): CTranslate2 has no torch
+                    # tensors to walk, so remember the resolved checkpoint
+                    # directory for `hse_model_weights_bytes`. Resolution is
+                    # cache-only (no download).
+                    model.model_path = _resolve_native_model_path(model_config.model)
                     return model
                 elif model_config.model_type == "SileroVAD":
                     # Support both ONNX and PyTorch formats based on config

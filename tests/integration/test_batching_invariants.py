@@ -410,7 +410,7 @@ def test_transcription_batch_pairs_text_with_its_own_audio():
         def __init__(self, model=None):
             self.model = model
 
-        def transcribe(self, audio, batch_size=16):
+        def transcribe(self, audio, batch_size=16, **kwargs):
             seconds = len(audio) / 16000.0
             key = "x" if seconds < 0.25 else "y"
             return [FakeSegment(transcripts[key])], FakeInfo()

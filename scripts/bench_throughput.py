@@ -76,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import platform
@@ -334,6 +335,549 @@ def clone_scenario_matrix(reference: str = "repo_voice_a") -> list[dict]:
         for mode in CLONE_REFERENCE_MODES
         for cache in ("on", "off")
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 10-5 — Whisper exhaustion / fairness / budget-trip scenarios
+# ---------------------------------------------------------------------------
+
+#: Response formats the heterogeneous flood rotates through (Phase 10-4 wire
+#: surface). ``json`` is the byte-identical default; the other three are text.
+WHISPER_RESPONSE_FORMATS: tuple[str, ...] = ("json", "text", "srt", "vtt")
+
+#: Source-language hints the flood rotates through. The reference audio is
+#: reused (no external assets); the point is per-request prompt/tokenizer
+#: diversity across a batch, not translation quality.
+WHISPER_LANGUAGES: tuple[str, ...] = ("en", "de", "fr", "es", "ja")
+
+#: Owner-approved tight caps for the exhaustion scenario (2026-11-07): M=2
+#: workers, window batch=4, admission/queue depth=16. The engine must be booted
+#: with these values; the script records them and refuses to claim a run it
+#: cannot verify when ``/health`` exposes the configured budget.
+WHISPER_FLOOD_WORKERS = 2
+WHISPER_FLOOD_WINDOW_BATCH = 4
+WHISPER_FLOOD_QUEUE = 16
+WHISPER_FLOOD_REQUESTS = 100
+WHISPER_FLOOD_MAX_SECONDS = 480.0  # 8 minutes
+
+#: The fairness proof's pinned long-first request (owner: "one ≥10-min file
+#: first, then short clips").
+WHISPER_FAIRNESS_LONG_SECONDS = 600.0
+
+
+def whisper_flood_durations(count: int = WHISPER_FLOOD_REQUESTS, max_seconds: float = WHISPER_FLOOD_MAX_SECONDS) -> list[float]:
+    """Deterministic 2 s–``max_seconds`` duration spread for the flood.
+
+    Most requests are short (the workload Whisper serves most), a middle band
+    exercises the 30 s window boundary, and a long tail (including one
+    ``max_seconds`` request) exercises multi-window collection and stitching.
+    Deterministic so a rerun measures the same load shape.
+    """
+    count = max(1, int(count))
+    max_seconds = max(2.0, float(max_seconds))
+    durations: list[float] = []
+    # 70 % short (2–25 s), 20 % medium (30–90 s), 10 % long (120–max_seconds).
+    short_count = max(1, round(count * 0.70))
+    medium_count = max(1, round(count * 0.20))
+    long_count = max(1, count - short_count - medium_count)
+    for index in range(short_count):
+        span = 25.0 - 2.0
+        durations.append(2.0 + span * (index / max(1, short_count - 1)))
+    for index in range(medium_count):
+        span = 90.0 - 30.0
+        durations.append(30.0 + span * (index / max(1, medium_count - 1)))
+    for index in range(long_count):
+        span = max_seconds - 120.0
+        durations.append(120.0 + span * (index / max(1, long_count - 1)))
+    # Exactly `count` rows; the last one is the 8-minute multi-window case.
+    durations = durations[:count]
+    durations[-1] = max_seconds
+    return [round(value, 3) for value in durations]
+
+
+def whisper_flood_scenario(
+    count: int = WHISPER_FLOOD_REQUESTS,
+    max_seconds: float = WHISPER_FLOOD_MAX_SECONDS,
+) -> list[dict]:
+    """The 100-request heterogeneous exhaustion scenario (owner, 2026-11-07).
+
+    Mixed durations (2 s–8 min), mixed tasks (transcription + translation),
+    mixed source-language hints, and all four response formats. Each row is one
+    HTTP request; the engine is expected to run it against deliberately tight
+    caps (M=2 workers, window batch=4, queue 16).
+    """
+    specs = []
+    for index, seconds in enumerate(whisper_flood_durations(count, max_seconds)):
+        translate = index % 7 == 0
+        specs.append(
+            {
+                "index": index,
+                "duration_s": seconds,
+                "task": "translate" if translate else "transcribe",
+                "path": "/v1/audio/translations" if translate else "/v1/audio/transcriptions",
+                "response_format": WHISPER_RESPONSE_FORMATS[index % len(WHISPER_RESPONSE_FORMATS)],
+                "language": WHISPER_LANGUAGES[index % len(WHISPER_LANGUAGES)],
+                "kind": "flood",
+            }
+        )
+    return specs
+
+
+def whisper_fairness_scenario(
+    long_seconds: float = WHISPER_FAIRNESS_LONG_SECONDS,
+    short_count: int = 20,
+    short_seconds: float = 3.0,
+) -> list[dict]:
+    """The head-of-line fairness proof: one ≥10-min file **first**, then shorts.
+
+    Short-clip p50/p95 under this queue is the pile-up answer; the sequential
+    baseline is the Phase 5-3 table in ``docs/benchmarks/throughput.md``.
+    """
+    specs = [
+        {
+            "index": 0,
+            "duration_s": float(long_seconds),
+            "task": "transcribe",
+            "path": "/v1/audio/transcriptions",
+            "response_format": "json",
+            "language": None,
+            "kind": "long",
+        }
+    ]
+    for index in range(max(1, int(short_count))):
+        specs.append(
+            {
+                "index": index + 1,
+                "duration_s": float(short_seconds),
+                "task": "transcribe",
+                "path": "/v1/audio/transcriptions",
+                "response_format": WHISPER_RESPONSE_FORMATS[index % len(WHISPER_RESPONSE_FORMATS)],
+                "language": WHISPER_LANGUAGES[index % len(WHISPER_LANGUAGES)],
+                "kind": "short",
+            }
+        )
+    return specs
+
+
+def duration_audio_b64(reference_audio_b64: str, seconds: float, cache: dict | None = None) -> str:
+    """Return base64 WAV of exactly ``seconds`` built by tiling the reference clip.
+
+    No external assets are needed: the decoded reference speech is repeated (and
+    trimmed) to the requested duration, so VAD/windowing see real speech at every
+    length. Results are cached per (rounded) duration — the flood reuses many
+    durations across its 100 requests.
+    """
+    import base64
+
+    import numpy as np
+
+    from harmonyspeech.common import audio_codec
+
+    seconds = max(0.01, float(seconds))
+    key = round(seconds, 3)
+    cache = cache if cache is not None else {}
+    if key in cache:
+        return cache[key]
+
+    raw = base64.b64decode(reference_audio_b64)
+    waveform, sample_rate = audio_codec.decode_audio(raw)
+    target = max(1, int(round(seconds * sample_rate)))
+    if len(waveform) == 0:
+        raise ValueError("reference audio decoded to zero samples")
+    if len(waveform) >= target:
+        trimmed = waveform[:target]
+    else:
+        repeats = int(np.ceil(target / len(waveform)))
+        trimmed = np.tile(waveform, repeats)[:target]
+    encoded = audio_codec.encode_audio(trimmed, sample_rate, "wav")
+    value = base64.b64encode(encoded).decode("ascii")
+    cache[key] = value
+    return value
+
+
+def build_whisper_payload(spec: dict, audio_b64: str, model: str) -> dict:
+    """Build one Whisper request payload from a scenario row."""
+    payload = {
+        "model": model,
+        "input_audio": audio_b64,
+        "response_format": spec["response_format"],
+    }
+    if spec.get("language"):
+        payload["language"] = spec["language"]
+    return payload
+
+
+def _whisper_response_ok(spec: dict, response) -> tuple[bool, str | None]:
+    """Whether one flood response is a valid, non-lossy answer for its format."""
+    if response.status_code != 200:
+        return False, f"http_{response.status_code}"
+    fmt = spec["response_format"]
+    if fmt == "json":
+        try:
+            body = response.json()
+        except Exception as error:  # noqa: BLE001 - malformed JSON is a format error
+            return False, f"invalid_json: {error}"
+        if not isinstance(body, dict) or "text" not in body:
+            return False, "missing_text_field"
+        return True, None
+    content_type = response.headers.get("content-type", "")
+    if not content_type.startswith("text/plain"):
+        return False, f"wrong_content_type: {content_type}"
+    # An empty document is valid (silence); a subtitle document that is not
+    # empty must carry its format marker.
+    text = response.text or ""
+    if fmt == "srt" and text.strip() and "-->" not in text:
+        return False, "invalid_srt"
+    if fmt == "vtt" and text.strip() and not text.lstrip().startswith("WEBVTT"):
+        return False, "invalid_vtt"
+    return True, None
+
+
+_WHISPER_GAUGE_RE = re.compile(
+    r'^hse_whisper_(workers|in_flight|lane_short_depth|lane_long_depth|batch_fallbacks_total)'
+    r'\{model="([^"]*)"\}\s+([0-9.eE+-]+)\s*$'
+)
+_WHISPER_CT2_RE = re.compile(
+    r'^hse_whisper_ct2_(queued|active)_batches\{model="([^"]*)"\}\s+([0-9.eE+-]+)\s*$'
+)
+_WHISPER_QUEUE_WAIT_RE = re.compile(
+    r'^hse_whisper_queue_wait_seconds_(sum|count)\{model="([^"]*)"\}\s+([0-9.eE+-]+)\s*$'
+)
+
+
+def parse_whisper_metrics(text: str) -> dict:
+    """Parse the Whisper lane gauges and device-level VRAM from ``/metrics``.
+
+    Returns ``{"models": {name: {...}}, "device": {...}}``. Pure so the load
+    shape (and the lane-depth trace) is unit-testable without a server.
+    """
+    models: dict[str, dict] = {}
+    device: dict[str, int] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("hse_vram_device_used_bytes "):
+            with contextlib.suppress(IndexError, ValueError):
+                device["device_used_bytes"] = int(float(line.split()[1]))
+            continue
+        if line.startswith("hse_vram_headroom_bytes "):
+            with contextlib.suppress(IndexError, ValueError):
+                device["headroom_bytes"] = int(float(line.split()[1]))
+            continue
+        match = _WHISPER_GAUGE_RE.match(line)
+        if match:
+            key, model, value = match.groups()
+            models.setdefault(model, {})[key] = int(float(value))
+            continue
+        match = _WHISPER_CT2_RE.match(line)
+        if match:
+            key, model, value = match.groups()
+            entry = models.setdefault(model, {})
+            entry[f"ct2_{key}"] = int(float(value))
+            continue
+        match = _WHISPER_QUEUE_WAIT_RE.match(line)
+        if match:
+            key, model, value = match.groups()
+            models.setdefault(model, {})[f"queue_wait_{key}"] = float(value)
+    return {"models": models, "device": device}
+
+
+class MetricsSampler:
+    """Sample ``/metrics`` while a flood runs (lane depths over time)."""
+
+    def __init__(self, client, base_url: str, interval: float = 0.5) -> None:
+        self.client = client
+        self.base_url = base_url
+        self.interval = max(0.05, float(interval))
+        self.samples: list[dict] = []
+        self._task = None
+        self._started = 0.0
+
+    async def _sample_once(self) -> None:
+        try:
+            response = await self.client.get(self.base_url + "/metrics", timeout=10)
+        except Exception:  # pragma: no cover - sampling is best effort
+            return
+        if response.status_code != 200:
+            return
+        parsed = parse_whisper_metrics(response.text)
+        parsed["t_s"] = round(time.monotonic() - self._started, 3)
+        self.samples.append(parsed)
+
+    async def _loop(self) -> None:
+        while True:
+            await self._sample_once()
+            await asyncio.sleep(self.interval)
+
+    async def start(self) -> None:
+        self._started = time.monotonic()
+        await self._sample_once()
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> list[dict]:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        await self._sample_once()
+        return self.samples
+
+
+async def _run_whisper_scenario(
+    client,
+    base_url: str,
+    specs: list[dict],
+    payloads: list[dict],
+    concurrency: int,
+    timeout: float,
+    sampler: MetricsSampler | None = None,
+) -> tuple[list[dict], float, list[dict]]:
+    """Fire every request at ``concurrency`` clients, recording per-request traces.
+
+    Every submitted request produces exactly one record — a client exception is
+    recorded as a failed request, never dropped — so ``len(records) == len(specs)``
+    is the request-loss check.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    for index in range(len(specs)):
+        queue.put_nowait(index)
+    records: list[dict] = []
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        while True:
+            try:
+                index = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            spec = specs[index]
+            payload = payloads[index]
+            started = time.perf_counter()
+            ok = False
+            status = None
+            error = None
+            try:
+                response = await client.post(
+                    base_url + spec["path"], json=payload, timeout=timeout
+                )
+                elapsed = time.perf_counter() - started
+                status = response.status_code
+                ok, error = _whisper_response_ok(spec, response)
+            except Exception as exc:  # noqa: BLE001 - a client timeout/failure is data
+                elapsed = time.perf_counter() - started
+                error = f"{type(exc).__name__}: {exc}"
+            async with lock:
+                records.append(
+                    {
+                        "index": index,
+                        "kind": spec.get("kind", "flood"),
+                        "duration_s": spec["duration_s"],
+                        "task": spec["task"],
+                        "response_format": spec["response_format"],
+                        "language": spec.get("language"),
+                        "status": status,
+                        "wall_ms": round(elapsed * 1000, 1),
+                        "ok": ok,
+                        "error": error,
+                    }
+                )
+
+    if sampler is not None:
+        await sampler.start()
+    started = time.perf_counter()
+    await asyncio.gather(*(worker() for _ in range(max(1, int(concurrency)))))
+    wall = time.perf_counter() - started
+    samples = await sampler.stop() if sampler is not None else []
+    return records, wall, samples
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, round(fraction * (len(ordered) - 1))))
+    return ordered[index]
+
+
+def summarize_whisper_scenario(specs: list[dict], records: list[dict], wall_s: float, samples: list[dict]) -> dict:
+    """Aggregate the exhaustion/fairness evidence the owner asked for."""
+    completed = [record for record in records if record["ok"]]
+    failed = [record for record in records if not record["ok"]]
+    timeouts = [
+        record
+        for record in failed
+        if "timeout" in (record.get("error") or "").lower()
+        or record.get("error") == "http_504"
+    ]
+    format_errors = [
+        record
+        for record in failed
+        if record.get("error")
+        and (
+            record["error"].startswith("invalid_")
+            or record["error"].startswith("wrong_content_type")
+            or record["error"] == "missing_text_field"
+        )
+    ]
+    latencies = [record["wall_ms"] / 1000.0 for record in completed]
+    short_latencies = [
+        record["wall_ms"] / 1000.0 for record in completed if record.get("kind") == "short"
+    ]
+
+    lane_trace = []
+    queue_wait_start: dict[str, tuple[float, int]] = {}
+    queue_wait_end: dict[str, tuple[float, int]] = {}
+    max_device_used = 0
+    for sample in samples:
+        entry = {"t_s": sample.get("t_s"), "models": {}}
+        for model, detail in (sample.get("models") or {}).items():
+            entry["models"][model] = {
+                "in_flight": detail.get("in_flight", 0),
+                "lane_short_depth": detail.get("lane_short_depth", 0),
+                "lane_long_depth": detail.get("lane_long_depth", 0),
+                "ct2_queued": detail.get("ct2_queued", 0),
+                "ct2_active": detail.get("ct2_active", 0),
+            }
+            pair = (
+                float(detail.get("queue_wait_sum", 0.0)),
+                int(detail.get("queue_wait_count", 0)),
+            )
+            queue_wait_start.setdefault(model, pair)
+            queue_wait_end[model] = pair
+        device_used = (sample.get("device") or {}).get("device_used_bytes")
+        if device_used is not None:
+            max_device_used = max(max_device_used, int(device_used))
+        lane_trace.append(entry)
+
+    # The engine's histogram is cumulative since boot; report this run's delta.
+    queue_wait = {
+        "sum_s": round(
+            sum(
+                max(0.0, queue_wait_end[model][0] - queue_wait_start[model][0])
+                for model in queue_wait_end
+            ),
+            3,
+        ),
+        "count": sum(
+            max(0, queue_wait_end[model][1] - queue_wait_start[model][1])
+            for model in queue_wait_end
+        ),
+    }
+
+    return {
+        "requests": len(specs),
+        "records": len(records),
+        "request_loss": len(specs) - len(records),
+        "completed": len(completed),
+        "failures": len(failed),
+        "timeouts": len(timeouts),
+        "format_errors": len(format_errors),
+        "wall_s": round(wall_s, 3),
+        "throughput_rps": round(len(completed) / wall_s, 2) if wall_s > 0 else 0.0,
+        "p50_ms": round(_percentile(latencies, 0.50) * 1000, 1),
+        "p95_ms": round(_percentile(latencies, 0.95) * 1000, 1),
+        "short_p50_ms": round(_percentile(short_latencies, 0.50) * 1000, 1) if short_latencies else None,
+        "short_p95_ms": round(_percentile(short_latencies, 0.95) * 1000, 1) if short_latencies else None,
+        "queue_wait_sum_s": round(queue_wait["sum_s"], 3),
+        "queue_wait_count": queue_wait["count"],
+        "max_device_used_bytes": max_device_used or None,
+        "lane_trace": lane_trace,
+        "records_detail": records,
+    }
+
+
+def whisper_scenario_matrix(
+    concurrencies: tuple[int, ...] = (4, 8, 20),
+    turbo_workers: tuple[int, ...] = (1, 2, 4),
+    tiny_workers: tuple[int, ...] = (1, 4, 6),
+    window_batches: tuple[int, ...] = (4, 8),
+) -> list[dict]:
+    """The Phase 10-5 benchmark cells (config-side, so the script prints them).
+
+    Each cell is one server boot + one bench run; ``lanes`` means
+    ``batched_inference: false`` (per-request lane pool), ``lanes+windows``
+    means ``batched_inference: true``.
+    """
+    cells = []
+    for concurrency in concurrencies:
+        for mode, flag in (("lanes", False), ("lanes+windows", True)):
+            cells.append(
+                {
+                    "label": f"phase10-{mode.replace('+', '-')}-c{concurrency}",
+                    "scenario": "throughput",
+                    "concurrency": concurrency,
+                    "batched_inference": flag,
+                    "config_note": f"Whisper {mode} at c={concurrency}",
+                }
+            )
+    cells.append(
+        {
+            "label": "phase10-c200",
+            "scenario": "throughput",
+            "concurrency": 200,
+            "batched_inference": True,
+            "config_note": "Whisper lanes+windows, 200-connection observation",
+        }
+    )
+    cells.append(
+        {
+            "label": "phase10-fairness",
+            "scenario": "whisper-fairness",
+            "concurrency": 21,
+            "batched_inference": True,
+            "config_note": "one 10-min file first, then 20 short clips",
+        }
+    )
+    for workers in turbo_workers:
+        cells.append(
+            {
+                "label": f"phase10-turbo-m{workers}",
+                "scenario": "throughput",
+                "concurrency": 8,
+                "batched_inference": False,
+                "config_note": f"large-v3-turbo num_workers={workers}",
+            }
+        )
+    for workers in tiny_workers:
+        cells.append(
+            {
+                "label": f"phase10-tiny-m{workers}",
+                "scenario": "throughput",
+                "concurrency": 8,
+                "batched_inference": False,
+                "config_note": f"tiny num_workers={workers}",
+            }
+        )
+    for batch in window_batches:
+        cells.append(
+            {
+                "label": f"phase10-window-b{batch}",
+                "scenario": "throughput",
+                "concurrency": 8,
+                "batched_inference": True,
+                "config_note": f"window batch cap={batch}",
+            }
+        )
+    cells.append(
+        {
+            "label": "phase10-exhaustion",
+            "scenario": "whisper-flood",
+            "concurrency": WHISPER_FLOOD_REQUESTS,
+            "batched_inference": True,
+            "config_note": "M=2, window batch=4, queue 16, 100 heterogeneous requests",
+        }
+    )
+    cells.append(
+        {
+            "label": "phase10-budget-trip",
+            "scenario": "whisper-budget-trip",
+            "concurrency": WHISPER_FLOOD_REQUESTS,
+            "batched_inference": True,
+            "config_note": "whisper_vram_budget_bytes below demand; admission scales",
+        }
+    )
+    return cells
+
 
 
 #: Step label for every engine DEBUG line that reports padded sub-batching.
@@ -718,6 +1262,202 @@ async def run_benchmark(args) -> dict:
     }
 
 
+async def _discover_whisper_budget(client, base_url: str) -> dict | None:
+    """Read the configured Whisper budget from ``/health`` (best effort)."""
+    try:
+        response = await client.get(base_url + "/health", timeout=30)
+        if response.status_code != 200:
+            return None
+        body = response.json() or {}
+        whisper = body.get("whisper_vram") or {}
+        vram = body.get("vram") or {}
+        budget = whisper.get("budget_bytes", vram.get("whisper_budget_bytes"))
+        return {"budget_bytes": budget, "status": whisper.get("status")}
+    except Exception:  # pragma: no cover - verification is best effort
+        return None
+
+
+async def run_whisper_exhaustion(args) -> dict:
+    """Run the Phase 10-5 exhaustion / fairness / budget-trip scenario."""
+    import httpx
+
+    from tests.audio_fixtures import reference_wav_b64
+
+    scenario = args.scenario
+    reference_audio = reference_wav_b64(args.reference)
+    model = args.model.get("whisper") or FAMILY_SPECS["whisper"]["model"]
+
+    if scenario == "whisper-fairness":
+        specs = whisper_fairness_scenario(args.whisper_fairness_long_seconds)
+        concurrency = len(specs)
+    else:
+        specs = whisper_flood_scenario(args.whisper_flood_requests, args.whisper_max_seconds)
+        concurrency = args.whisper_flood_concurrency
+
+    audio_cache: dict = {}
+    payloads = [
+        build_whisper_payload(
+            spec, duration_audio_b64(reference_audio, spec["duration_s"], audio_cache), model
+        )
+        for spec in specs
+    ]
+
+    max_connections, max_keepalive = http_client_limits([concurrency], args.http_max_connections)
+    limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive)
+    async with httpx.AsyncClient(limits=limits) as client:
+        budget_report = None
+        if scenario == "whisper-budget-trip":
+            if args.whisper_vram_budget_bytes is None:
+                raise SystemExit(
+                    "--scenario whisper-budget-trip requires --whisper-vram-budget-bytes "
+                    "(set the same value on the engine config)"
+                )
+            budget_report = await _discover_whisper_budget(client, args.base_url)
+            observed = (budget_report or {}).get("budget_bytes")
+            if observed is not None and int(observed) != int(args.whisper_vram_budget_bytes):
+                raise SystemExit(
+                    f"--whisper-vram-budget-bytes {args.whisper_vram_budget_bytes} does not match the "
+                    f"running engine ({observed}). Boot the engine with that budget and rerun."
+                )
+            if observed is None:
+                print(
+                    "[bench] the engine did not report a whisper budget on /health; recording the "
+                    "requested value without verification",
+                    flush=True,
+                )
+
+        print(
+            f"[bench] {scenario}: {len(specs)} request(s), concurrency {concurrency}, "
+            f"declared caps M={args.whisper_workers} window_batch={args.whisper_window_batch} "
+            f"queue={args.whisper_queue}",
+            flush=True,
+        )
+        sampler = MetricsSampler(client, args.base_url, args.whisper_sample_interval)
+        records, wall, samples = await _run_whisper_scenario(
+            client,
+            args.base_url,
+            specs,
+            payloads,
+            concurrency,
+            args.timeout,
+            sampler,
+        )
+
+    summary = summarize_whisper_scenario(specs, records, wall, samples)
+    budget_bytes = args.whisper_vram_budget_bytes
+    within_budget = None
+    if budget_bytes is not None and summary["max_device_used_bytes"] is not None:
+        within_budget = summary["max_device_used_bytes"] <= int(budget_bytes)
+
+    print(
+        f"[bench] {scenario}: {summary['completed']}/{summary['requests']} completed, "
+        f"{summary['failures']} failed ({summary['timeouts']} timeout(s)), "
+        f"loss={summary['request_loss']}, p50={summary['p50_ms']:.0f}ms "
+        f"p95={summary['p95_ms']:.0f}ms",
+        flush=True,
+    )
+    if within_budget is not None:
+        print(
+            f"[bench] budget hold: max device used {summary['max_device_used_bytes']} B vs "
+            f"budget {budget_bytes} B -> {within_budget}",
+            flush=True,
+        )
+
+    return {
+        "scenario": scenario,
+        "label": args.label,
+        "config": args.config_note,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "commit": _git_commit(),
+        "env": _gpu_description(),
+        "base_url": args.base_url,
+        "model": model,
+        "caps": {
+            "workers": args.whisper_workers,
+            "window_batch": args.whisper_window_batch,
+            "queue_depth": args.whisper_queue,
+            "concurrency": concurrency,
+        },
+        "budget": {
+            "requested_bytes": budget_bytes,
+            "observed": budget_report,
+            "device_used_within_budget": within_budget,
+        },
+        "summary": {
+            key: value
+            for key, value in summary.items()
+            if key not in ("lane_trace", "records_detail")
+        },
+        "lane_trace": summary["lane_trace"],
+        "records": summary["records_detail"],
+    }
+
+
+def _whisper_markdown(report: dict) -> str:
+    """Markdown block for one exhaustion/fairness/budget-trip run."""
+    summary = report["summary"]
+    caps = report.get("caps") or {}
+    budget = report.get("budget") or {}
+    env = report.get("env") or {}
+    lines = [
+        f"### {report['label']} — {report['timestamp_utc']}",
+        "",
+        f"* commit `{report.get('commit') or 'dirty'}` · torch {env.get('torch')} · "
+        f"{env.get('gpu') or 'CPU'} · driver {env.get('driver') or 'n/a'} · "
+        f"CUDA_VISIBLE_DEVICES={env.get('cuda_visible_devices') or 'all'}",
+        f"* config: {report.get('config') or 'n/a'}",
+        f"* declared caps: M={caps.get('workers')} · window batch={caps.get('window_batch')} · "
+        f"queue depth={caps.get('queue_depth')} · client concurrency={caps.get('concurrency')}",
+        "",
+        "| Metric | Value |",
+        "|---|---|",
+        f"| Requests submitted | {summary['requests']} |",
+        f"| Requests answered (loss) | {summary['records']} ({summary['request_loss']}) |",
+        f"| Completed / failed | {summary['completed']} / {summary['failures']} |",
+        f"| Timeouts | {summary['timeouts']} |",
+        f"| Format/pairing errors | {summary['format_errors']} |",
+        f"| Wall | {summary['wall_s']} s |",
+        f"| Throughput | {summary['throughput_rps']} req/s |",
+        f"| p50 / p95 | {summary['p50_ms']} ms / {summary['p95_ms']} ms |",
+    ]
+    if summary.get("short_p50_ms") is not None:
+        lines.append(
+            f"| Short-clip p50 / p95 | {summary['short_p50_ms']} ms / {summary['short_p95_ms']} ms |"
+        )
+    lines.append(
+        f"| Queue wait (histogram sum/count) | {summary['queue_wait_sum_s']} s / {summary['queue_wait_count']} |"
+    )
+    if summary.get("max_device_used_bytes") is not None:
+        lines.append(f"| Max device used | {summary['max_device_used_bytes']} B |")
+    if budget.get("requested_bytes") is not None:
+        lines.append(
+            f"| Budget / device-used within budget | {budget['requested_bytes']} B / "
+            f"{budget.get('device_used_within_budget')} |"
+        )
+
+    trace = report.get("lane_trace") or []
+    if trace:
+        # Keep the table readable: up to 20 evenly spaced samples.
+        step = max(1, len(trace) // 20)
+        rows = trace[::step]
+        lines += [
+            "",
+            "Lane depths over time (sampled from `/metrics`):",
+            "",
+            "| t (s) | Model | In flight | Short lane | Long lane | CT2 queued | CT2 active |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for sample in rows:
+            for model_name, detail in (sample.get("models") or {}).items():
+                lines.append(
+                    f"| {sample.get('t_s')} | {model_name} | {detail.get('in_flight', 0)} | "
+                    f"{detail.get('lane_short_depth', 0)} | {detail.get('lane_long_depth', 0)} | "
+                    f"{detail.get('ct2_queued', 0)} | {detail.get('ct2_active', 0)} |"
+                )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _markdown(report: dict) -> str:
     env = report["env"]
     cache = report.get("embedding_cache") or {}
@@ -825,6 +1565,75 @@ def scenario_recipe(args) -> str:
     return "\n".join(lines)
 
 
+def whisper_scenario_recipe(args) -> str:
+    """Shell recipe for the Phase 10-5 Whisper matrix (config-side cells)."""
+    port = args.base_url.rsplit(":", 1)[-1]
+    engine_log = args.engine_log or "out/bench/engine.log"
+    log_flag = f" --engine-log {engine_log}"
+    md_flag = " --md-out docs/benchmarks/throughput.md"
+    lines = [
+        "# Phase 10-5 Whisper scenarios. Every cell needs an idle benchmark host",
+        "# (RTX 5060 Ti, CUDA_VISIBLE_DEVICES=1) and a server boot with that cell's",
+        "# caps; the results are _tbd_ in docs/benchmarks/throughput.md §Phase 10.",
+        "",
+        "# Boot A - lanes only (batched_inference: false / unset), turbo num_workers=2",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path out/bench/config-phase10-lanes.yml \\",
+        f"    --port {port} > {engine_log} 2>&1",
+        "",
+        "python scripts/bench_throughput.py --families whisper --concurrency 4,8,20 \\",
+        f"    --requests 20 --label phase10-lanes-c4-8-20{log_flag}{md_flag}",
+        "",
+        "# Boot B - lanes + windows (batched_inference: true, window cap 8), same M",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path out/bench/config-phase10-windows.yml \\",
+        f"    --port {port} > {engine_log} 2>&1",
+        "",
+        "python scripts/bench_throughput.py --families whisper --concurrency 4,8,20 \\",
+        f"    --requests 20 --label phase10-lanes-windows-c4-8-20{log_flag}{md_flag}",
+        "",
+        "# 200-connection observation (client pool sized from the level)",
+        "python scripts/bench_throughput.py --families whisper --concurrency 200 \\",
+        f"    --requests 200 --label phase10-c200{log_flag}{md_flag}",
+        "",
+        "# Fairness proof: one >=10-min file first, then 20 short clips",
+        "python scripts/bench_throughput.py --scenario whisper-fairness --label phase10-fairness \\",
+        f"    --whisper-fairness-long-seconds 600{log_flag}{md_flag}",
+        "",
+        "# M-sweep: boot turbo with num_workers 1 / 2 / 4 and tiny with 1 / 4 / 6",
+        "# (lanes only), then run each boot at c=8:",
+        "python scripts/bench_throughput.py --families whisper --concurrency 8 --requests 20 \\",
+        f"    --label phase10-turbo-m1{log_flag}{md_flag}",
+        "",
+        "# Window sweep: boot batched_inference true with the cap at 4 and 8, then:",
+        "python scripts/bench_throughput.py --families whisper --concurrency 8 --requests 20 \\",
+        f"    --label phase10-window-b4{log_flag}{md_flag}",
+        "",
+        "# Exhaustion: tight caps (M=2, window batch=4, queue 16), 100 heterogeneous",
+        "# requests (2 s-8 min, mixed languages/tasks/formats). Set",
+        "# whisper_max_audio_seconds: 480 on this boot so the probe validates the",
+        "# 8-minute shape (the key is the probe's longest shape, not a rejection).",
+        "python scripts/bench_throughput.py --scenario whisper-flood \\",
+        "    --whisper-workers 2 --whisper-window-batch 4 --whisper-queue 16 \\",
+        "    --whisper-flood-requests 100 --whisper-flood-concurrency 100 \\",
+        f"    --label phase10-exhaustion{log_flag}{md_flag}",
+        "",
+        "# Memory-budget trip: boot with whisper_vram_budget_bytes below demand",
+        "# (e.g. 6 GiB on a 16 GiB card), then run the same flood and record that",
+        "# admission scales, latency degrades and no request is lost.",
+        "python scripts/bench_throughput.py --scenario whisper-budget-trip \\",
+        "    --whisper-vram-budget-bytes 6442450944 \\",
+        "    --whisper-flood-requests 100 --whisper-flood-concurrency 100 \\",
+        f"    --label phase10-budget-trip{log_flag}{md_flag}",
+        "",
+        "# Real-model spot-check (10-4): translation + srt/vtt through the wire",
+        "python scripts/bench_throughput.py --scenario whisper-flood --whisper-flood-requests 8 \\",
+        f"    --whisper-flood-concurrency 8 --label phase10-stt-formats{md_flag}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Throughput benchmark against a running engine (Phase 5-3 / 7-3 / 8-6)"
@@ -883,6 +1692,74 @@ def build_parser() -> argparse.ArgumentParser:
         help="config path printed by --print-scenarios for the engine boots",
     )
     parser.add_argument(
+        "--scenario",
+        choices=("throughput", "whisper-flood", "whisper-fairness", "whisper-budget-trip"),
+        default="throughput",
+        help=(
+            "throughput (default) runs the family matrix; whisper-flood / whisper-fairness / "
+            "whisper-budget-trip run the Phase 10-5 exhaustion scenarios"
+        ),
+    )
+    parser.add_argument(
+        "--whisper-flood-requests",
+        type=int,
+        default=WHISPER_FLOOD_REQUESTS,
+        help="requests in the heterogeneous exhaustion flood (default 100)",
+    )
+    parser.add_argument(
+        "--whisper-flood-concurrency",
+        type=int,
+        default=WHISPER_FLOOD_REQUESTS,
+        help="client concurrency for the exhaustion flood (default: all requests at once)",
+    )
+    parser.add_argument(
+        "--whisper-max-seconds",
+        type=float,
+        default=WHISPER_FLOOD_MAX_SECONDS,
+        help="longest flood request in seconds (default 480 = 8 min)",
+    )
+    parser.add_argument(
+        "--whisper-workers",
+        type=int,
+        default=WHISPER_FLOOD_WORKERS,
+        help="declared M (num_workers) of the boot under test; recorded in the block",
+    )
+    parser.add_argument(
+        "--whisper-window-batch",
+        type=int,
+        default=WHISPER_FLOOD_WINDOW_BATCH,
+        help="declared window batch cap of the boot under test; recorded in the block",
+    )
+    parser.add_argument(
+        "--whisper-queue",
+        type=int,
+        default=WHISPER_FLOOD_QUEUE,
+        help="declared admission/queue depth (max_batch_size) of the boot under test",
+    )
+    parser.add_argument(
+        "--whisper-vram-budget-bytes",
+        type=int,
+        default=None,
+        help="whisper_vram_budget_bytes configured on the boot under test (required for the budget-trip run)",
+    )
+    parser.add_argument(
+        "--whisper-fairness-long-seconds",
+        type=float,
+        default=WHISPER_FAIRNESS_LONG_SECONDS,
+        help="duration of the pinned long-first request in the fairness proof (default 600)",
+    )
+    parser.add_argument(
+        "--whisper-sample-interval",
+        type=float,
+        default=0.5,
+        help="seconds between /metrics samples during a Whisper scenario (lane-depth trace)",
+    )
+    parser.add_argument(
+        "--print-whisper-scenarios",
+        action="store_true",
+        help="print the Phase 10-5 Whisper recipe (boots, sweeps, exhaustion, budget trip) and exit",
+    )
+    parser.add_argument(
         "--print-scenarios",
         action="store_true",
         help="print the Phase 8 clone-flood recipe (two server boots x two reference modes) and exit",
@@ -909,6 +1786,25 @@ def main(argv=None) -> int:
     if args.print_scenarios:
         print(scenario_recipe(args))
         return 0
+    if args.print_whisper_scenarios:
+        print(whisper_scenario_recipe(args))
+        return 0
+
+    whisper_scenarios = {"whisper-flood", "whisper-fairness", "whisper-budget-trip"}
+    if args.scenario in whisper_scenarios:
+        report = asyncio.run(run_whisper_exhaustion(args))
+        if args.json_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2)
+        table = _whisper_markdown(report)
+        if args.md_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.md_out)), exist_ok=True)
+            with open(args.md_out, "a", encoding="utf-8") as handle:
+                handle.write(table)
+        print(table)
+        summary = report["summary"]
+        return 0 if summary["failures"] == 0 and summary["request_loss"] == 0 else 1
 
     report = asyncio.run(run_benchmark(args))
 

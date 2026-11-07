@@ -40,8 +40,74 @@ Make the engine's VRAM story true at device level, then bound Whisper's footprin
 
 ## Checklist
 
-- [ ] Device-level `device_used`/true headroom series landed (torch-scoped kept)
-- [ ] Whisper startup probe + per-model peak reporting
-- [ ] Boot budget check + runtime admission-scaling hook for 10-1/10-2
-- [ ] `vram-profiles.md` corrected (incl. the Phase 9 pool-sizing input)
-- [ ] `summary.md` Implementation Status updated
+- [x] Device-level `device_used`/true headroom series landed (torch-scoped kept)
+- [x] Whisper startup probe + per-model peak reporting
+- [x] Boot budget check + runtime admission-scaling hook for 10-1/10-2
+- [x] `vram-profiles.md` corrected (incl. the Phase 9 pool-sizing input)
+- [x] `summary.md` Implementation Status updated
+
+## Deviations
+
+_Recorded 2026-11-07._
+
+1. **New module `harmonyspeech/engine/vram_budget.py`.** The files table named
+   `harmonyspeech_engine.py` + `vram_metrics.py`; the orchestrator additionally
+   required the runtime admission decision to be a pure, unit-testable function
+   (`(budget, device_used, active_windows, cap) -> allowed windows`). It lives in
+   its own torch-free module so 10-5 can drive it with a mocked
+   `mem_get_info`. Signature is a superset of the requested inputs: optional
+   `per_window_bytes` (measured unit cost) and `min_windows` (draining floor,
+   default `1`; `0` gives a hard stop for exhaustion tests).
+2. **New module `harmonyspeech/modeling/whisper_probe.py`.** The files table
+   allowed "`loader.py` or runner init"; the probe is a dedicated, import-guarded
+   module because it is best-effort runtime measurement (CPU-safe skip, no
+   download, sampled device-level peak), not model loading. `GPUModelRunner`
+   calls it right after `load_model()`.
+3. **`harmonyspeech/modeling/weight_registry.py`.** Extended `model_nbytes` to
+   sum a native model's checkpoint directory when the loader attached
+   `model.model_path`. Without it `hse_model_weights_bytes` stays 0 for
+   CTranslate2 Whisper, so the boot projection and `/health` would understate the
+   resident footprint. Outside the files table; required for the "known weights
+   bytes" half of the projected peak.
+4. **`harmonyspeech/modeling/loader.py`.** Attaches `model.model_path` for
+   Whisper, resolved cache-only via `faster_whisper.utils.download_model(...,
+   local_files_only=True)` (no network, no download). Listed as "loader.py" in
+   the files table; recorded because the actual change is the checkpoint-size
+   attribution, not a load-behaviour change.
+5. **`harmonyspeech/task_handler/model_runner_base.py`.** Adds the
+   `whisper_probe` attribute default so `get_vram_stats` can distinguish "not a
+   Whisper runner" from "probe skipped"; the files table's "runner init" covers
+   the hook, this is the base-class half.
+6. **`scripts/measure_vram.py` + `tests/unit/benchmarks/test_measure_vram.py`.**
+   The redefined `headroom_bytes` made the old "(total - reserved)" label
+   wrong. The script now prints device-level used and device-free headroom and
+   lists Whisper probe peaks; the existing test's expected string was updated.
+7. **`tests/unit/engine/test_vram_stats.py` is new.** The spec names it as
+   "extend", but only `tests/unit/engine/test_vram.py` existed. The new file
+   carries the Phase 10-3 tests (device-level truth, probe delta/skip paths,
+   pure admission math, boot verdict, config validation, `/health` annotation);
+   the pre-existing `test_vram.py` is unchanged and still green.
+8. **Added engine-level `whisper_max_audio_seconds` config key.** The files table
+   only named `whisper_vram_budget_bytes`, but the objective explicitly says
+   "this task defines the whisper-side cap" (admitted-audio duration is part of
+   the bound). It is stamped onto each Whisper `ModelConfig` before executors are
+   built so the probe can run the longest admitted shape.
+9. **Benchmark-host numbers are `_tbd_`.** Per the orchestrator's instruction,
+   no model weights were downloaded. `docs/benchmarks/vram-profiles.md` records
+   the method, the corrected semantics and the Phase 9 pool-sizing input, with
+   explicit `_tbd_` cells for the device-level figures and Whisper probe peaks.
+10. **Probe knob sourcing is forward-compatible.** 10-1/10-2 add per-model
+    `num_workers` / window batch / `beam_size`; until they land the probe reads
+    them through `getattr` defaults (`num_workers=1`, `window_batch` =
+    `max_batch_size`, `beam_size=5`). No per-model YAML keys were added here to
+    avoid colliding with 10-1/10-2's plumbing.
+11. **Docs touched beyond the files table** (repo documentation rules):
+    `docs/models.md` gained a "Whisper VRAM governance" subsection,
+    `docs/api.md` documents the `/health` `vram`/`whisper_vram` blocks, and
+    `CHANGELOG.md` a Breaking Changes + New Features entry. `memory-bank` is
+    updated separately per the workspace rules.
+12. **`harmonyspeech/endpoints/openai/api_server.py`.** `/health` copied the
+    Phase 4-5 `vram` block but not the new boot governance report; added a
+    two-line `whisper_vram` passthrough so the probe/budget verdict is visible
+    on the HTTP endpoint (the per-model probe annotation was already inside the
+    `vram` block). Outside the files table; covered by a new unit test.

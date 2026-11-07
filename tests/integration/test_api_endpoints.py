@@ -66,6 +66,13 @@ def test_stt_models_list(client):
     assert "data" in data
 
 
+def test_translations_request_cycle(client):
+    """POST /v1/audio/translations routes to the STT serving module (Phase 10-4)."""
+    response = client.post("/v1/audio/translations", json={"model": "test-stt-model"})
+    assert response.status_code == 200
+    assert response.json()["text"] == "test translation"
+
+
 def test_embed_models_list(client):
     """Test GET /v1/embed/models returns 200."""
     response = client.get("/v1/embed/models")

@@ -29,10 +29,10 @@ the queue. Pass `--strict-pipelines` (or set `HSE_STRICT_PIPELINES=1`, or
 `strict_pipelines: true` in the config file) to turn those warnings into a boot
 error.
 
-Model cards are generated from the same declaration: each toolchain card lists
-its `capabilities` (`tts`, `embed`, `vc`, `stt`, `vad`, `restore`), its
-`models` (the configured member executors) and the languages of its configured
-variants (for example every configured MeloTTS language).
+Model cards are generated from the same declaration: each card lists its
+`capabilities` (`tts`, `embed`, `vc`, `stt`, `translation`, `vad`, `restore`),
+its `models` (the configured member executors) and the languages of its
+configured variants (for example every configured MeloTTS language).
 
 #### `input_vad_mode`
 
@@ -51,7 +51,7 @@ figures are **measured** on the shipped GPU config after Phase 4 — see
 | Harmony Speech V1 | TTS          | Adapted        | No                         | Very Good            | ++                         | 173 MiB host RAM    |
 | OpenVoice V1      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~405 MiB per language (synth + converters) |
 | OpenVoice V2      | TTS          | Adapted        | Yes                        | Good                 | +++                        | ~452 MiB per language (synth + converters) |
-| Faster-Whisper    | STT <br>VAD* | Native         | N / A                      | Medium               | STT: +++ <br>VAD*: +       | ~75 MiB (tiny) – 1.6 GiB (large-v3-turbo) |
+| Faster-Whisper    | STT <br>Translation <br>VAD* | Native         | N / A                      | Medium               | STT: +++ <br>VAD*: +       | ~75 MiB (tiny) – 1.6 GiB (large-v3-turbo) |
 | Silero-VAD        | VAD          | Native         | N / A                      | Very Good            | +++                        | ~2 MiB host RAM     |
 | VoiceFixer        | Converter    | Adapted        | N / A                      | Bad                  | input-dependent            | 402 MiB (restorer + vocoder) |
 | Chatterbox        | TTS <br>VC   | Native         | N / A                      | n/a (GPU)            | +++                        | 2068 MiB (TTS) · 3413 MiB (Turbo) · 1025 MiB (multilingual) · 0 MiB marginal (VC/embedding, shared) |
@@ -125,11 +125,14 @@ instance, so per-request conditioning (`conds` / `ref_dict`) remains isolated.
 two speaker-embedding steps (Phase 8-2), the two tone converters (Phase 8-3) and
 the two vocoders plus the VoiceFixer restorer (Phase 8-4)) selects the
 padded-batch forward for one-shot synthesis, embedding, tone conversion,
-vocoding and restoration. The Harmony Speech synthesizer keeps a per-item loop
-(its vendored generator is not padding-safe; see
-[Batching & concurrency](batching.md)). Chatterbox is autoregressive and runs one
-request per step, so its capacity comes from replicas. See
-[Batching & concurrency](batching.md) for the per-family table, the
+vocoding and restoration. For **Faster-Whisper** the same flag is **opt-in** and
+selects the cross-request window batcher (one CT2 `encode` + one `generate` for
+all admitted requests' ≤30 s windows, up to 8 per formed batch); without it the
+per-request pipeline path (and the `num_workers` lanes) is used. The Harmony
+Speech synthesizer keeps a per-item loop (its vendored generator is not
+padding-safe; see [Batching & concurrency](batching.md)). Chatterbox is
+autoregressive and runs one request per step, so its capacity comes from
+replicas. See [Batching & concurrency](batching.md) for the per-family table, the
 length-similar sub-batching rules and the measured throughput.
 
 #### Measured footprint (RTX 5060 Ti 16 GiB, full `config.gpu.yml` catalogue)
@@ -197,6 +200,73 @@ model_configs:
     device_config:
       device: "cuda:0"
 ```
+
+##### Whisper VRAM governance
+
+CTranslate2 has no memory-cap knob of its own and allocates outside PyTorch's
+caching allocator, so Whisper's device memory is invisible to the torch VRAM
+counters. The engine therefore measures it directly and bounds it on its own
+side.
+
+Whisper's capacity is deliberately three separate numbers: `max_batch_size: 16`
+is the **admission/queue depth** (two fairness lanes, ≤30 s vs >30 s at 3:1),
+`num_workers` is the number of transcribes that actually **overlap** (M
+CTranslate2 workers on shared weights), and the **window cap** (8) is the memory
+bound on one formed cross-request batch. The per-request pipeline's own
+intra-audio clip batch stays 16. `docs/batching.md` holds the final matrix.
+
+* On startup, each CUDA-placed Whisper config runs a **max-shape probe**
+  (`num_workers` concurrent workers × `window_batch` windows × the longest
+  admitted audio). The device-level `torch.cuda.mem_get_info` delta is recorded
+  as that config's `peak_activation_bytes` and reported per model on `/health`
+  with a "measured probe" annotation (a skipped probe says why it was skipped —
+  it is never replaced by a guess).
+* The boot check compares the projected Whisper footprint (checkpoint weights +
+  probe peaks) with the measured free device headroom. Set
+  `whisper_vram_budget_bytes` to turn an overshoot into a boot error; without it
+  the check only warns.
+* At runtime, admission shrinks the number of concurrent Whisper windows as the
+  device-level used memory approaches the budget (or the device total when no
+  budget is configured). The decision is a pure function driven by
+  `torch.cuda.mem_get_info`, so it accounts for every resident family, not just
+  Whisper.
+* `whisper_max_audio_seconds` (default `300`) is the probe's **max shape** (the
+  longest audio the startup probe validates) and the whisper-side duration bound
+  used for capacity planning. It is not an admission rejection; set it to at
+  least the longest audio you intend to admit so the measured probe peak is
+  honest. The general endpoint upload limit remains a separate concern.
+* `num_workers` (per Whisper model entry) is the CTranslate2 worker count
+  (`inter_threads`) and the width of the execution lanes (Phase 10-1). Workers
+  share the loaded weights, so this raises concurrency at the cost of
+  activations, not a second model copy. Default `1` reproduces the pre-Phase-10
+  behaviour; the shipped initial values are `2` (large-v3-turbo) and `4` (tiny),
+  pending benchmark tuning.
+* `batched_inference: true` (opt-in) enables the cross-request window batcher
+  (Phase 10-2): the step's ≤30 s windows are folded into one CT2 `encode` +
+  one `generate` per formed batch (cap 8 windows), with per-request language
+  prompts and the same segment/timestamp stitching as the sequential path.
+  `max_batch_size` remains the admission width; a batch-level failure falls back
+  to the per-request pipeline, and `/metrics` exposes
+  `hse_whisper_batch_fallbacks_total`. The shipped configs keep it **unset**
+  until the benchmark-host B=1 parity gate passes (dated decision 2026-11-07),
+  so the default remains the proven per-request path.
+
+```yaml
+# config.yml (top level, next to request_timeout_s)
+whisper_vram_budget_bytes: 12884901888   # optional 12 GiB device-level ceiling
+whisper_max_audio_seconds: 300
+
+# per model entry
+- name: faster-whisper-large-v3-turbo
+  model_type: FasterWhisper
+  max_batch_size: 16
+  num_workers: 2
+```
+
+`hse_vram_headroom_bytes` is now true free device memory (a breaking change: it
+used to be `device total − torch reserved`). `hse_vram_device_used_bytes` is the
+device-level counterpart and includes CTranslate2. See
+[VRAM profiles](benchmarks/vram-profiles.md#phase-10-3--device-level-truth).
 
 ---
 

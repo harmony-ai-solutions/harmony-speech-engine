@@ -23,7 +23,7 @@ Routing is **declarative**. Every model toolchain (family) is described once, in
 | `steps` | Ordered `Step`s. Each step names the `model_type`s that can execute it (in preference order), the request fields/artifacts it needs (`needs`), the request fields its typed output fills (`produces`) and the fields its output supersedes (`clears`). |
 | `entry_rules` | Ordered `EntryRule`s that map an incoming request shape onto a starting step (and optionally an early `stop_after`). |
 | `final_step` | The step whose output is the request's response. |
-| `capabilities` | What the pipeline can serve: `tts`, `embed`, `vc`, `stt`, `vad`, `restore`. Drives `/v1/models`. |
+| `capabilities` | What the pipeline can serve: `tts`, `embed`, `vc`, `stt`, `translation`, `vad`, `restore`. Drives `/v1/models`. |
 
 Two functions consume that declaration:
 

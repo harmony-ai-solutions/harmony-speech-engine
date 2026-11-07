@@ -195,37 +195,73 @@ model_configs:
     assert "stt-model" in names
 
 
-# ── Shipped config honesty (Phase 5-3, finalised in 8-6) ──────────────────────
+# ── Shipped config honesty: the execution-model class table (Phase 10-5) ─────
+#
+# One declarative table maps every registered model type to exactly one execution
+# class (owner decision 2026-11-07, authoritative definition in 10-5). Each class
+# has a semantic validator, so a new model type cannot ship without a deliberate
+# capacity decision, and a shipped config cannot claim a capacity its executor
+# does not honour. Phase 9-6 extends the table (it moves the English/Turbo
+# Chatterbox roles into `ar_decode` when the shared KV pool lands).
 
-#: Model types whose step is a plain per-request loop: one request per engine
-#: step, so `max_batch_size` is exactly 1. The HarmonySpeech synthesizer's
-#: vendored ForwardTacotron is padding-unsafe (Phase 8-4 audit: 0.16 peak drift);
-#: the whole Chatterbox family is out of scope by product decision (KV-cache
-#: workstream, see `docs/batching.md`).
-SINGLE_REQUEST_MODEL_TYPES = frozenset(
-    {
-        "HarmonySpeechSynthesizer",
-        "ChatterboxTTS",
-        "ChatterboxTurboTTS",
-        "ChatterboxMultilingualTTS",
-        "ChatterboxEmbedding",
-        "ChatterboxVC",
-    }
-)
+#: The five execution classes and what their `max_batch_size` really means.
+EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
+    "padded_batch": {
+        "execution": "one padded forward per length-similar sub-batch",
+        "max_batch_size": "sub-batch width",
+        "knobs": ("batched_inference", "batch_token_budget"),
+    },
+    "loop": {
+        "execution": "per-request sequential",
+        "max_batch_size": "must be 1",
+        "knobs": (),
+    },
+    "queue_depth": {
+        "execution": "admission/backpressure only",
+        "max_batch_size": "queue depth",
+        "knobs": (),
+    },
+    "lanes_windows": {
+        "execution": "M parallel lanes; Whisper adds opt-in cross-request window batches",
+        "max_batch_size": "admission/lane depth",
+        "knobs": ("num_workers", "window batch cap"),
+    },
+    "ar_decode": {
+        "execution": "token-level AR decode on the shared KV pool",
+        "max_batch_size": "admission depth",
+        "knobs": ("pool slots", "token budget"),
+    },
+}
 
-#: Non-batched steps that still admit more than one request per step. Here the
-#: number is an admission width, a queue depth or a lane count — never a padded
-#: batch width — and each value is the one `docs/batching.md` justifies.
-CONCURRENCY_ONLY_MODEL_TYPES = {
-    # `BatchedInferencePipeline.transcribe()` batches the 30 s clips *inside one
-    # audio*; 16 is the scheduler's admission width (Phase 8-5 audit).
-    "FasterWhisper": 16,
-    # Sequential loop kept: `get_speech_timestamps` is single-stream and the
-    # shared wrapper is not thread-safe; 16 is queue depth (Phase 8-5 verdict).
-    "SileroVAD": 16,
-    # Static ONNX batch dimension of 1 → one request per lane; 4 is the lane
-    # count over the one shared session (Phase 8-5).
-    "KittenTTSSynthesizer": 4,
+#: Members whose capacity is a **lane count**, not a queue depth (KittenTTS's
+#: ONNX graphs have a static batch dimension of 1; Phase 8-5).
+LANE_ONLY_MEMBERS = {"KittenTTSSynthesizer": 4}
+
+#: The English/Turbo Chatterbox roles are Phase 9's AR-runner members. Until
+#: 9-6 lands they stay honest `loop` entries; `test_ar_decode_members_are_pending_phase_9`
+#: is the assertion 9-6 flips (move them into `EXECUTION_MODEL_CLASSES` as
+#: `ar_decode` and delete the future-member expectation).
+FUTURE_AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+
+#: Every registered model type → exactly one class. `padded_batch` is derived
+#: from the handler's own set so the two cannot drift; the rest are explicit.
+EXECUTION_MODEL_CLASSES: dict[str, str] = {
+    **dict.fromkeys(BATCHED_INFERENCE_FAMILIES, "padded_batch"),
+    # Per-request loops. hs1-synthesizer is a measured padding skip (8-4); the
+    # Chatterbox family is product-deferred (KV-cache workstream). Phase 9 will
+    # move the English/Turbo roles to `ar_decode`; embedding/VC stay loops.
+    "HarmonySpeechSynthesizer": "loop",
+    "ChatterboxTTS": "loop",
+    "ChatterboxTurboTTS": "loop",
+    "ChatterboxMultilingualTTS": "loop",
+    "ChatterboxEmbedding": "loop",
+    "ChatterboxVC": "loop",
+    # Single-stream VAD: the number is queue depth only (8-5).
+    "SileroVAD": "queue_depth",
+    # Parallel lanes. Whisper adds opt-in cross-request window batches on top of
+    # its M CT2 workers; KittenTTS is lanes-only (one request per lane).
+    "FasterWhisper": "lanes_windows",
+    "KittenTTSSynthesizer": "lanes_windows",
 }
 
 
@@ -235,43 +271,142 @@ def _shipped_config(name: str):
         return yaml.safe_load(handle)
 
 
+def _validate_padded_batch(entry: dict, config_name: str) -> None:
+    name = entry["name"]
+    assert entry["max_batch_size"] > 1, f"{config_name}: {name} has a padded-batch forward"
+    assert entry.get("batched_inference", True) is True, f"{config_name}: {name} must enable its padded forward"
+    budget = entry.get("batch_token_budget")
+    if budget is not None:
+        assert isinstance(budget, int) and budget >= 1, f"{config_name}: {name} batch_token_budget"
+
+
+def _validate_loop(entry: dict, config_name: str) -> None:
+    name = entry["name"]
+    assert entry["max_batch_size"] == 1, f"{config_name}: {name} admits one request per step"
+    assert entry.get("batched_inference") is not True, f"{config_name}: {name} has no batch path"
+
+
+def _validate_queue_depth(entry: dict, config_name: str) -> None:
+    name = entry["name"]
+    assert entry["max_batch_size"] >= 1, f"{config_name}: {name} queue depth"
+    assert entry.get("batched_inference") is not True, f"{config_name}: {name} batches nothing"
+
+
+def _validate_lanes_windows(entry: dict, config_name: str) -> None:
+    name = entry["name"]
+    assert entry["max_batch_size"] >= 1, f"{config_name}: {name} admission/lane depth"
+    assert entry.get("batched_inference") in (None, True, False), f"{config_name}: {name}"
+    if entry["model_type"] == "FasterWhisper":
+        workers = entry.get("num_workers", 1)
+        assert isinstance(workers, int) and workers >= 1, f"{config_name}: {name} num_workers"
+        # The window cap is a module constant (10-2 deviation 3); it must stay a
+        # real positive bound because admission counts true windows.
+        from harmonyspeech.task_handler.whisper_batching import WHISPER_WINDOW_BATCH_SIZE
+
+        assert WHISPER_WINDOW_BATCH_SIZE >= 1
+    else:
+        # Lanes-only member: the value *is* the lane count, not a queue depth.
+        assert entry["max_batch_size"] == LANE_ONLY_MEMBERS[entry["model_type"]], f"{config_name}: {name}"
+
+
+def _validate_ar_decode(entry: dict, config_name: str) -> None:
+    # Phase 9's class: the number is admission depth on the shared KV pool.
+    assert entry["max_batch_size"] >= 1, f"{config_name}: {entry['name']} admission depth"
+
+
+CLASS_VALIDATORS = {
+    "padded_batch": _validate_padded_batch,
+    "loop": _validate_loop,
+    "queue_depth": _validate_queue_depth,
+    "lanes_windows": _validate_lanes_windows,
+    "ar_decode": _validate_ar_decode,
+}
+
+
+@pytest.mark.unit
+def test_execution_model_class_table_is_complete_and_declarative():
+    """Every registered type maps to exactly one of the five classes."""
+    assert set(EXECUTION_MODEL_CLASSES) == set(_MODEL_CONFIGS)
+    assert set(EXECUTION_MODEL_CLASSES.values()) <= set(EXECUTION_CLASS_SEMANTICS)
+    assert set(EXECUTION_CLASS_SEMANTICS) == {
+        "padded_batch",
+        "loop",
+        "queue_depth",
+        "lanes_windows",
+        "ar_decode",
+    }
+    assert set(CLASS_VALIDATORS) == set(EXECUTION_CLASS_SEMANTICS)
+    # The padded-batch class is the handler's own set, so the two cannot drift.
+    assert {model_type for model_type, cls in EXECUTION_MODEL_CLASSES.items() if cls == "padded_batch"} == set(
+        BATCHED_INFERENCE_FAMILIES
+    )
+
+
+@pytest.mark.unit
+def test_ar_decode_members_are_pending_phase_9():
+    """The AR class has no shipped member until 9-6 moves en/Turbo into it.
+
+    Phase 9-6 updates this test together with the class map. Until then the
+    English/Turbo Chatterbox roles are honest per-request loops (size 1), which
+    is exactly what the shipped configs must say.
+    """
+    assert "ar_decode" not in EXECUTION_MODEL_CLASSES.values(), "Phase 9-6 must update this test with the class move"
+    for model_type in FUTURE_AR_DECODE_MEMBERS:
+        assert EXECUTION_MODEL_CLASSES[model_type] == "loop"
+    for config_name in ("config.gpu.yml", "config.yml"):
+        for entry in _shipped_config(config_name)["model_configs"]:
+            if entry["model_type"] in FUTURE_AR_DECODE_MEMBERS:
+                assert entry["max_batch_size"] == 1, f"{config_name}: {entry['name']}"
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
 def test_shipped_config_batch_sizes_match_executor_reality(config_name):
     """`max_batch_size` is a capacity signal: it must equal what the executor does.
 
-    The policy has exactly three classes (Phase 8-6 finalised the values):
+    The policy is the five-class execution-model table above (Phase 10-5):
 
-    * a model type with a real padded-batch forward (`BATCHED_INFERENCE_FAMILIES`)
-      admits more than one request per step and has batching enabled;
-    * a model type whose step is a per-request loop admits exactly one
-      (`SINGLE_REQUEST_MODEL_TYPES`);
-    * a non-batched step whose number means admission width, queue depth or lane
-      count keeps that documented value (`CONCURRENCY_ONLY_MODEL_TYPES`).
+    * `padded_batch` — one padded forward per length-similar sub-batch;
+    * `loop` — per-request sequential, so exactly 1;
+    * `queue_depth` — admission/backpressure only;
+    * `lanes_windows` — M parallel lanes and (Whisper) opt-in window batches;
+    * `ar_decode` — token-level AR decode on the shared KV pool (Phase 9).
 
-    The three sets together must cover the loader registry, so a new model type
-    cannot ship without a deliberate capacity decision. The values themselves
-    must also agree word for word with `docs/batching.md`
-    (`tests/unit/test_batching_docs_matrix.py` cross-checks the matrix).
+    Every registered type must appear exactly once, and every shipped entry must
+    satisfy its class's validator. Exact values are cross-checked against
+    `docs/batching.md` by `tests/unit/test_batching_docs_matrix.py`.
     """
-    data = _shipped_config(config_name)
-    entries = data["model_configs"]
-
-    covered = BATCHED_INFERENCE_FAMILIES | SINGLE_REQUEST_MODEL_TYPES | set(CONCURRENCY_ONLY_MODEL_TYPES)
-    assert covered == set(_MODEL_CONFIGS)
+    entries = _shipped_config(config_name)["model_configs"]
 
     for entry in entries:
-        name = entry["name"]
         model_type = entry["model_type"]
-        size = entry["max_batch_size"]
-        if model_type in BATCHED_INFERENCE_FAMILIES:
-            assert size > 1, f"{config_name}: {name} has a padded-batch forward"
-            assert entry.get("batched_inference", True) is True, name
-        elif model_type in SINGLE_REQUEST_MODEL_TYPES:
-            assert size == 1, f"{config_name}: {name} admits one request per step"
-        else:
-            assert model_type in CONCURRENCY_ONLY_MODEL_TYPES, name
-            assert size == CONCURRENCY_ONLY_MODEL_TYPES[model_type], f"{config_name}: {name}"
+        assert model_type in EXECUTION_MODEL_CLASSES, (
+            f"{config_name}: {entry['name']} has no execution-model class decision"
+        )
+        cls = EXECUTION_MODEL_CLASSES[model_type]
+        CLASS_VALIDATORS[cls](entry, config_name)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
+def test_whisper_is_lanes_windows_with_its_real_knobs(config_name):
+    """Whisper's class is `lanes_windows`, and its knobs are the real ones."""
+    from harmonyspeech.task_handler.whisper_batching import WHISPER_WINDOW_BATCH_SIZE
+
+    entries = [
+        entry
+        for entry in _shipped_config(config_name)["model_configs"]
+        if entry["model_type"] == "FasterWhisper"
+    ]
+    assert entries, config_name
+    for entry in entries:
+        assert EXECUTION_MODEL_CLASSES["FasterWhisper"] == "lanes_windows"
+        assert entry["max_batch_size"] == 16, f"{config_name}: {entry['name']} admission depth"
+        assert entry.get("num_workers", 1) >= 1
+        # The shipped configs keep the window batcher opt-in until the B=1
+        # real-model parity gate runs (10-5 dated decision, 2026-11-07).
+        assert entry.get("batched_inference") is not True, f"{config_name}: {entry['name']} opt-in until parity"
+    assert WHISPER_WINDOW_BATCH_SIZE == 8, "owner-approved initial window cap (2026-11-07)"
 
 
 @pytest.mark.unit

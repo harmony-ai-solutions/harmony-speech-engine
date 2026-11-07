@@ -111,7 +111,8 @@ def format_table(stats: dict, smi: dict | None = None) -> str:
     if total:
         lines.append(
             f"device total {gib(total):.2f} GiB · "
-            f"headroom (total - reserved) {gib(stats.get('headroom_bytes')):.2f} GiB"
+            f"device used {gib(stats.get('device_used_bytes')):.2f} GiB · "
+            f"headroom (device free) {gib(stats.get('headroom_bytes')):.2f} GiB"
         )
     groups = stats.get("groups") or {}
     if groups:
@@ -142,7 +143,10 @@ def markdown_section(label: str, stats: dict, smi: dict | None, env: dict, warmu
         f"reserved {gib(stats.get('reserved_bytes')):.2f} GiB, "
         f"peak {gib(stats.get('peak_allocated_bytes')):.2f} GiB"
         + (f", nvidia-smi used {smi['used_mib'] / 1024:.2f} GiB" if smi else ""),
-        f"- **Headroom:** {gib(headroom):.2f} GiB (device total {gib(total):.2f} GiB − reserved)",
+        f"- **Device-level used:** {gib(stats.get('device_used_bytes')):.2f} GiB "
+        f"(torch + CTranslate2 + CUDA contexts; source: {stats.get('device_used_source') or 'n/a'})",
+        f"- **Headroom:** {gib(headroom):.2f} GiB (device free via torch.cuda.mem_get_info; "
+        f"device total {gib(total):.2f} GiB)",
         f"- **Shared backbones:** {json.dumps({k: round(v / GIB, 3) for k, v in (stats.get('groups') or {}).items()})}",
         "",
         "| model | device | dtype | group | VRAM MiB | weights MiB |",
@@ -155,6 +159,15 @@ def markdown_section(label: str, stats: dict, smi: dict | None, env: dict, warmu
             f"{detail.get('backbone_group') or '-'} | "
             f"{gib(detail.get('vram_bytes')) * 1024:.0f} | {gib(detail.get('weights_bytes')) * 1024:.0f} |"
         )
+    probes = [
+        f"{name}={gib(detail.get('peak_activation_bytes')) * 1024:.0f} MiB"
+        + ("" if detail.get("probe_measured") else f" (skipped: {detail.get('probe_reason')})")
+        for name, detail in (stats.get("models") or {}).items()
+        if detail.get("model_type") == "FasterWhisper"
+    ]
+    if probes:
+        lines.append("")
+        lines.append("Whisper max-shape probes: " + ", ".join(probes))
     if warmup:
         lines.append("")
         lines.append(

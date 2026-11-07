@@ -10,6 +10,7 @@ Everything below applies uniformly to all audio endpoints:
 |---|---|
 | `POST /v1/audio/speech` | `input_audio` (voice cloning reference) |
 | `POST /v1/audio/transcriptions` | `input_audio` |
+| `POST /v1/audio/translations` | `input_audio` |
 | `POST /v1/audio/vad` | `input_audio` |
 | `POST /v1/embed/speaker` | `input_audio` |
 | `POST /v1/voice/convert` | `source_audio`, `target_audio` |
@@ -64,6 +65,7 @@ Accepted upload part names (aliases in priority order):
 |---|---|
 | `/v1/audio/speech` | `input_audio`, `file`, `audio` |
 | `/v1/audio/transcriptions` | `file`, `audio`, `input_audio` |
+| `/v1/audio/translations` | `file`, `audio`, `input_audio` |
 | `/v1/audio/vad` | `file`, `audio`, `input_audio` |
 | `/v1/embed/speaker` | `file`, `audio`, `input_audio` |
 | `/v1/voice/convert` | `source_audio` (aliases `file`, `audio`) and `target_audio` |
@@ -131,6 +133,33 @@ the probed container (from magic bytes) and what was tried:
   "code": 400
 }
 ```
+
+## STT response formats
+
+`/v1/audio/transcriptions` and `/v1/audio/translations` accept a
+`response_format` field. It is validated at admission: an unknown value is
+**HTTP 400** before any inference is queued.
+
+| `response_format` | Content type | Body |
+|---|---|---|
+| `json` (default) | `application/json` | `SpeechToTextResponse` (`id`, `model`, `created`, `text`, `language`, `timestamps`), unchanged from earlier releases |
+| `text` | `text/plain` | The plain transcript/translation |
+| `srt` | `text/plain` | SubRip document rendered from the segment timestamps (`HH:MM:SS,mmm --> HH:MM:SS,mmm`, numbered blocks) |
+| `vtt` | `text/plain` | WebVTT document (`WEBVTT` header, `HH:MM:SS.mmm --> HH:MM:SS.mmm`, no block numbers) |
+
+Subtitle edge cases:
+
+- Timestamps beyond one hour render as `HH:MM:SS` with the hour field growing as
+  needed (`01:02:03,004`, `100:00:00,000`); fractions are rounded half-up to the
+  nearest millisecond.
+- Empty segment lists render an empty document (`""` for SRT, the `WEBVTT`
+  header for WebVTT), never an error.
+- Cue text keeps internal line breaks; `\r\n`/`\r` are normalised to `\n`.
+- A literal `-->` in the transcript is rendered as `- ->` (neither format allows
+  the timing arrow inside cue text).
+
+`language` is a **source-language hint** for both endpoints. On translations it
+never selects the output language: the model always translates to English.
 
 ## Output format and sample rate
 

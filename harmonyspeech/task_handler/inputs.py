@@ -531,8 +531,28 @@ def prepare_openvoice_tone_converter_inputs(
 def prepare_faster_whisper_inputs(
     requests_to_batch: list[EngineRequest],
 ):
+    """Return one 16 kHz :class:`AudioArtifact` per request.
+
+    The transcription options live on :class:`SpeechTranscribeRequestInput`
+    (``task``, ``language`` hint, ``prompt``) and are resolved once here so both
+    execution paths — the sequential ``pipeline.transcribe`` lane and the Phase
+    10-2 window batcher — read the same normalized values. ``task`` selects the
+    Whisper prompt token (``<|transcribe|>`` / ``<|translate|>``) in both paths;
+    an unsupported value becomes this batch's typed prepare error.
+    """
+
     def prepare(entry):
         request = as_request_input(entry)
+        task = str(getattr(request, "task", None) or "transcribe").strip().lower()
+        if task not in ("transcribe", "translate"):
+            raise ValueError(
+                f"task: unsupported value '{task}'. Supported tasks: transcribe, translate."
+            )
+        request.task = task
+        language = getattr(request, "language", None)
+        request.language = language or None
+        prompt = getattr(request, "prompt", None)
+        request.prompt = prompt or None
         return get_audio_artifact(request, entry, "input_audio", target_sr=16000)
 
     with ThreadPoolExecutor() as executor:
