@@ -19,6 +19,7 @@ Prove the phase's claims, set measured truthful config values, and close Phase 9
   - mixed-length rows (sub-batch formation sanity via engine DEBUG composition logging);
   - abort-under-load: rows free correctly (with 9-4);
   - pool metrics during the run: slots active/free, refusals, tokens/step.
+  - **exhaustion scenarios (owner, 2026-11-07):** 100 distinct-voice requests against a pool sized for ~8 slots (budget-capped) — refusals → sequential-fallback correctness, slot-wait and tokens/step degradation, deadline breaches under exhaustion, request loss (must be 0), pairing errors (must be 0); abort storm mid-decode; and combined exhaustion (pool full + cold embedding cache + 20 concurrent). The degradation semantics must also be proven as **local CPU integration tests** with a stub AR model (tiny pool, many requests) before the host run.
 - **VRAM accounting:** the arena table + measured peak go into `docs/benchmarks/vram-profiles.md`; verify the pool's footprint against the **device-level** headroom from 10-3 if that has landed (the torch-allocator numbers under-count; see 10-3 Context).
 - **Knowledge updates:** memory-bank (`progress.md`, `activeContext.md`), `CONCERNS.md` (retire "Chatterbox stays a per-request loop by decision" notes with the new reality), `CHANGELOG.md` (user-visible: concurrent Chatterbox throughput; no internals), README/models docs if capacity claims exist.
 

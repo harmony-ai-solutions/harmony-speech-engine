@@ -18,6 +18,7 @@ Prove the phase's claims with the concurrency story the research promised, set m
   - window-batch sweep: 4/8 windows per batch under flood;
   - translations endpoint + srt/vtt spot-check (10-4 real-model pass);
   - during runs: `hse_whisper_*` lane/queue metrics, CT2 queue gauges (if exposed), `hse_vram_device_used_bytes` vs the 10-3 budget (the admission-scaling proof: device_used stays under the bound while throughput holds).
+  - **exhaustion scenarios (owner, 2026-11-07):** 100 heterogeneous requests (durations 2 s–8 min, mixed languages, transcription + translation, varied response formats) executed against deliberately tight caps (M=2 workers, window batch=4, queue 16) — capture queue-depth/wall-time traces, lane fairness under flood, timeout count, request loss (must be 0) and pairing errors (must be 0); plus a **memory-budget trip run**: `whisper_vram_budget_bytes` set below measured demand → admission-scaling engages, latency degrades gracefully, no OOM/crash. The degradation semantics (fallback correctness, zero loss) must also be proven as **local CPU integration tests** with stubbed CT2 and mocked `mem_get_info` before the host run.
 - **Config honesty (this task introduces the shared mechanism — owner decision 2026-11-07):** measured `num_workers` + window-batch caps replace the initial values (turbo 2 / tiny 4 / windows 8). The three-class policy test (`tests/unit/initialization/test_config.py`) becomes a declarative **execution-model class table**: a model type maps to exactly one class and its shipped config must match that class's semantics (9-6 conforms when Phase 9 lands):
 
   | Class | Execution semantics | `max_batch_size` means | Additional knobs | Members (post-10) |
@@ -59,4 +60,5 @@ Prove the phase's claims with the concurrency story the research promised, set m
 - [ ] M-sweep + window sweep → measured config values (honesty tests in sync)
 - [ ] Device-memory budget held under load (10-3 validation)
 - [ ] 10-4 real-model spot-check green; docs + knowledge updated
+- [ ] Exhaustion scenarios recorded (100-request tight-cap flood + memory-budget trip) + local stubbed degradation tests green
 - [ ] Full suites green; Phase 10 ticked in summary.md
