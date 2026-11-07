@@ -57,6 +57,16 @@ identical to the base one.
 
 Per-request state (``conds`` / ``ref_dict``) is created per role and stays on
 the wrapper instance — never on the shared modules (Phase 0-2 invariant).
+
+AR decode hygiene (Phase 9-1)
+-----------------------------
+The TTS role's T3 is instantiated as
+:class:`~harmonyspeech.modeling.models.chatterbox.t3_ar.ChatterboxT3AR`, an
+upstream ``T3`` subclass that only overrides the inference path (no per-step
+``output_attentions`` when no analyzer is attached, no per-token ``tqdm``). The
+embedding role shares that same object; the multilingual role keeps the plain
+class (its analyzer needs attention) and turbo keeps its own structurally
+different loop (``T3.inference_turbo``) until 9-3.
 """
 
 from __future__ import annotations
@@ -84,6 +94,7 @@ from harmonyspeech.modeling.models.chatterbox.chatterbox import (
     _resolve_load_dtype,
     apply_model_dtype,
 )
+from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
 from harmonyspeech.modeling.weight_registry import WeightRegistry
 
 # Default HF repo for the base + multilingual Chatterbox checkpoints (mirrors
@@ -117,6 +128,21 @@ ROLE_EMBEDDING = "embedding"
 ROLE_VC = "vc"
 ROLE_MULTILINGUAL = "multilingual"
 ROLE_TURBO = "turbo"
+
+#: Roles whose T3 decodes with HSE's cleaned AR loop (Phase 9-1). The embedding
+#: role shares the TTS T3 object, so it is covered by loading that role as TTS.
+_AR_T3_ROLES = frozenset({ROLE_TTS})
+
+
+def _t3_class_for_role(role: str) -> type[T3]:
+    """Return the T3 implementation to instantiate for ``role``.
+
+    Only the English TTS decode path gets :class:`ChatterboxT3AR`; multilingual
+    keeps the upstream class (per-request analyzer state on the shared Llama) and
+    turbo keeps ``T3.inference_turbo`` (a different loop, deferred to 9-3).
+    """
+    return ChatterboxT3AR if role in _AR_T3_ROLES else T3
+
 
 # File names per role family (verified against chatterbox-tts 0.1.6).
 _FILES = {
@@ -261,18 +287,34 @@ def load_ve(repo: str, revision: str | None, device: str, *, role: str) -> Voice
 
 
 def load_t3(repo: str, revision: str | None, device: str, dtype: torch.dtype, *, role: str) -> T3:
-    """Load the T3 autoregressive backbone, cast to ``dtype``."""
+    """Load the T3 autoregressive backbone, cast to ``dtype``.
+
+    The class comes from :func:`_t3_class_for_role`, so the English TTS role
+    (and the embedding role that shares it) gets HSE's cleaned AR loop
+    (Phase 9-1) while multilingual/turbo stay on the upstream class.
+    """
     ckpt = _ckpt_dir(repo, revision)
+    t3_cls = _t3_class_for_role(role)
     if role == ROLE_MULTILINGUAL:
-        t3 = T3(T3Config.multilingual())
+        t3 = t3_cls(T3Config.multilingual())
         state = load_file(f"{ckpt}/{_FILES[ROLE_MULTILINGUAL]['t3']}")
     elif role == ROLE_TURBO:
-        hp = T3Config(**_TURBO_HP)
+        # Upstream `T3Config.__init__` only accepts `text_tokens_dict_size`; the
+        # other turbo hyper-parameters are attributes set after construction
+        # (mirrors `chatterbox/tts_turbo.py:149-155`). The old
+        # `T3Config(**_TURBO_HP)` call raised TypeError if this branch was ever
+        # reached (Phase 9-1 Deviation 6; fixed here because 9-3 owns turbo).
+        hp = T3Config(text_tokens_dict_size=_TURBO_HP["text_tokens_dict_size"])
         hp.llama_config_name = _TURBO_LLAMA_CONFIG
-        t3 = T3(hp)
+        hp.speech_tokens_dict_size = _TURBO_HP["speech_tokens_dict_size"]
+        hp.input_pos_emb = _TURBO_HP["input_pos_emb"]
+        hp.speech_cond_prompt_len = _TURBO_HP["speech_cond_prompt_len"]
+        hp.use_perceiver_resampler = _TURBO_HP["use_perceiver_resampler"]
+        hp.emotion_adv = _TURBO_HP["emotion_adv"]
+        t3 = t3_cls(hp)
         state = load_file(f"{ckpt}/{_FILES[ROLE_TURBO]['t3']}")
     else:
-        t3 = T3()
+        t3 = t3_cls()
         state = load_file(f"{ckpt}/{_FILES[ROLE_TTS]['t3']}")
     if "model" in state:
         state = state["model"][0]
@@ -544,6 +586,7 @@ def build_role_model(model_config, device, registry: WeightRegistry | None):
 __all__ = [
     "BASE_REPO",
     "ChatterboxBackbone",
+    "_t3_class_for_role",
     "assemble_role",
     "build_backbone",
     "build_role_model",

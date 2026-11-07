@@ -8,6 +8,31 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 9-6 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
+
+- **Exhaustion proof** — `tests/integration/test_chatterbox_exhaustion.py` (real engine loop + scheduler + pool + admission, tiny T3): 100 distinct-voice requests against an 8-slot pool complete with **zero loss / zero pairing errors**, refusals take the sequential fallback, slots never over-commit; deadline-under-exhaustion errors only the expired request; an abort storm frees every slot; combined pool-full + cold `EmbeddingCache` + 20 concurrent stays lossless with rising `hse_ar_cache_refusals_total` and sane `hse_ar_decode_*`; fewer slots than requests completes in more engine steps (never a crash/OOM/loss).
+- **Benchmarks** — `scripts/bench_throughput.py`: `--scenario chatterbox-ar` (three-way sequential / AR-0 / AR runner at c={4,8,20} for both families, cache composition, mixed lengths, AR-metric sampling) and `--scenario chatterbox-exhaustion` (100-request tight-pool trace), `--print-ar-scenarios`; `chatterbox_turbo` family. Every result cell `_tbd_` in `docs/benchmarks/throughput.md` §Phase 9-6.
+- **Config flip** — Chatterbox English/Turbo are `ar_decode` with initial width **4** (arena math: 8 English slabs × 90 MiB + 4 Turbo × 72 MiB = 1008 MiB ≤ 1 GiB); `ar_inference` blocks added to both configs; the honesty validator asserts the pool knobs. Dated: capacity decision pending the host gate, rollback `batched_inference: false`.
+- **Gates** — `audio_regression.py` allow-list + `batching_cases` (distributional AR gate); `tests/e2e/tts/test_chatterbox_ar_parity.py` gates per-row seeded token equality alone-vs-batched on real weights (skipped without `HSE_CHATTERBOX_PARITY_MODEL`).
+- **Docs** — `docs/batching.md` matrix final, `vram-profiles.md` arena table, CONCERNS/CHANGELOG/README/memory bank updated.
+
+Next up when work resumes: the benchmark-host session fills the Phase 7/8/9/10 `_tbd_` cells and runs the real-model parity/batching gates.
+
+### Engine Modernization — Phase 9-2 (COMPLETE, 2026-11-07; consumer lands in 9-3)
+
+- **`harmonyspeech/engine/ar_cache.py`** — the shared AR KV-cache pool: one `[L, 2, B, cap, H, D]` static slab arena per family (`ARCacheDescriptor`: `model_key`, layers, kv_heads, head_dim, dtype, optional `cap_tokens`/`slots`), zero-copy `[B, cap, H, D]` per-layer views, a FIFO free-list allocator (`acquire` → slot or graceful `None`; `release` rejects double/foreign releases), CPU fallback (fp32; fp16 on CUDA) and budget validation at registration (`ARCacheBudgetError`; `slots=None` fills the remaining budget). One device-wide budget, never shared cache content.
+- **Isolation invariant** — a slot belongs to one in-flight request; stale KV beyond a sequence's write position is never read (write position k before attention reads ≤ k, masked/sliced to current length). Pinned by a poisoned-slot test: NaN-pre-filled slot + real `scaled_dot_product_attention` over the written prefix is bit-identical to the clean run, while the full-capacity read still sees the poison.
+- **Config/CLI** — `ar_inference.{kv_cache_budget_bytes: 1073741824, default_cap_tokens: 768, enabled}` (flat aliases accepted) + `--ar-cache-budget-bytes` / `--no-ar-cache`. Engine owns the pool, threads it executor → worker → runner like the weight registry/embedding cache, validates at registration and logs the startup arena table.
+- **Observability** — `hse_ar_cache_{enabled,pool_bytes,allocated_bytes,slots,slots_active,slots_free,grants_total,refusals_total}` on `/metrics` (zeros when disabled, never absent) + an `ar_cache` block on `/health` and inside the `vram` summary (slabs are ordinary torch allocations, so device-level truth counts them). `get_ar_cache_stats()` / `get_ar_cache_capacity()` expose per-family `active_rows` for 9-4 admission. `AsyncHarmonySpeech` proxy added.
+- **Docs** — `docs/ar-cache.md` (layout, config, boot validation, isolation invariant, metrics, "slots ≠ admission width"), README bullet, CHANGELOG.
+- **Tests** — 59 new in `tests/unit/engine/test_ar_cache.py`; `tests/unit` 1053 passed incl. CUDA. Deviations: metrics renderer in its own module, extra `hse_ar_cache_enabled` series, optional descriptor fields, `test_engine.py` exact-call assertions updated.
+
+### Engine Modernization — Phase 9-5 (COMPLETE, 2026-11-07; real-model gates pending)
+
+- **S3Gen padded vocode hop** — `harmonyspeech/modeling/models/chatterbox/s3gen_batch.py` (HSE-side; installed `chatterbox-tts==0.1.6` untouched). The upstream graph is "batch_size=1 only": audit measured **0.4075 peak** on a short row in the encoder (embed bias + causal lookahead) and **0.44 peak** in the HiFT vocoder (f0 convs, transposed ups, source branch, resblocks; STFT/ISTFT reflect at the batch end). The CFM `ConditionalDecoder` is padding-safe by construction but its mask is built over `max(valid)` not the padded width (`flow.py:182-185`). `inference_batched` rebuilds the mask, masks every encoder/HiFT stage, runs the STFT/ISTFT per row, and draws all four upstream RNG tensors per row from a `torch.Generator` seeded with the request seed. `B=1` bit-identical to upstream; mixed rows ≤2.1e-7; padding-independent.
+- **Handlers** — `_execute_chatterbox_tts_ar` collects finished rows per step, `plan_batches` on the speech-token axis (`batch_token_budget` reused), one forward per sub-batch; `len==1`/flag-off/unsupported/failure → seeded per-row fallback (audio-identical), poisoned row errors alone. VC's vocode hop uses the same graph when >1 request is admitted (dormant at `max_batch_size: 1`; family stays `loop`-class). **Turbo meanflow vocode hop is the documented skip** (`randn(1,80,…)` + a single `prompt_len`); Turbo AR decode remains 9-3's.
+- **Tests/docs** — 9 S3Gen unit gates + 4 TTS-hop handler + 3 VC-hop handler; `docs/batching.md` matrix + Phase 9-5 section; unit 1092 / integration 73 green. Real-model `batching:1-vs-N` + throughput → 9-6.
+
 ### Engine Modernization — Phase 10 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
 
 **Current workstream**: `.current_work/engine-modernization/` — Phase 10 is Whisper serving. 10-1 (lanes), 10-2 (cross-request window batcher), 10-3 (memory governance), 10-4 (STT wire formats) and 10-5 (gates/benchmarks/exit) are code-complete.

@@ -201,8 +201,8 @@ model_configs:
 # class (owner decision 2026-11-07, authoritative definition in 10-5). Each class
 # has a semantic validator, so a new model type cannot ship without a deliberate
 # capacity decision, and a shipped config cannot claim a capacity its executor
-# does not honour. Phase 9-6 extends the table (it moves the English/Turbo
-# Chatterbox roles into `ar_decode` when the shared KV pool lands).
+# does not honour. Phase 9-6 moved the English/Turbo Chatterbox roles into
+# `ar_decode` and set their initial admission width from the arena table.
 
 #: The five execution classes and what their `max_batch_size` really means.
 EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
@@ -237,25 +237,25 @@ EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
 #: ONNX graphs have a static batch dimension of 1; Phase 8-5).
 LANE_ONLY_MEMBERS = {"KittenTTSSynthesizer": 4}
 
-#: The English/Turbo Chatterbox roles are Phase 9's AR-runner members. Until
-#: 9-6 lands they stay honest `loop` entries; `test_ar_decode_members_are_pending_phase_9`
-#: is the assertion 9-6 flips (move them into `EXECUTION_MODEL_CLASSES` as
-#: `ar_decode` and delete the future-member expectation).
-FUTURE_AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+#: The English/Turbo Chatterbox roles are Phase 9's AR-runner members. Phase 9-6
+#: flipped them into `ar_decode`; the assertion below keeps the class map and the
+#: shipped configs in sync.
+AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
 
 #: Every registered model type → exactly one class. `padded_batch` is derived
 #: from the handler's own set so the two cannot drift; the rest are explicit.
 EXECUTION_MODEL_CLASSES: dict[str, str] = {
     **dict.fromkeys(BATCHED_INFERENCE_FAMILIES, "padded_batch"),
-    # Per-request loops. hs1-synthesizer is a measured padding skip (8-4); the
-    # Chatterbox family is product-deferred (KV-cache workstream). Phase 9 will
-    # move the English/Turbo roles to `ar_decode`; embedding/VC stay loops.
+    # Per-request loops. hs1-synthesizer is a measured padding skip (8-4);
+    # Chatterbox embedding/VC/multilingual stay loops (9-3's documented skip).
     "HarmonySpeechSynthesizer": "loop",
-    "ChatterboxTTS": "loop",
-    "ChatterboxTurboTTS": "loop",
     "ChatterboxMultilingualTTS": "loop",
     "ChatterboxEmbedding": "loop",
     "ChatterboxVC": "loop",
+    # Token-level AR decode on the shared KV pool (Phase 9-3/9-6). The number is
+    # an admission depth; the pool's slot count is a separate capacity signal.
+    "ChatterboxTTS": "ar_decode",
+    "ChatterboxTurboTTS": "ar_decode",
     # Single-stream VAD: the number is queue depth only (8-5).
     "SileroVAD": "queue_depth",
     # Parallel lanes. Whisper adds opt-in cross-request window batches on top of
@@ -310,8 +310,27 @@ def _validate_lanes_windows(entry: dict, config_name: str) -> None:
 
 
 def _validate_ar_decode(entry: dict, config_name: str) -> None:
-    # Phase 9's class: the number is admission depth on the shared KV pool.
-    assert entry["max_batch_size"] >= 1, f"{config_name}: {entry['name']} admission depth"
+    """Phase 9's class: admission depth on the shared KV pool.
+
+    The number is a **request admission depth**, never the slot count (the pool's
+    capacity is a separate signal). The AR runner only exists when the engine's
+    shared pool is enabled, so the shipped config must also carry a real
+    ``ar_inference`` block: a positive byte budget and token cap. The flag is
+    honoured as an operator opt-out (`false` forces the sequential loop).
+    """
+    name = entry["name"]
+    assert entry["max_batch_size"] >= 1, f"{config_name}: {name} admission depth"
+    assert entry.get("batched_inference") in (None, True, False), f"{config_name}: {name} flag"
+    ar = _shipped_config(config_name).get("ar_inference") or {}
+    budget = ar.get("kv_cache_budget_bytes", 1073741824)
+    cap = ar.get("default_cap_tokens", 768)
+    assert isinstance(budget, int) and not isinstance(budget, bool) and budget > 0, (
+        f"{config_name}: ar_inference.kv_cache_budget_bytes"
+    )
+    assert isinstance(cap, int) and not isinstance(cap, bool) and cap > 0, (
+        f"{config_name}: ar_inference.default_cap_tokens"
+    )
+    assert ar.get("enabled", True) is not False, f"{config_name}: ar_inference.enabled must not be false"
 
 
 CLASS_VALIDATORS = {
@@ -343,20 +362,38 @@ def test_execution_model_class_table_is_complete_and_declarative():
 
 
 @pytest.mark.unit
-def test_ar_decode_members_are_pending_phase_9():
-    """The AR class has no shipped member until 9-6 moves en/Turbo into it.
+def test_ar_decode_members_are_the_chatterbox_en_and_turbo_roles():
+    """Phase 9-6: the English/Turbo Chatterbox roles are the `ar_decode` members.
 
-    Phase 9-6 updates this test together with the class map. Until then the
-    English/Turbo Chatterbox roles are honest per-request loops (size 1), which
-    is exactly what the shipped configs must say.
+    The class is live (9-3's runner + 9-2's pool), and the shipped configs declare
+    the initial admission width justified from the arena table. The flag stays an
+    operator opt-out; it is not forced on by the shipped configs.
     """
-    assert "ar_decode" not in EXECUTION_MODEL_CLASSES.values(), "Phase 9-6 must update this test with the class move"
-    for model_type in FUTURE_AR_DECODE_MEMBERS:
-        assert EXECUTION_MODEL_CLASSES[model_type] == "loop"
+    ar_members = {model_type for model_type, cls in EXECUTION_MODEL_CLASSES.items() if cls == "ar_decode"}
+    assert ar_members == set(AR_DECODE_MEMBERS)
     for config_name in ("config.gpu.yml", "config.yml"):
-        for entry in _shipped_config(config_name)["model_configs"]:
-            if entry["model_type"] in FUTURE_AR_DECODE_MEMBERS:
-                assert entry["max_batch_size"] == 1, f"{config_name}: {entry['name']}"
+        entries = [
+            entry
+            for entry in _shipped_config(config_name)["model_configs"]
+            if entry["model_type"] in AR_DECODE_MEMBERS
+        ]
+        assert entries, config_name
+        for entry in entries:
+            # Initial pending-measurement admission width (Phase 9-6 decision):
+            # 4 English requests (8 rows) + 4 Turbo requests (4 rows) fit the
+            # 1 GiB pool at the default 768-token slot on fp16 slabs.
+            assert entry["max_batch_size"] == 4, f"{config_name}: {entry['name']} admission depth"
+            assert entry.get("batched_inference") is not False, f"{config_name}: {entry['name']} opt-out only"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
+def test_ar_decode_config_carries_the_shared_pool_knobs(config_name):
+    """AR decode needs the 9-2 pool; the shipped config must declare it."""
+    ar = _shipped_config(config_name)["ar_inference"]
+    assert ar["kv_cache_budget_bytes"] == 1073741824, f"{config_name}: owner-approved initial budget"
+    assert ar["default_cap_tokens"] == 768, f"{config_name}: owner-approved initial token cap"
+    assert ar.get("enabled", True) is True
 
 
 @pytest.mark.unit

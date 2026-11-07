@@ -30,6 +30,7 @@ class GPUWorker(WorkerBase):
         is_driver_worker: bool = False,
         weight_registry=None,
         embedding_cache=None,
+        ar_cache_pool=None,
     ) -> None:
         self.model_config = model_config
         self.device_config = device_config
@@ -38,6 +39,7 @@ class GPUWorker(WorkerBase):
         self.is_driver_worker = is_driver_worker
         self.weight_registry = weight_registry
         self.embedding_cache = embedding_cache
+        self.ar_cache_pool = ar_cache_pool
         if self.is_driver_worker:
             assert self.rank == 0, "The driver worker must have rank 0."
 
@@ -47,6 +49,7 @@ class GPUWorker(WorkerBase):
             is_driver_worker=is_driver_worker,
             weight_registry=weight_registry,
             embedding_cache=embedding_cache,
+            ar_cache_pool=ar_cache_pool,
         )
         # Uninitialized cache engine. Will be initialized by
         # initialize_cache

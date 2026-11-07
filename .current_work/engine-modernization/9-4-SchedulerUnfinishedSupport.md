@@ -41,8 +41,94 @@ Teach the engine loop and scheduler that a request can be **RUNNING and unfinish
 
 ## Checklist
 
-- [ ] Unfinished result variant + running-set semantics landed
-- [ ] Capacity-based admission for AR models; boolean preserved elsewhere (regression green)
-- [ ] Deadline + abort semantics verified for multi-step requests
-- [ ] Progress metrics exposed
-- [ ] `summary.md` Implementation Status updated
+- [x] Unfinished result variant + running-set semantics landed
+- [x] Capacity-based admission for AR models; boolean preserved elsewhere (regression green)
+- [x] Deadline + abort semantics verified for multi-step requests
+- [x] Progress metrics exposed
+- [x] `summary.md` Implementation Status updated
+
+## Implementation notes (2026-11-07)
+
+**Result contract.** `common/outputs.py` gains an explicit `UnfinishedRequestOutput`
+(`unfinished=True`, `progress={"tokens", "step"}`; `finish_reason=None`, so
+`finished()` stays `False`) plus `unfinished`/`progress` on the base
+`RequestOutput`. The engine keys on the marker, never on a null finish reason, so
+an error result cannot be mistaken for progress. `EngineRequest` gains
+`unfinished` + `progress`, set by `set_progress()` and cleared by
+`clear_progress()` on every terminal transition (alongside `clear_artifacts`).
+
+**Running-set semantics.** `Scheduler._schedule_default()` reschedules a
+`running` request when `_continues_across_steps()` says it is an AR-family row
+that returned a partial result. The row is not duplicated in `running`; it is
+prepended to that model's step list before newly admitted requests. Non-AR
+families never have unfinished running rows (each step completes them), so their
+schedule is byte-for-byte unchanged.
+
+**Admission composition.** `AR_INFERENCE_MODEL_TYPES = {ChatterboxTTS,
+ChatterboxTurboTTS}` (mirrors `docs/batching.md` / 10-5's
+`FUTURE_AR_DECODE_MEMBERS`). For those models the width is
+`min(max_batch_size - running, pool.slots_free)` via the injected
+`ar_admission` hook (`HarmonySpeechEngine.get_ar_cache_capacity`, the same
+precedent as the Whisper governor). A disabled pool, an unregistered arena
+(`KeyError`, expected until 9-3) or a hook failure falls back to the historical
+boolean rule; every non-AR model always takes the boolean path. **9-3 convention:**
+the runner must register its arena under the scheduler's model name
+(`ModelConfig.name` / `request_data.model`); an arena under any other key reads
+as "no signal" and capacity admission will not apply.
+
+**Deadlines.** `_expire_overdue_requests()` already scanned `running` every step,
+so a request that survives many steps is re-checked per step. The expiry path
+now also calls `_release_request_resources()`, so the row and its 9-2 slot are
+freed and only that request errors (the loop keeps stepping).
+
+**Abort/disconnect.** `abort_request()` releases request resources through a
+duck-typed `executor.release_request(request_id)` hook (no `ExecutorBase` change;
+9-3 implements it on the runner). Final/error results are expected to release
+their own slot in the runner; the hook is for paths where the runner will never
+see the request again.
+
+**Loop liveness.** `AsyncHarmonySpeech.engine_step()` now returns
+`bool(outputs or forwarded or engine.has_unfinished_requests())`. Without this a
+progress-only step returned `False`, and `run_engine_loop()` would block in
+`wait_for_new_requests()` until an unrelated request arrived — stalling the
+decode. This is the one non-obvious engine-loop change.
+
+**Progress metrics.** `get_ar_decode_stats()` reports per-AR-model
+`active_rows`/slot occupancy (from 9-2 capacity) and cumulative
+`tokens_total`/`steps_total`/`tokens_per_step` (fed by partial results; a
+terminal result may optionally carry the final `progress`). Exposed on
+`/health` (`ar_decode`) and `/metrics` (`hse_ar_decode_*`).
+
+**Tests.** `tests/integration/test_ar_scheduling.py` (11 tests): scheduler
+capacity composition + non-AR boolean preservation + no-capacity fallback;
+survive-and-finish with exactly one client response; second request admitted
+mid-decode; abort frees row+slot; deadline errors alone and the loop lives;
+poisoned row errors alone; progress metrics; async progress-only step keeps the
+loop stepping.
+
+## Deviations (2026-11-07)
+
+1. **Carry-over: `AsyncHarmonySpeech.get_whisper_lane_stats()` proxy + test.**
+   9-2 recorded this Phase 10-1 gap (the serving layer holds the wrapper, so
+   `/metrics` rendered zeroed Whisper-lane series in production). Added here
+   because this task already touches the wrapper; the test lives in
+   `tests/unit/inference_flow/test_whisper_lanes.py`.
+2. **`get_ar_decode_stats()` proxy + a pure renderer module + `api_server.py`
+   wiring.** The files table does not list a metrics module or the endpoint, but
+   the checklist requires progress metrics. Following the 7-3/10-1 convention,
+   the renderer is a separate torch-free module (`engine/ar_decode_metrics.py`)
+   and `/metrics`/`/health` are wired for it. This is additive: the existing
+   9-2 `hse_ar_cache_*` aggregate series are unchanged.
+3. **`release_request(request_id)` is a duck-typed executor hook**, not a new
+   `ExecutorBase` abstract method. That keeps every existing executor valid and
+   confines 9-3's runner change to the runner; a missing hook is a no-op.
+4. **The AR family set lives in `processing/scheduler.py`.** It is the runtime
+   admission flag, separate from the shipped-config execution-class table (which
+   9-6 moves); the set is the same two members, so the two cannot silently
+   disagree without a deliberate edit.
+5. **`docs/ar-cache.md` gained a short "Decode progress" subsection** for the
+   new series. No CHANGELOG entry: 9-4 is internal plumbing with no
+   user-visible capability until 9-3/9-6 land the runner and the config move.
+6. **The shipped configs are untouched.** English/Turbo Chatterbox stay
+   `max_batch_size: 1` (`loop`) until 9-6; with width 1 a single request still
+   decodes across steps, which is the prerequisite 9-3 needs.

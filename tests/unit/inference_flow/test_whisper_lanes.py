@@ -713,6 +713,20 @@ def test_engine_get_whisper_lane_stats_aggregates_models():
 
 
 @pytest.mark.unit
+def test_async_wrapper_proxies_whisper_lane_stats():
+    """The serving layer holds the async wrapper (Phase 10-1 carry-over fix)."""
+    from types import SimpleNamespace
+
+    from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+
+    expected = {"enabled": True, "models": {"whisper": {"workers": 2}}}
+    wrapper = AsyncHarmonySpeech.__new__(AsyncHarmonySpeech)
+    wrapper.engine = SimpleNamespace(get_whisper_lane_stats=lambda: expected)
+
+    assert wrapper.get_whisper_lane_stats() == expected
+
+
+@pytest.mark.unit
 def test_render_whisper_lane_metrics_emits_every_family():
     stats = {
         "enabled": True,

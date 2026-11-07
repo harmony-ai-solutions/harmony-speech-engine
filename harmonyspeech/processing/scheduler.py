@@ -27,6 +27,16 @@ WHISPER_LONG_CREDIT = 1
 #: governor bounds *windows* in flight, not requests.
 WHISPER_WINDOW_SECONDS = 30.0
 
+#: Model types that decode autoregressively across engine steps (Phase 9-4).
+#: Only these families get capacity-based admission and running-set carry-over;
+#: every other family keeps the historical boolean rule byte-for-byte. The set
+#: mirrors the Phase 9 AR-runner members (English + Turbo Chatterbox, see
+#: ``docs/batching.md``); multilingual/embedding/VC stay per-request loops and
+#: are deliberately excluded (multilingual is the documented 9-3 skip). 9-6
+#: moves the shipped config entries into the ``ar_decode`` execution class; this
+#: runtime set stays the single source of truth for admission.
+AR_INFERENCE_MODEL_TYPES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+
 
 def _artifact_duration(request) -> float | None:
     """Admission-time audio duration in seconds, or ``None`` when unknown."""
@@ -243,6 +253,7 @@ class Scheduler:
         self,
         model_configs: list[ModelConfig] | None,
         whisper_admission=None,
+        ar_admission=None,
     ) -> None:
         self.model_configs = model_configs
 
@@ -259,6 +270,13 @@ class Scheduler:
         # `HarmonySpeechEngine.get_whisper_admission` (Phase 10-3); None keeps
         # the scheduler standalone (tests, tooling) with capacity-only admission.
         self.whisper_admission = whisper_admission
+        # Phase 9-4: capacity-based admission input for AR families. The engine
+        # injects `get_ar_cache_capacity`, which returns the 9-2 pool's
+        # per-family capacity row (`slots`, `slots_active`, `slots_free`,
+        # `active_rows`). None (or a disabled/unregistered arena) keeps the
+        # historical boolean rule, so a deployment without AR models — or
+        # before 9-3 registers an arena — behaves exactly as before.
+        self.ar_admission = ar_admission
         self._model_types = {
             getattr(config, "name", None): getattr(config, "model_type", None)
             for config in (model_configs or [])
@@ -309,6 +327,11 @@ class Scheduler:
                     clear_artifacts = getattr(request, "clear_artifacts", None)
                     if callable(clear_artifacts):
                         clear_artifacts()
+                    # Multi-step decode state is request-scoped too (Phase 9-4):
+                    # drop the unfinished flag/progress on every terminal path.
+                    clear_progress = getattr(request, "clear_progress", None)
+                    if callable(clear_progress):
+                        clear_progress()
                     # Remove from queue since it is finished now
                     state_queue.remove(request)
 
@@ -323,12 +346,17 @@ class Scheduler:
     ) -> tuple[deque, SchedulerWaitingOutputs]:
         """Schedule waiting requests, preserving the historical per-model rule.
 
-        Two admission regimes share this method (Phase 10-1):
+        Three admission regimes share this method (Phase 9-4 / 10-1):
 
-        * **Every non-Whisper model keeps the boolean rule**: a model that still
-          has running requests is skipped this step, and it admits in arrival
-          order up to its ``max_batch_size``. This is exactly the pre-Phase-10
-          behaviour.
+        * **AR families are capacity-based** (Phase 9-4): an unfinished row keeps
+          decoding in ``running``, so admission continues while the shared pool
+          has a free slot and the per-step width allows another row. Slots come
+          from the injected ``ar_admission`` hook (9-2's pool capacity); without
+          a live capacity signal the boolean rule applies instead.
+        * **Every other non-Whisper model keeps the boolean rule**: a model that
+          still has running requests is skipped this step, and it admits in
+          arrival order up to its ``max_batch_size``. This is exactly the
+          pre-Phase-10 behaviour.
         * **Whisper models are capacity-based**: they keep admitting while the
           budget allows, and the step is filled from two fairness lanes
           (``<=30 s`` vs ``>30 s``) drained at the credit ratio. The final width
@@ -374,6 +402,24 @@ class Scheduler:
 
         leftover_waiting_requests: deque = deque()
         for model_name, model_requests in by_model.items():
+            if self._is_ar_model(model_name):
+                # Capacity-based admission for AR families (Phase 9-4). An
+                # unfinished request keeps decoding in `running`, so the old
+                # "model has running work -> admit nothing" boolean would starve
+                # the family for the whole decode. Admit while the shared pool
+                # has a free slot AND the per-step width (`max_batch_size`)
+                # allows another row. Slots are a separate capacity signal,
+                # never the admission width (the Phase 10 lesson).
+                width = self._ar_admission_width(model_name, budget)
+                for request in model_requests:
+                    if width <= 0:
+                        leftover_waiting_requests.append(request)
+                        continue
+                    requests.append(request)
+                    budget.add_num_requests(model_name, 1)
+                    width -= 1
+                continue
+
             if not self._is_whisper_model(model_name):
                 # Boolean admission: a model with running work waits a step.
                 if budget.current_num_requests(model_name) > 0:
@@ -415,6 +461,86 @@ class Scheduler:
         return leftover_waiting_requests, SchedulerWaitingOutputs(
             requests=requests, ignored_requests=ignored_requests
         )
+
+    # ------------------------------------------------------------------
+    # AR multi-step decode admission (Phase 9-4)
+    # ------------------------------------------------------------------
+    def _is_ar_model(self, model_name: str | None) -> bool:
+        """True when ``model_name`` is an AR family that decodes across steps."""
+        return self._model_types.get(model_name) in AR_INFERENCE_MODEL_TYPES
+
+    def _continues_across_steps(self, request: EngineRequest) -> bool:
+        """True for a RUNNING AR row that returned a partial result last step.
+
+        Only flagged requests are rescheduled: a request that has not yet
+        produced a partial result is either new (it comes from ``waiting``) or
+        already terminal (it was freed). This keeps the carry-over explicit and
+        cannot accidentally re-run a stale non-AR request.
+        """
+        return (
+            self._is_ar_model(getattr(request.request_data, "model", None))
+            and not request.is_finished()
+            and bool(getattr(request, "unfinished", False))
+        )
+
+    def _ar_capacity(self, model_name: str) -> dict | None:
+        """Read the shared pool's capacity row for ``model_name``, or ``None``.
+
+        ``None`` means "no capacity signal": the pool is disabled, the family
+        has not registered an arena yet (9-3 registers it at model load), or the
+        hook failed. Callers then keep the historical boolean rule, so a
+        deployment without a live arena behaves exactly as before.
+
+        The hook is called with the **scheduler's model name**
+        (``ModelConfig.name`` / ``request_data.model``), so an AR runner must
+        register its 9-2 arena under that key for capacity admission to apply;
+        an arena under any other key is treated as "no signal".
+        """
+        hook = getattr(self, "ar_admission", None)
+        if hook is None:
+            return None
+        try:
+            decision = hook(model_name) or {}
+        except KeyError:
+            # No arena for this family yet (9-3). Not an error — fall back.
+            return None
+        except Exception as error:  # noqa: BLE001 - admission must never break scheduling
+            logger.warning(
+                f"AR capacity hook failed for '{model_name}' ({error}); using boolean admission"
+            )
+            return None
+        if not decision.get("enabled"):
+            return None
+        try:
+            slots = int(decision.get("slots") or 0)
+            active = int(decision.get("active_rows", decision.get("slots_active", 0)) or 0)
+            raw_free = decision.get("slots_free")
+            slots_free = int(raw_free) if raw_free is not None else max(0, slots - active)
+        except (TypeError, ValueError):  # pragma: no cover - defensive on odd hook output
+            return None
+        if slots <= 0:
+            return None
+        return {"slots": slots, "active_rows": active, "slots_free": max(0, slots_free)}
+
+    def _ar_admission_width(self, model_name: str, budget: SchedulingBudget) -> int:
+        """Rows that may be newly admitted for an AR model this step.
+
+        Composes the two independent signals (slots are not admission width):
+
+        * the per-step request budget left after the continuing rows
+          (``max_batch_size - running``), and
+        * the pool's free slots (``slots - active_rows``).
+
+        With no capacity signal the historical boolean rule applies: a model
+        that still has running work admits nothing, otherwise it fills its
+        budget.
+        """
+        capacity = self._ar_capacity(model_name)
+        if capacity is None:
+            if budget.current_num_requests(model_name) > 0:
+                return 0
+            return budget.remaining_request_budget(model_name)
+        return max(0, min(budget.remaining_request_budget(model_name), capacity["slots_free"]))
 
     # ------------------------------------------------------------------
     # Whisper lane admission (Phase 10-1)
@@ -502,23 +628,30 @@ class Scheduler:
         for request in self.running:
             budget.add_num_requests(request.request_data.model, 1)
 
-        # Schedule waiting requests if there is capacity
-        # Only requests for models not currently processing a batch will be scheduled
+        # Build mapping of ready requests on a per model dictionary.
+        # Phase 9-4: an AR request that returned a partial result last step is
+        # still RUNNING and must be scheduled again — one engine step is one
+        # decode step, not one whole request. Non-AR families never have
+        # unfinished running requests (every step completes them), so their
+        # schedule is unchanged.
+        per_model_scheduled: dict[str, list[EngineRequest]] = {}
+        for request in self.running:
+            if self._continues_across_steps(request):
+                per_model_scheduled.setdefault(request.request_data.model, []).append(request)
+
+        # Schedule waiting requests per each model's admission regime (boolean
+        # for most families, lanes for Whisper, capacity for AR — see
+        # `_schedule_waiting_requests`).
         remaining_waiting, ready = self._schedule_waiting_requests(self.waiting, budget)
 
         # Update waiting requests.
         self.waiting = remaining_waiting
 
-        # Build mapping of ready requests on a per model dictionary
-        per_model_scheduled = {}
         for r in ready.requests:
             # Set Request to running state
             r.set_running()
             # Fill into dict
-            if r.request_data.model not in per_model_scheduled:
-                per_model_scheduled[r.request_data.model] = [r]
-            else:
-                per_model_scheduled[r.request_data.model].append(r)
+            per_model_scheduled.setdefault(r.request_data.model, []).append(r)
 
         # Update running requests.
         self.running.extend(ready.requests)

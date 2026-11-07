@@ -15,3 +15,6 @@ class CPUModelRunner(ModelRunnerBase):
         # Snapshot the conditioning baseline so per-request Chatterbox state can
         # be restored after every execution (Phase 0-2).
         self._capture_baseline_state()
+        # Phase 9-3: register the Chatterbox English/Turbo AR decode arena under
+        # the scheduler's model name (no-op for every other model type).
+        self._init_ar_runner()

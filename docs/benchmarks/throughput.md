@@ -796,3 +796,232 @@ python scripts/bench_throughput.py --scenario whisper-budget-trip \
 
 See [`docs/batching.md`](../batching.md) for the execution-model classes, the
 per-model matrix and the Whisper lanes/windows contract.
+
+## Phase 9 — Chatterbox AR decode (AR-0 baseline)
+
+AR-0 (9-1) is the baseline block for Phase 9. Before any architectural change
+(the shared KV-cache pool in 9-2, the `ARBatchRunner` in 9-3), it removes two
+pieces of pure-loss work from the T3 decode loop — a per-step
+`output_attentions=True` request nobody reads on the English path and a
+per-token `tqdm` hook — and pins the numbers the later 9-x tasks are measured
+against. Behaviour is gated by a seeded bit-equality check on a tiny
+randomly-initialised T3 (`tests/unit/modeling/test_chatterbox_ar0.py`): cleaned
+vs upstream sample identical tokens for both `eager` and `sdpa` attention.
+
+### Method
+
+* **Change under test.** `harmonyspeech/modeling/models/chatterbox/t3_ar.py`
+  (`ChatterboxT3AR(T3)`) replaces the upstream inference path for the English
+  TTS role only: no attention tensors requested when no analyzer is attached,
+  no progress bar (debug opt-in: `HSE_CHATTERBOX_T3_PROGRESS=1`). Everything
+  else — prefill composition, CFG, sampler, EOS handling — is upstream's.
+* **Before / after.** `before` = the same run on the parent commit (upstream
+  `T3.inference`); `after` = this working tree. One boot each, same config.
+* **Host.** Benchmark host: RTX 5060 Ti 16 GiB (idle; `CUDA_VISIBLE_DEVICES=1`),
+  the same host as the Phase 5/7/8/10 runs. torch/driver versions are recorded
+  by the harness in the block header.
+* **Build.** Working tree implementing Phase 9-1 on top of commit `4081d97`.
+* **Engine config.** `config.gpu.yml` — the Chatterbox TTS entry with
+  `backbone_group: chatterbox-base` (the grouping the seam rides on) and
+  `max_batch_size: 1` (unchanged until 9-6 measures the AR runner). Reference:
+  `repo_voice_a` from `tests/audio_fixtures`.
+* **Load.** `--families chatterbox --concurrency 1,4 --requests 20`, 2 warmups,
+  one short text per request ("The quick brown fox jumps over the lazy dog near
+  the river bank.").
+* **Measurement status.** Deferred to the benchmark host — the local HF cache
+  holds no Chatterbox speech weights and downloading the multi-GB checkpoints is
+  out of scope here (same deferral as Phases 7-3, 8-6 and 10-5). Every cell below
+  is `_tbd_`.
+
+### Before / after — single request and c=4
+
+RTF is wall time ÷ output audio duration for the same request (derived from the
+harness's per-request trace; the table's `req/s`, p50 and p95 come straight from
+`scripts/bench_throughput.py`).
+
+| Cell | Before (upstream loop) | After (AR-0) | Δ |
+|---|---|---|---|
+| Single-request RTF (c=1) | _tbd_ | _tbd_ | _tbd_ |
+| Single-request wall time (ms, c=1) | _tbd_ | _tbd_ | _tbd_ |
+| Throughput c=1 (req/s) | _tbd_ | _tbd_ | _tbd_ |
+| Throughput c=4 (req/s) | _tbd_ | _tbd_ | _tbd_ |
+| p50 latency c=4 (ms) | _tbd_ | _tbd_ | _tbd_ |
+| p95 latency c=4 (ms) | _tbd_ | _tbd_ | _tbd_ |
+
+### What to expect
+
+* **Concurrency shape does not change.** The execution model is still `loop`
+  with `max_batch_size: 1`, so throughput stays flat from c=1 to c=4 and p50
+  grows with queueing, exactly as the Phase 5 table recorded. AR-0 is a
+  per-request cost/latency fix; the batching win is 9-3 + 9-6.
+* **Where the loss actually is.** The shipped English config uses
+  `attn_implementation="sdpa"`, and transformers 4.57 already ignores
+  `output_attentions=True` on that path (it returns `attentions=None` with a
+  per-step warning), so on the shipped TTS path the measurable loss removed is
+  the per-token `tqdm` hook and the warning, not an attention materialisation.
+  On `eager` (which HSE forces for multilingual, whose analyzer needs the
+  attention hooks) the flag really does materialise attention weights; the
+  bit-equality gate covers both.
+* **No behaviour change claimed beyond speed.** Token sequences are bit-identical
+  to upstream under a pinned seed (unit gate), so the audio path is unchanged by
+  construction.
+
+### Reproduce
+
+```bash
+# After: this tree, grouped TTS config
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path config.gpu.yml --port 2242 \
+    > out/bench/engine-ar0-after.log 2>&1
+python scripts/bench_throughput.py --families chatterbox --concurrency 1,4 \
+    --requests 20 --label phase9-ar0-after --engine-log out/bench/engine-ar0-after.log \
+    --md-out docs/benchmarks/throughput.md
+
+# Before: same boot and run on the parent commit (upstream T3.inference)
+git worktree add ../hse-ar0-before 4081d97
+# ... boot from that worktree with the same config, then:
+python scripts/bench_throughput.py --families chatterbox --concurrency 1,4 \
+    --requests 20 --label phase9-ar0-before --engine-log out/bench/engine-ar0-before.log \
+    --md-out docs/benchmarks/throughput.md
+
+# The debug progress bar (default off) is the only visible loop hook:
+HSE_CHATTERBOX_T3_PROGRESS=1 <same boot>
+```
+
+### Phase 9-6 — three-way comparison (sequential loop vs AR-0 vs AR runner)
+
+The phase's headline table: the same load through (a) the pre-Phase-9
+per-request loop (`batched_inference: false`, `max_batch_size: 1`), (b) AR-0
+(the cleaned loop from 9-1 — the "before" worktree above), and (c) the shipped
+AR runner (`max_batch_size: 4`, the shared KV pool). Both `chatterbox` (two CFG
+rows per request) and `chatterbox-turbo` (one row) are committed scope.
+
+| Family | Mode | c=4 req/s | c=8 req/s | c=20 req/s | c=8 p50 (ms) | c=8 p95 (ms) |
+|---|---|---|---|---|---|---|
+| `chatterbox` | sequential loop | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| `chatterbox` | AR-0 (cleaned loop) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| `chatterbox` | AR runner (4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| `chatterbox_turbo` | sequential loop | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| `chatterbox_turbo` | AR-0 (cleaned loop) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| `chatterbox_turbo` | AR runner (4) | _tbd_ | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+
+Reading guide (filled from the run): the sequential and AR-0 rows should stay
+flat with concurrency (one request per step), AR-0 below sequential by the
+removed loop overhead, and the AR runner should rise with c until the pool's
+slot count or the 4-request admission width binds. `chatterbox` carries two
+rows per request, so its arena binds at 4 requests (8 slots); Turbo's at 4 (4
+slots).
+
+### Cache composition (Phase 7 composition, 9-6 shape)
+
+`{same voice, distinct voice} × {embedding cache on, off}` at c=8. The cache
+toggle is a server flag (two boots, `--no-embedding-cache` for the off rows);
+`--embedding-cache on|off` verifies the server state against `/health`.
+
+| Voice mode | Cache | req/s | p50 (ms) | p95 (ms) | Cache hit ratio | Notes |
+|---|---|---|---|---|---|---|
+| same | on | _tbd_ | _tbd_ | _tbd_ | _tbd_ | warm cache, one embedding pass |
+| same | off | _tbd_ | _tbd_ | _tbd_ | — | re-embeds every request |
+| distinct | on | _tbd_ | _tbd_ | _tbd_ | _tbd_ | guaranteed misses (worst case) |
+| distinct | off | _tbd_ | _tbd_ | _tbd_ | — | cold-cache baseline |
+
+### Mixed-length rows
+
+The AR flood rotates `CHATTERBOX_TEXTS` (`--mixed-lengths`) so short and long
+rows leave a batch at different decode steps. The evidence is the
+`hse_ar_decode_*` trace, not a padded sub-batch log: `tokens_per_step` is the
+average active batch width, and it should fall as rows finish (a batch of 4
+short + 1 long row narrows to 1 before the long row stops).
+
+| Metric | Value |
+|---|---|
+| Max `hse_ar_decode_tokens_per_step` (batch width) | _tbd_ |
+| Min `tokens_per_step` before the last row finishes | _tbd_ |
+| Rows finishing before the longest row | _tbd_ |
+
+### Pool utilization during the run
+
+Sampled from `/metrics` every 0.5 s (`hse_ar_cache_*` + `hse_ar_decode_*`):
+
+| Metric | c=4 | c=8 | c=20 |
+|---|---|---|---|
+| Max `hse_ar_cache_slots_active` | _tbd_ | _tbd_ | _tbd_ |
+| Slot grants Δ | _tbd_ | _tbd_ | _tbd_ |
+| Refusals Δ (`hse_ar_cache_refusals_total`) | _tbd_ | _tbd_ | _tbd_ |
+| Max `hse_ar_decode_tokens_per_step` | _tbd_ | _tbd_ | _tbd_ |
+| `hse_vram_device_used_bytes` peak | _tbd_ | _tbd_ | _tbd_ |
+
+### Exhaustion trace — 100 distinct-voice requests, ~8-slot pool
+
+The owner's headline exhaustion scenario, run on the host with the pool budget
+set to ~8 slabs (the startup arena table prints the slab size). Expected: pool
+refusals rise, refused requests take the sequential fallback, every request is
+answered exactly once (loss 0), no output is paired with another voice (pairing
+errors 0), and deadlines are still enforced under the load. The local CPU proof
+is `tests/integration/test_chatterbox_exhaustion.py` (5 cases, green).
+
+| Metric | Value |
+|---|---|
+| Requests submitted / answered (loss) | 100 / _tbd_ (**0**) |
+| Completed / failed | _tbd_ / _tbd_ |
+| Pairing errors | **0** |
+| Deadline/timeout errors | _tbd_ |
+| `hse_ar_cache_refusals_total` Δ | _tbd_ |
+| Max `hse_ar_cache_slots_active` | _tbd_ |
+| Max `hse_ar_decode_tokens_per_step` | _tbd_ |
+| Wall / throughput / p95 | _tbd_ |
+
+### Reproduce (Phase 9-6)
+
+```bash
+# Print every boot and command for this section
+python scripts/bench_throughput.py --print-ar-scenarios
+
+# Boot A - shipped AR runner (width 4, ar_inference 1 GiB / 768)
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path config.gpu.yml --port 2242 \
+    > out/bench/engine-ar.log 2>&1
+
+# Three-way (runner row): both families at c=4,8,20, mixed-length texts
+python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \
+    --concurrency 4,8,20 --requests 20 --mixed-lengths \
+    --label phase9-chatterbox-ar-runner --engine-log out/bench/engine-ar.log \
+    --md-out docs/benchmarks/throughput.md
+python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox_turbo \
+    --concurrency 4,8,20 --requests 20 --mixed-lengths \
+    --label phase9-chatterbox-turbo-ar-runner --engine-log out/bench/engine-ar.log \
+    --md-out docs/benchmarks/throughput.md
+
+# Boot B - sequential loop (batched_inference: false, max_batch_size 1), then
+# the same two runs with --label phase9-*-sequential.
+# AR-0: the same boots on the parent commit (see the AR-0 block above).
+
+# Cache composition (two boots: default, then --no-embedding-cache)
+python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \
+    --concurrency 8 --requests 20 --clone-reference same --embedding-cache on \
+    --label phase9-cache-same-on --engine-log out/bench/engine-ar.log \
+    --md-out docs/benchmarks/throughput.md
+python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \
+    --concurrency 8 --requests 20 --clone-reference distinct --embedding-cache on \
+    --label phase9-cache-distinct-on --engine-log out/bench/engine-ar.log \
+    --md-out docs/benchmarks/throughput.md
+
+# Exhaustion: 100 distinct-voice requests against a pool sized for ~8 slots
+# (boot with ar_inference.kv_cache_budget_bytes = 8 x slab)
+python scripts/bench_throughput.py --scenario chatterbox-exhaustion \
+    --clone-reference distinct --chatterbox-flood-requests 100 \
+    --chatterbox-flood-concurrency 100 --chatterbox-pool-slots 8 \
+    --label phase9-exhaustion --engine-log out/bench/engine-ar.log \
+    --md-out docs/benchmarks/throughput.md
+
+# Real-model seeded parity gate (AR B=1 vs batched token equality)
+set HSE_CHATTERBOX_PARITY_MODEL=C:\models\chatterbox
+set HSE_CHATTERBOX_TURBO_PARITY_MODEL=C:\models\chatterbox-turbo
+pytest tests/e2e/tts/test_chatterbox_ar_parity.py -m e2e -q
+
+# GPU family gate (distributional batching:1-vs-4 for the AR runner)
+python scripts/audio_regression.py --families chatterbox,chatterbox_turbo \
+    --axis batching:1-vs-4 --gpu
+```

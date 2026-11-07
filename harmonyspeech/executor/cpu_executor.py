@@ -28,6 +28,7 @@ class CPUExecutor(ExecutorBase):
             is_driver_worker=True,
             weight_registry=self.weight_registry,
             embedding_cache=self.embedding_cache,
+            ar_cache_pool=self.ar_cache_pool,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()

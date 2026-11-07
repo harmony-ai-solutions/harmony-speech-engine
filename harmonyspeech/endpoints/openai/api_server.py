@@ -112,11 +112,16 @@ async def lifespan(app: fastapi.FastAPI):
 
 
 # Prometheus metrics: the default registry's series plus the engine's VRAM,
-# embedding-cache and Whisper-lane gauges/counters (Phase 4-5, 7-3, 10-1).
-# Rendered by hand so a scrape never needs a running GPU — or even a live cache
-# — to return a well-formed body with every series present.
-@router.get("/metrics", description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes).")
+# embedding-cache, Whisper-lane and AR-cache gauges/counters (Phase 4-5, 7-3,
+# 10-1, 9-2). Rendered by hand so a scrape never needs a running GPU — or even a
+# live cache — to return a well-formed body with every series present.
+@router.get(
+    "/metrics",
+    description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode).",
+)
 async def metrics() -> Response:
+    from harmonyspeech.engine.ar_cache_metrics import render_ar_cache_metrics
+    from harmonyspeech.engine.ar_decode_metrics import render_ar_decode_metrics
     from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
     from harmonyspeech.engine.vram_metrics import render_vram_metrics
     from harmonyspeech.engine.whisper_lane_metrics import render_whisper_lane_metrics
@@ -146,9 +151,24 @@ async def metrics() -> Response:
             logger.warning(f"Failed to read Whisper lane stats: {exc}")
             lane_stats = None
         body += render_whisper_lane_metrics(lane_stats)
+        try:
+            ar_stats = engine_ref.get_ar_cache_stats()
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to read AR cache stats: {exc}")
+            ar_stats = None
+        # Disabled/unavailable pool still renders every series (as zeros).
+        body += render_ar_cache_metrics(ar_stats)
+        try:
+            decode_stats = engine_ref.get_ar_decode_stats()
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to read AR decode stats: {exc}")
+            decode_stats = None
+        body += render_ar_decode_metrics(decode_stats)
     else:
         body += render_embedding_cache_metrics(None)
         body += render_whisper_lane_metrics(None)
+        body += render_ar_cache_metrics(None)
+        body += render_ar_decode_metrics(None)
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
@@ -174,6 +194,12 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("embedding_cache") is not None:
             # Phase 7-3: cross-request embedding cache accounting.
             health_status["embedding_cache"] = result["embedding_cache"]
+        if isinstance(result, dict) and result.get("ar_cache") is not None:
+            # Phase 9-2: shared AR KV-cache pool accounting.
+            health_status["ar_cache"] = result["ar_cache"]
+        if isinstance(result, dict) and result.get("ar_decode") is not None:
+            # Phase 9-4: per-AR-model decode progress (active rows, tokens/step).
+            health_status["ar_decode"] = result["ar_decode"]
         if isinstance(result, dict) and not result.get("healthy", True):
             health_status["text_to_speech"] = f"unhealthy: {result}"
             status_code = http.HTTPStatus.INTERNAL_SERVER_ERROR

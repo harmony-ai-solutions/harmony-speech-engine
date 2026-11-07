@@ -6,6 +6,50 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 9-6 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `9-6-ARGatesBenchmarksExit.md`
+
+- ✅ **Exhaustion proof (local CPU)** — `tests/integration/test_chatterbox_exhaustion.py` drives the real engine loop, scheduler, capacity admission, KV pool and handlers with a tiny T3: 100 distinct-voice requests against an 8-slot pool (zero loss, zero pairing errors, refusals → sequential fallback, slots never over-committed), deadline-under-exhaustion, waiting+in-flight abort storm, combined pool-full + cold embedding cache + 20 concurrent (real `EmbeddingCache` misses, rising `hse_ar_cache_refusals_total`, sane `hse_ar_decode_*`), and fewer-slots-than-requests degradation (more engine steps, no loss/crash).
+- ✅ **Benchmarks** — `scripts/bench_throughput.py` gained `--scenario chatterbox-ar` (three-way sequential / AR-0 / AR runner at c={4,8,20} for `chatterbox` + `chatterbox_turbo`, same/distinct voice × cache on/off, `--mixed-lengths`, `/metrics` AR-pool sampling) and `--scenario chatterbox-exhaustion` (100-request ~8-slot trace), plus `--print-ar-scenarios`; `chatterbox_turbo` family added. Unit tests in `tests/unit/benchmarks/test_bench_ar_scenarios.py`.
+- ✅ **Config honesty** — English/Turbo moved into the `ar_decode` class (five-class table) with an initial admission width of **4**, justified from the 1 GiB arena table (8 English slabs × 90 MiB + 4 Turbo × 72 MiB = 1008 MiB); `ar_inference` blocks added to both configs; the per-class validator asserts admission depth, the flag and the pool knobs. Dated decision: width is a capacity decision pending the host `batching:1-vs-N` gate; `batched_inference: false`/width 1 is the rollback.
+- ✅ **Gates** — `scripts/audio_regression.py` allow-list + `batching_cases` for both AR families (distributional audio gate, `BATCHING_AXIS_STOCHASTIC`); new `tests/e2e/tts/test_chatterbox_ar_parity.py` gates per-row seeded token equality alone-vs-batched on real weights (env-gated, `_tbd_` host).
+- ✅ **Docs/knowledge** — `docs/batching.md` matrix final; `docs/benchmarks/throughput.md` §Phase 9-6 (three-way, cache composition, mixed lengths, pool utilization, exhaustion; all cells `_tbd_`); `vram-profiles.md` arena table + `_tbd_` measured cells; CONCERNS retired the "Chatterbox per-request loop" notes and recorded the Turbo `T3Config` fix + meanflow hop skip; CHANGELOG + README.
+
+**Verification**: unit 1101 / integration 78 / wire-contract e2e 50 passed + 3 model-gated skips green; the 4 pre-existing weights-gated `tests/e2e/tts/test_harmonyspeech.py` errors are unchanged. No commits (per task constraints).
+
+**Next**: the benchmark-host session fills the `_tbd_` cells (three-way throughput, cache composition, pool VRAM, exhaustion trace) and runs the real-model `batching:1-vs-N`/parity gates.
+
+## Engine Modernization — Phase 9-2 (COMPLETE, 2026-11-07; consumer lands in 9-3)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `9-2-ARCacheFramework.md`
+
+- ✅ **Pool + descriptor + allocator** — `harmonyspeech/engine/ar_cache.py`: static `[L, 2, B, cap, H, D]` arena per family, zero-copy per-layer `[B, cap, H, D]` views, FIFO free list, `acquire` returns `None` on exhaustion (never allocates), double/foreign release rejected, CPU fallback, `ARCacheBudgetError` for a slab/slot count that cannot fit the remaining budget (`slots=None` fills it).
+- ✅ **Config/CLI + boot validation + arena table** — `ar_inference.{kv_cache_budget_bytes (1 GiB owner-approved), default_cap_tokens (768), enabled}`; `--ar-cache-budget-bytes` / `--no-ar-cache`; engine owns the pool and threads it executor → worker → runner; startup table logs family/slots/cap/slab/arena/dtype.
+- ✅ **Observability** — `hse_ar_cache_{enabled,pool_bytes,allocated_bytes,slots,slots_active,slots_free,grants_total,refusals_total}` on `/metrics`, `ar_cache` block on `/health` and inside the `vram` summary; `get_ar_cache_capacity()` exposes per-family `active_rows` for 9-4.
+- ✅ **Isolation invariant + poisoned-slot test** — documented write-before-read/masked-to-length contract; NaN-pre-filled reused slot decodes bit-identically over the written prefix under real SDPA.
+- ✅ **Docs** — `docs/ar-cache.md`, README, CHANGELOG, task file deviations.
+
+**Verification**: `tests/unit` 1053 passed (59 new in `tests/unit/engine/test_ar_cache.py`, CUDA tests included), `tests/unit/initialization/test_engine.py` exact-call assertions updated for the new `ar_cache_pool` kwarg. No commits (per task constraints).
+
+**Deviations**: metrics renderer split into `ar_cache_metrics.py` (Phase 7-3/10-1 precedent); extra `hse_ar_cache_enabled` series; optional descriptor `cap_tokens`/`slots`; `AsyncHarmonySpeech.get_ar_cache_stats()` proxy added; shipped configs unchanged (embedding-cache precedent); config-honesty Chatterbox entries stay `loop` until 9-6.
+
+**Next**: 9-3 registers the first Chatterbox T3 arena and acquires one slot per in-flight request.
+
+## Engine Modernization — Phase 9-5 (COMPLETE, 2026-11-07; real-model gates pending)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `9-5-S3GenPaddedBatch.md`
+
+- ✅ **Padding audit (recorded in the task file)** — re-verified in installed `chatterbox-tts==0.1.6`: `UpsampleConformerEncoder` leaks **0.4075 peak** (embed bias + causal lookahead read padding); `ConditionalDecoder`/CFM is padding-safe by construction but its mask is built over `max(valid)` not the padded width (`flow.py:182-185`); `HiFTGenerator` leaks **0.44 peak** (f0 convs, transposed ups, source branch, resblocks; STFT/ISTFT reflect at the batch end); four RNG draws are global.
+- ✅ **`inference_batched`** — HSE-side `harmonyspeech/modeling/models/chatterbox/s3gen_batch.py` (installed package untouched): corrected mask, per-stage masks on the encoder and the whole HiFT graph, per-row `torch.Generator` for the CFM start / `SineGen` phase+noise / source noise, per-row STFT/ISTFT, sample-domain trim. `B=1` bit-identical to upstream; mixed rows ≤2.1e-7; a row is identical alone or batched; poisoned padding exact.
+- ✅ **Handlers** — `_execute_chatterbox_tts_ar` collects finished rows per step, `plan_batches` on the speech-token axis (`batch_token_budget` reused), one forward per sub-batch; `len==1`/`batched_inference: false`/unsupported graph/batch failure → seeded per-row fallback (audio-identical); poisoned row errors alone. VC's vocode hop uses the same graph when >1 request is admitted (dormant at the shipped `max_batch_size: 1`; family stays `loop`-class). `ARRow` gained the resolved `seed`.
+- ✅ **Turbo meanflow vocode hop is the documented skip** — `flow_inference` hard-codes `randn(1,80,…)` (`s3gen.py:313-316`) and the `noised_mels` placement uses one `prompt_len` (`flow_matching.py:218-220`); Turbo AR decode remains 9-3's committed scope. Recorded in `docs/batching.md`.
+- ✅ **Docs** — `docs/batching.md` matrix + Phase 9-5 section; README bullet; CHANGELOG.
+
+**Verification**: `tests/unit` 1092 passed (24 new: 9 in `tests/unit/modeling/test_chatterbox_s3gen_batch.py`, 4 in `tests/unit/inference_flow/test_chatterbox_ar_handler.py`, 3 in `tests/unit/inference_flow/test_chatterbox_vc_batch.py`, plus the seed-field coverage), `tests/integration` 73 passed. No commits (per task constraints).
+
+**Next**: 9-6 runs the real-model `batching:1-vs-N` gate + throughput table on the benchmark host.
+
 ## Engine Modernization — Phase 10 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
 
 **Plan folder**: `.current_work/engine-modernization/`; task: `10-5-WhisperGatesBenchmarksExit.md`

@@ -36,7 +36,11 @@ from harmonyspeech.processing.pipeline_registry import (
     validate_families,
     validate_registry,
 )
-from harmonyspeech.processing.scheduler import Scheduler, SchedulerOutputs
+from harmonyspeech.processing.scheduler import (
+    AR_INFERENCE_MODEL_TYPES,
+    Scheduler,
+    SchedulerOutputs,
+)
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
 
@@ -59,6 +63,9 @@ class HarmonySpeechEngine:
         embedding_cache_max_bytes: int = 1073741824,
         whisper_vram_budget_bytes: int | None = None,
         whisper_max_audio_seconds: float = 300.0,
+        ar_cache_enabled: bool = True,
+        ar_cache_budget_bytes: int = 1073741824,
+        ar_cache_default_cap_tokens: int = 768,
     ):
         self.model_configs = model_configs
         self.log_stats = log_stats
@@ -102,6 +109,24 @@ class HarmonySpeechEngine:
             else None
         )
 
+        # One device-wide AR KV-cache pool per engine (Phase 9-2), threaded to
+        # the runners exactly like the weight registry and the embedding cache.
+        # `--no-ar-cache` leaves it None: consumers then take their sequential
+        # fallback and /metrics keeps every series present as zeros.
+        from harmonyspeech.engine.ar_cache import ARCachePool
+
+        self.ar_cache_enabled = bool(ar_cache_enabled)
+        self.ar_cache_budget_bytes = ar_cache_budget_bytes
+        self.ar_cache_default_cap_tokens = ar_cache_default_cap_tokens
+        self.ar_cache_pool = (
+            ARCachePool(
+                budget_bytes=ar_cache_budget_bytes,
+                default_cap_tokens=ar_cache_default_cap_tokens,
+            )
+            if self.ar_cache_enabled
+            else None
+        )
+
         logger.info(
             f"Initializing Harmony Speech Engine (v{harmonyspeech.__version__}) with the following config:\nPreloaded Models = \n"
             # TODO
@@ -119,15 +144,29 @@ class HarmonySpeechEngine:
         self.model_executors = {}
         self.init_custom_executors()
 
+        # Phase 9-2: log the AR cache arena table once the executors (and their
+        # runners) had the chance to register arenas during model load, the same
+        # way the weight registry reports its shared components at boot.
+        self._log_ar_cache_arena_table()
+
         # Startup validation: which declared toolchains are complete?
         self.available_families: list[str] = self._validate_family_configuration()
+
+        # Per-AR-model decode progress accounting (Phase 9-4): cumulative
+        # tokens/steps plus the last token count seen per in-flight request, so
+        # `get_ar_decode_stats()` can report a real tokens/step figure without
+        # the scheduler having to know about metrics.
+        self._ar_progress: dict[str, dict] = {}
 
         # Initialize Scheduler for requests across models. Phase 10-1: the
         # Whisper lanes consult the Phase 10-3 memory governor at admission, so
         # lane credit × capacity × measured VRAM compose into one width.
+        # Phase 9-4: AR admission consults the 9-2 pool's per-family capacity
+        # (free slots) the same injected-callable way.
         self.scheduler = Scheduler(
             model_configs=self.model_configs,
             whisper_admission=self.get_whisper_admission,
+            ar_admission=self.get_ar_cache_capacity,
         )
 
         # Whisper VRAM governance (Phase 10-3): compare the measured/projected
@@ -205,6 +244,7 @@ class HarmonySpeechEngine:
                 model_config=model_cfg,
                 weight_registry=self.weight_registry,
                 embedding_cache=self.embedding_cache,
+                ar_cache_pool=getattr(self, "ar_cache_pool", None),
             )
             # Append the created executor to the dict of model executors
             self.model_executors[model_cfg.name] = executor
@@ -338,6 +378,98 @@ class HarmonySpeechEngine:
                     return request
         return None
 
+    # ------------------------------------------------------------------
+    # Multi-step decode plumbing (Phase 9-4)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_unfinished_result(result: ExecutorResult) -> bool:
+        """True when an executor result is a partial decode result.
+
+        Keyed on the explicit ``unfinished`` marker, not a null finish reason:
+        an error result also carries ``finish_reason`` and must go through the
+        normal terminal path.
+        """
+        data = getattr(result, "result_data", None)
+        return bool(getattr(data, "unfinished", False)) and getattr(data, "finish_reason", None) is None
+
+    def _ar_progress_state(self) -> dict:
+        """Return the per-model decode-progress accumulator (created lazily)."""
+        state = getattr(self, "_ar_progress", None)
+        if state is None:
+            state = {}
+            self._ar_progress = state
+        return state
+
+    def _record_unfinished_progress(self, result: ExecutorResult) -> None:
+        """Record a partial decode result and keep the request RUNNING.
+
+        The client never sees this result: no ``RequestOutput`` is returned and
+        the scheduler status stays RUNNING, so the request is scheduled again
+        next step. Progress is request-scoped and cleared on the terminal
+        transition (Phase 9-4).
+        """
+        progress = dict(getattr(result.result_data, "progress", None) or {})
+        request = self._find_engine_request(result.request_id)
+        if request is not None:
+            request.set_progress(progress)
+        model_name = getattr(getattr(result, "input_data", None), "model", None)
+        self._note_ar_progress(model_name, result.request_id, progress)
+
+    def _note_ar_progress(self, model_name, request_id: str, progress: dict) -> None:
+        """Accumulate the token delta from one partial/final result."""
+        if not model_name:
+            return
+        state = self._ar_progress_state().setdefault(
+            model_name, {"tokens_total": 0, "steps_total": 0, "last_tokens": {}}
+        )
+        try:
+            tokens = int(progress.get("tokens") or 0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive on odd progress
+            tokens = 0
+        last = int(state["last_tokens"].get(request_id, 0) or 0)
+        if tokens > last:
+            state["tokens_total"] += tokens - last
+            state["last_tokens"][request_id] = tokens
+
+    def _count_ar_step(self, model_name) -> None:
+        """Count one engine step in which an AR model advanced at least one row."""
+        if not model_name:
+            return
+        state = self._ar_progress_state().setdefault(
+            model_name, {"tokens_total": 0, "steps_total": 0, "last_tokens": {}}
+        )
+        state["steps_total"] += 1
+
+    def _forget_ar_progress(self, request_id: str) -> None:
+        """Drop the per-request token watermark once a request is terminal."""
+        for entry in self._ar_progress_state().values():
+            entry.get("last_tokens", {}).pop(request_id, None)
+
+    def _release_request_resources(self, request_ids) -> None:
+        """Tell executors a request will never be scheduled again.
+
+        Duck-typed hook (``release_request(request_id)``): the AR runner (9-3)
+        uses it to drop a decode row and release its 9-2 ``ARCacheSlot`` when a
+        client disconnects or a deadline expires mid-decode. Executors without
+        the hook are unaffected, and a hook failure is logged rather than
+        allowed to break the engine loop — aborting one request must never
+        affect the others.
+        """
+        ids = [request_ids] if isinstance(request_ids, str) else list(request_ids)
+        if not ids:
+            return
+        for executor in getattr(self, "model_executors", {}).values():
+            hook = getattr(executor, "release_request", None)
+            if not callable(hook):
+                continue
+            for request_id in ids:
+                try:
+                    hook(request_id)
+                except Exception as error:  # noqa: BLE001 - cleanup must not break the loop
+                    logger.warning(f"Failed to release resources for request {request_id}: {error}")
+        for request_id in ids:
+            self._forget_ar_progress(request_id)
+
     def _finalize_pipeline_output(self, result: ExecutorResult, input_data: RequestInput) -> None:
         """Map the final step's output onto the endpoint's response type.
 
@@ -465,6 +597,10 @@ class HarmonySpeechEngine:
                 logger.error(f"Request {request.request_id} timed out: {message}")
                 request.metrics.finished_time = time.time()
                 self.scheduler.update_request_status(request.request_id, RequestStatus.FINISHED_ABORTED)
+                # Phase 9-4: an unfinished AR row may still hold a pool slot and
+                # decoder row. The executor will not see this request again, so
+                # release its resources here (the loop itself stays alive).
+                self._release_request_resources([request.request_id])
                 expired.append(
                     RequestOutput(
                         request_id=request.request_id,
@@ -566,7 +702,11 @@ class HarmonySpeechEngine:
             >>> # abort the request
             >>> engine.abort_request(request_id)
         """
-        self.scheduler.update_request_status(request_id, RequestStatus.FINISHED_ABORTED)
+        request_ids = [request_id] if isinstance(request_id, str) else list(request_id)
+        self.scheduler.update_request_status(request_ids, RequestStatus.FINISHED_ABORTED)
+        # Phase 9-4: a client disconnect/abort mid-decode must free the AR row
+        # and its 9-2 cache slot immediately; only that request is affected.
+        self._release_request_resources(request_ids)
 
     def get_model_configs(self) -> list[ModelConfig]:
         """Gets the model configuration."""
@@ -593,7 +733,25 @@ class HarmonySpeechEngine:
         # scheduled; resolve them first so the caller sees them immediately.
         request_outputs: list[RequestOutput] = self._drain_pending_errors()
         forwarded_requests: list[RequestInput] = []
+        advanced_models: set[str] = set()
         for result in outputs:
+            # Phase 9-4: a partial decode result keeps the request RUNNING for
+            # the next step and is never handed to the client.
+            if self._is_unfinished_result(result):
+                self._record_unfinished_progress(result)
+                model_name = getattr(getattr(result, "input_data", None), "model", None)
+                if model_name:
+                    advanced_models.add(model_name)
+                continue
+            # A terminal result may optionally carry the final progress payload
+            # (the runner knows the last token count); count it before the
+            # request state is cleared.
+            final_progress = getattr(result.result_data, "progress", None)
+            if final_progress:
+                model_name = getattr(getattr(result, "input_data", None), "model", None)
+                self._note_ar_progress(model_name, result.request_id, dict(final_progress))
+                if model_name:
+                    advanced_models.add(model_name)
             # Check for Re-Schedule conditions
             new_status, forwarding_request = self.check_forward_processing(result)
             if new_status == RequestStatus.FINISHED_STOPPED:
@@ -601,6 +759,12 @@ class HarmonySpeechEngine:
                 request_outputs.append(result.result_data)
             if forwarding_request is not None:
                 forwarded_requests.append(forwarding_request)
+            self._forget_ar_progress(result.request_id)
+
+        # One engine step per model that advanced at least one AR row, so
+        # tokens/steps approximates the decode batch width (Phase 9-4 metrics).
+        for model_name in advanced_models:
+            self._count_ar_step(model_name)
 
         for request in ignored_requests:
             # Mark as Finished / Ignored
@@ -732,11 +896,13 @@ class HarmonySpeechEngine:
 
         Returns ``{"healthy": bool, "models": {<executor name>: {"healthy": bool,
         "model_type": str, "vram_bytes": int, "error": str | None}},
-        "vram": {...}, "whisper_vram": {...} | None, "embedding_cache": {...}}``.
+        "vram": {...}, "whisper_vram": {...} | None, "embedding_cache": {...},
+        "ar_cache": {...}}``.
         ``vram`` is the Phase 4-5/10-3 summary (see :meth:`get_vram_stats`);
         ``whisper_vram`` is the Phase 10-3 boot governance report;
         ``embedding_cache`` is the Phase 7-3 cache accounting (see
-        :meth:`get_embedding_cache_stats`).
+        :meth:`get_embedding_cache_stats`); ``ar_cache`` is the Phase 9-2 pool
+        accounting (see :meth:`get_ar_cache_stats`).
         """
         vram = self.get_vram_stats()
         models: dict[str, dict] = {}
@@ -769,6 +935,11 @@ class HarmonySpeechEngine:
             "vram": vram,
             "whisper_vram": self.get_whisper_vram_report(),
             "embedding_cache": self.get_embedding_cache_stats(),
+            "ar_cache": self.get_ar_cache_stats(),
+            # Phase 9-4: per-AR-model decode progress (active rows, slot
+            # occupancy, tokens/step). Present with zeros when no AR model is
+            # configured, so the shape never changes.
+            "ar_decode": self.get_ar_decode_stats(),
         }
 
     # ------------------------------------------------------------------
@@ -805,6 +976,142 @@ class HarmonySpeechEngine:
         stats["max_bytes"] = getattr(cache, "max_bytes", None)
         stats["hit_ratio"] = embedding_cache_hit_ratio(stats)
         return stats
+
+    # ------------------------------------------------------------------
+    # Shared AR KV-cache pool accounting (Phase 9-2)
+    # ------------------------------------------------------------------
+    def _log_ar_cache_arena_table(self) -> None:
+        """Log the registered arena table (family, slots, bytes) at startup.
+
+        Runs after the executors load, so any arena a runner registered during
+        ``load_model`` is included. With no consumer yet (9-3) the table is
+        empty and the log states that explicitly — silence would be ambiguous.
+        """
+        pool = getattr(self, "ar_cache_pool", None)
+        if pool is None:
+            logger.info("AR KV-cache pool disabled (--no-ar-cache / ar_inference.enabled: false).")
+            return
+        rows = pool.arena_table()
+        logger.info(
+            f"AR KV-cache pool: budget {pool.budget_bytes / 2**20:.1f} MiB, device {pool.device}, "
+            f"default cap {pool.default_cap_tokens} tokens, {len(rows)} arena(s), "
+            f"{pool.pool_bytes / 2**20:.1f} MiB resident."
+        )
+        if not rows:
+            logger.info("AR KV-cache arena table: empty (no AR family registered an arena at load).")
+            return
+        logger.info(f"{'family':<34} {'slots':>7} {'cap':>7} {'slab MiB':>10} {'arena MiB':>10} {'dtype':>8}")
+        for row in rows:
+            logger.info(
+                f"{row['model_key']:<34} {row['slots']:>7} {row['cap_tokens']:>7} "
+                f"{row['slab_bytes'] / 2**20:>10.1f} {row['arena_bytes'] / 2**20:>10.1f} "
+                f"{row['dtype']:>8}"
+            )
+
+    def get_ar_cache_stats(self) -> dict:
+        """Return the AR KV-cache pool accounting used by ``/health`` + ``/metrics``.
+
+        ``enabled`` is ``False`` and every value ``0`` when the pool is disabled
+        at boot, so the exporter can keep every Prometheus series present.
+        Robust on a shell engine (``__new__`` without ``__init__``) and on
+        deployments that never constructed a pool.
+        """
+        pool = getattr(self, "ar_cache_pool", None)
+        if pool is None:
+            return {
+                "enabled": False,
+                "budget_bytes": getattr(self, "ar_cache_budget_bytes", None),
+                "default_cap_tokens": getattr(self, "ar_cache_default_cap_tokens", None),
+                "device": None,
+                "pool_bytes": 0,
+                "allocated_bytes": 0,
+                "slots": 0,
+                "slots_active": 0,
+                "slots_free": 0,
+                "active_rows": 0,
+                "grants_total": 0,
+                "refusals_total": 0,
+                "releases_total": 0,
+                "arenas": {},
+            }
+        stats = dict(pool.stats())
+        stats["enabled"] = True
+        return stats
+
+    def get_ar_cache_capacity(self, model_key: str | None = None) -> dict:
+        """Capacity-based admission input for Phase 9-4 (slots, not batch width).
+
+        Returns the pool's per-family capacity row (or the aggregate with
+        ``arenas`` when ``model_key`` is omitted). A disabled/absent pool reports
+        zeros with ``enabled: False`` so a caller can always branch on the flag.
+        """
+        pool = getattr(self, "ar_cache_pool", None)
+        if pool is None:
+            return {
+                "enabled": False,
+                "slots": 0,
+                "slots_active": 0,
+                "slots_free": 0,
+                "active_rows": 0,
+                "pool_bytes": 0,
+                "allocated_bytes": 0,
+                "arenas": {},
+            }
+        return pool.capacity(model_key)
+
+    def get_ar_decode_stats(self) -> dict:
+        """Per-AR-model decode progress (Phase 9-4).
+
+        ``active_rows`` and slot occupancy come from the 9-2 pool's capacity
+        (per model/arena; the scheduler's running-row count is the fallback when
+        no arena is registered yet); ``tokens_total`` / ``steps_total`` are
+        cumulative counters fed by every partial executor result, and
+        ``tokens_per_step`` is their ratio. Exposed on ``/health`` (``ar_decode``)
+        and rendered on ``/metrics``. With no AR model configured the payload is
+        ``{"enabled": False, "models": {}}`` so the shape never changes.
+        """
+        running_rows: dict[str, int] = {}
+        scheduler = getattr(self, "scheduler", None)
+        for request in getattr(scheduler, "running", None) or []:
+            model_name = getattr(getattr(request, "request_data", None), "model", None)
+            if model_name is not None:
+                running_rows[model_name] = running_rows.get(model_name, 0) + 1
+
+        progress_state = getattr(self, "_ar_progress", None) or {}
+        models: dict[str, dict] = {}
+        for config in getattr(self, "model_configs", None) or []:
+            if getattr(config, "model_type", None) not in AR_INFERENCE_MODEL_TYPES:
+                continue
+            name = config.name
+            try:
+                capacity = self.get_ar_cache_capacity(name) or {}
+            except KeyError:
+                # No arena registered for this family yet (9-3).
+                capacity = {}
+            if capacity.get("enabled"):
+                active_rows = int(capacity.get("active_rows", 0) or 0)
+                slots = int(capacity.get("slots", 0) or 0)
+                slots_active = int(capacity.get("slots_active", 0) or 0)
+                slots_free = int(capacity.get("slots_free", 0) or 0)
+            else:
+                # Boolean/sequential fallback: rows are still real, slots are not.
+                active_rows = running_rows.get(name, 0)
+                slots = slots_active = slots_free = 0
+            entry = progress_state.get(name) or {}
+            tokens_total = int(entry.get("tokens_total", 0) or 0)
+            steps_total = int(entry.get("steps_total", 0) or 0)
+            models[name] = {
+                "model_type": getattr(config, "model_type", None),
+                "pool_enabled": bool(capacity.get("enabled")),
+                "active_rows": active_rows,
+                "slots": slots,
+                "slots_active": slots_active,
+                "slots_free": slots_free,
+                "tokens_total": tokens_total,
+                "steps_total": steps_total,
+                "tokens_per_step": (tokens_total / steps_total) if steps_total else 0.0,
+            }
+        return {"enabled": bool(models), "models": models}
 
     # ------------------------------------------------------------------
     # VRAM accounting (Phase 4-5) and device-level truth (Phase 10-3)
@@ -977,6 +1284,11 @@ class HarmonySpeechEngine:
             "dedup_saved_bytes": dedup_saved,
             "whisper_budget_bytes": getattr(self, "whisper_vram_budget_bytes", None),
             "whisper_governance": getattr(self, "whisper_vram_report", None),
+            # Phase 9-2: the AR pool's slabs are ordinary torch allocations, so
+            # they are already inside `allocated_bytes` / `device_used_bytes`
+            # above. Report them once here (device-wide pool, not attributable
+            # to a single model) so the footprint is explicit, never hidden.
+            "ar_cache": self.get_ar_cache_stats(),
         }
 
     # ------------------------------------------------------------------

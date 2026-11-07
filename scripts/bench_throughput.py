@@ -169,6 +169,15 @@ FAMILY_SPECS: dict[str, dict] = {
             "input": "The quick brown fox jumps over the lazy dog near the river bank.",
         },
     },
+    "chatterbox_turbo": {
+        "path": "/v1/audio/speech",
+        "kind": "tts",
+        "model": "chatterbox_turbo",
+        "payload": {
+            "mode": "single_speaker_tts",
+            "input": "The quick brown fox jumps over the lazy dog near the river bank.",
+        },
+    },
     "whisper": {
         "path": "/v1/audio/transcriptions",
         "kind": "stt",
@@ -188,6 +197,8 @@ class LevelResult:
     #: Per-step sub-batch composition parsed from the engine DEBUG log for this
     #: level (Phase 8-6). Empty when no ``--engine-log`` was given.
     steps: dict[str, dict] = field(default_factory=dict)
+    #: ``/metrics`` AR pool + decode samples taken during this level (Phase 9-6).
+    ar_trace: list[dict] = field(default_factory=list)
 
     @property
     def throughput(self) -> float:
@@ -211,6 +222,7 @@ class LevelResult:
             "p95_ms": round(self.percentile(0.95) * 1000, 1),
             "mean_ms": round(statistics.fmean(self.latencies_s) * 1000, 1) if self.latencies_s else 0.0,
             "steps": self.steps,
+            "ar_trace": self.ar_trace,
         }
 
 
@@ -880,6 +892,462 @@ def whisper_scenario_matrix(
 
 
 
+# ---------------------------------------------------------------------------
+# Phase 9-6 — Chatterbox AR decode scenarios (three-way + exhaustion)
+# ---------------------------------------------------------------------------
+
+#: Mixed text lengths for the AR flood. Long and short rows decode for different
+#: numbers of tokens, so rows drop out of a batch at different steps (the
+#: "mixed-length rows" sanity check the owner asked for).
+CHATTERBOX_TEXTS: tuple[str, ...] = (
+    "Hi.",
+    "The quick brown fox jumps over the lazy dog.",
+    "Yes.",
+    "This is a deliberately longer sentence so that the autoregressive decoder emits a different number of speech tokens than the short rows around it.",
+    "Okay, thanks.",
+)
+
+#: Owner-approved tight-pool exhaustion shape (2026-11-07): 100 distinct-voice
+#: requests against a pool sized for ~8 slots. The pool budget is set on the
+#: engine boot (`ar_inference.kv_cache_budget_bytes`); the script records it.
+CHATTERBOX_FLOOD_REQUESTS = 100
+CHATTERBOX_FLOOD_POOL_SLOTS = 8
+
+_AR_CACHE_RE = re.compile(
+    r"^hse_ar_cache_(enabled|pool_bytes|allocated_bytes|slots|slots_active|slots_free|grants_total|refusals_total)\s+"
+    r"([0-9.eE+-]+)\s*$"
+)
+_AR_DECODE_RE = re.compile(
+    r"^hse_ar_decode_(active_rows|slots|slots_active|slots_free|tokens_total|steps_total|tokens_per_step)"
+    r'\{model="([^"]*)"\}\s+([0-9.eE+-]+)\s*$'
+)
+
+
+def parse_ar_metrics(text: str) -> dict:
+    """Parse the Phase 9 ``hse_ar_cache_*`` and ``hse_ar_decode_*`` series.
+
+    Returns ``{"cache": {...}, "models": {name: {...}}}``. Pure, so the trace
+    shape is unit-testable without a server or a pool.
+    """
+    cache: dict[str, float] = {}
+    models: dict[str, dict] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        match = _AR_CACHE_RE.match(line)
+        if match:
+            key, value = match.groups()
+            cache[key] = float(value)
+            continue
+        match = _AR_DECODE_RE.match(line)
+        if match:
+            key, model, value = match.groups()
+            models.setdefault(model, {})[key] = float(value)
+    return {"cache": cache, "models": models}
+
+
+class ARMetricsSampler:
+    """Sample ``/metrics`` AR pool/decode gauges while a Chatterbox run executes."""
+
+    def __init__(self, client, base_url: str, interval: float = 0.5) -> None:
+        self.client = client
+        self.base_url = base_url
+        self.interval = max(0.05, float(interval))
+        self.samples: list[dict] = []
+        self._task = None
+        self._started = 0.0
+
+    async def _sample_once(self) -> None:
+        try:
+            response = await self.client.get(self.base_url + "/metrics", timeout=10)
+        except Exception:  # pragma: no cover - sampling is best effort
+            return
+        if response.status_code != 200:
+            return
+        parsed = parse_ar_metrics(response.text)
+        parsed["t_s"] = round(time.monotonic() - self._started, 3)
+        self.samples.append(parsed)
+
+    async def _loop(self) -> None:
+        while True:
+            await self._sample_once()
+            await asyncio.sleep(self.interval)
+
+    async def start(self) -> None:
+        self._started = time.monotonic()
+        await self._sample_once()
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> list[dict]:
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        await self._sample_once()
+        return self.samples
+
+
+def chatterbox_flood_scenario(count: int = CHATTERBOX_FLOOD_REQUESTS) -> list[dict]:
+    """The 100-request distinct-voice exhaustion shape.
+
+    Distinct voices are produced by ``--clone-reference distinct`` (each request
+    carries a different reference clip, so the embedding cache cannot help); the
+    texts rotate through :data:`CHATTERBOX_TEXTS` so rows are mixed-length.
+    """
+    count = max(1, int(count))
+    return [
+        {
+            "index": index,
+            "path": "/v1/audio/speech",
+            "kind": "tts",
+            "text": CHATTERBOX_TEXTS[index % len(CHATTERBOX_TEXTS)],
+            "distinct_voice": True,
+        }
+        for index in range(count)
+    ]
+
+
+def build_chatterbox_payload(spec: dict, model: str, reference_audio_b64: str | None = None) -> dict:
+    """One Chatterbox TTS payload from a flood row (reference audio optional)."""
+    payload = {"model": model, "mode": "single_speaker_tts", "input": spec["text"]}
+    if reference_audio_b64:
+        payload["input_audio"] = reference_audio_b64
+    return payload
+
+
+def _tts_response_ok(response) -> tuple[bool, str | None]:
+    """Whether a Chatterbox TTS response carries audio (and is not an error)."""
+    if response.status_code != 200:
+        return False, f"http_{response.status_code}"
+    try:
+        body = response.json()
+    except Exception as error:  # noqa: BLE001 - malformed JSON is a format error
+        return False, f"invalid_json: {error}"
+    if not isinstance(body, dict) or not (body.get("data") or body.get("text")):
+        return False, "missing_audio"
+    return True, None
+
+
+async def _run_ar_scenario(
+    client,
+    base_url: str,
+    specs: list[dict],
+    payloads: list[dict],
+    concurrency: int,
+    timeout: float,
+    sampler: ARMetricsSampler | None = None,
+) -> tuple[list[dict], float, list[dict]]:
+    """Fire every AR request at ``concurrency`` clients, recording each outcome."""
+    queue: asyncio.Queue = asyncio.Queue()
+    for index in range(len(specs)):
+        queue.put_nowait(index)
+    records: list[dict] = []
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        while True:
+            try:
+                index = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            spec = specs[index]
+            started = time.perf_counter()
+            ok = False
+            status = None
+            error = None
+            try:
+                response = await client.post(
+                    base_url + spec["path"], json=payloads[index], timeout=timeout
+                )
+                elapsed = time.perf_counter() - started
+                status = response.status_code
+                ok, error = _tts_response_ok(response)
+            except Exception as exc:  # noqa: BLE001 - a client timeout/failure is data
+                elapsed = time.perf_counter() - started
+                error = f"{type(exc).__name__}: {exc}"
+            async with lock:
+                records.append(
+                    {
+                        "index": index,
+                        "kind": spec.get("kind", "tts"),
+                        "text": spec.get("text"),
+                        "status": status,
+                        "wall_ms": round(elapsed * 1000, 1),
+                        "ok": ok,
+                        "error": error,
+                    }
+                )
+
+    if sampler is not None:
+        await sampler.start()
+    started = time.perf_counter()
+    await asyncio.gather(*(worker() for _ in range(max(1, int(concurrency)))))
+    wall = time.perf_counter() - started
+    samples = await sampler.stop() if sampler is not None else []
+    return records, wall, samples
+
+
+def summarize_ar_scenario(specs: list[dict], records: list[dict], wall_s: float, samples: list[dict]) -> dict:
+    """Aggregate loss, latency and the AR pool/decode trace for one run."""
+    completed = [record for record in records if record["ok"]]
+    failed = [record for record in records if not record["ok"]]
+    timeouts = [record for record in failed if "timeout" in (record.get("error") or "").lower()]
+    latencies = [record["wall_ms"] / 1000.0 for record in completed]
+
+    first_cache: dict = {}
+    last_cache: dict = {}
+    max_slots_active = 0
+    max_tokens_per_step = 0.0
+    for sample in samples:
+        cache = sample.get("cache") or {}
+        if cache:
+            if not first_cache:
+                first_cache = dict(cache)
+            last_cache = dict(cache)
+            max_slots_active = max(max_slots_active, int(cache.get("slots_active", 0) or 0))
+        for detail in (sample.get("models") or {}).values():
+            max_tokens_per_step = max(max_tokens_per_step, float(detail.get("tokens_per_step", 0.0) or 0.0))
+
+    def delta(key: str) -> int:
+        return max(0, int(last_cache.get(key, 0) or 0) - int(first_cache.get(key, 0) or 0))
+
+    return {
+        "requests": len(specs),
+        "records": len(records),
+        "request_loss": len(specs) - len(records),
+        "completed": len(completed),
+        "failures": len(failed),
+        "timeouts": len(timeouts),
+        "wall_s": round(wall_s, 3),
+        "throughput_rps": round(len(completed) / wall_s, 2) if wall_s > 0 else 0.0,
+        "p50_ms": round(_percentile(latencies, 0.50) * 1000, 1),
+        "p95_ms": round(_percentile(latencies, 0.95) * 1000, 1),
+        "max_slots_active": max_slots_active,
+        "grants_delta": delta("grants_total"),
+        "refusals_delta": delta("refusals_total"),
+        "max_tokens_per_step": round(max_tokens_per_step, 3),
+        "ar_trace": samples,
+        "records_detail": records,
+    }
+
+
+def ar_scenario_matrix(
+    concurrencies: tuple[int, ...] = (4, 8, 20),
+    families: tuple[str, ...] = ("chatterbox", "chatterbox_turbo"),
+) -> list[dict]:
+    """The Phase 9-6 benchmark cells (config-side, so the script prints them).
+
+    Three-way comparison per family and concurrency: sequential loop
+    (``batched_inference: false``), AR-0 (the cleaned loop: same sequential path
+    with the Phase 9-1 seam, measured against the parent commit) and the full AR
+    runner (the shipped width). Then the cache-composition matrix and the
+    tight-pool exhaustion trace.
+    """
+    cells: list[dict] = []
+    for family in families:
+        for concurrency in concurrencies:
+            for mode, flag in (("sequential", False), ("ar0", False), ("ar-runner", None)):
+                cells.append(
+                    {
+                        "label": f"phase9-{family}-{mode}-c{concurrency}",
+                        "scenario": "chatterbox-ar",
+                        "families": family,
+                        "concurrency": concurrency,
+                        "batched_inference": flag,
+                        "config_note": f"{family} {mode} at c={concurrency}",
+                    }
+                )
+    for mode in CLONE_REFERENCE_MODES:
+        for cache in ("on", "off"):
+            cells.append(
+                {
+                    "label": f"phase9-cache-{mode}-{cache}",
+                    "scenario": "chatterbox-ar",
+                    "families": "chatterbox",
+                    "concurrency": 8,
+                    "batched_inference": None,
+                    "clone_reference": mode,
+                    "embedding_cache": cache,
+                    "config_note": f"Chatterbox AR runner, {mode} voice, cache {cache}",
+                }
+            )
+    cells.append(
+        {
+            "label": "phase9-exhaustion",
+            "scenario": "chatterbox-exhaustion",
+            "families": "chatterbox",
+            "concurrency": CHATTERBOX_FLOOD_REQUESTS,
+            "batched_inference": None,
+            "config_note": (
+                f"{CHATTERBOX_FLOOD_REQUESTS} distinct-voice requests, "
+                f"pool sized for ~{CHATTERBOX_FLOOD_POOL_SLOTS} slots"
+            ),
+        }
+    )
+    return cells
+
+
+async def run_chatterbox_exhaustion(args) -> dict:
+    """Run the Phase 9-6 tight-pool exhaustion scenario."""
+    import httpx
+
+    from tests.audio_fixtures import reference_wav_b64
+
+    model = args.model.get("chatterbox") or FAMILY_SPECS["chatterbox"]["model"]
+    specs = chatterbox_flood_scenario(args.chatterbox_flood_requests)
+    reference = reference_wav_b64(args.reference)
+    references = (
+        distinct_reference_variants(reference, len(specs))
+        if args.clone_reference == "distinct"
+        else [reference] * len(specs)
+    )
+    payloads = [
+        build_chatterbox_payload(spec, model, references[index])
+        for index, spec in enumerate(specs)
+    ]
+
+    concurrency = args.chatterbox_flood_concurrency or len(specs)
+    max_connections, max_keepalive = http_client_limits([concurrency], args.http_max_connections)
+    limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive)
+    async with httpx.AsyncClient(limits=limits) as client:
+        print(
+            f"[bench] chatterbox-exhaustion: {len(specs)} distinct-voice request(s), "
+            f"concurrency {concurrency}, pool slots ~{args.chatterbox_pool_slots}",
+            flush=True,
+        )
+        sampler = ARMetricsSampler(client, args.base_url, args.ar_sample_interval)
+        records, wall, samples = await _run_ar_scenario(
+            client, args.base_url, specs, payloads, concurrency, args.timeout, sampler
+        )
+
+    summary = summarize_ar_scenario(specs, records, wall, samples)
+    print(
+        f"[bench] chatterbox-exhaustion: {summary['completed']}/{summary['requests']} completed, "
+        f"{summary['failures']} failed ({summary['timeouts']} timeout(s)), "
+        f"loss={summary['request_loss']}, refusals={summary['refusals_delta']}, "
+        f"max slots active={summary['max_slots_active']}",
+        flush=True,
+    )
+    return {
+        "scenario": "chatterbox-exhaustion",
+        "label": args.label,
+        "config": args.config_note,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "commit": _git_commit(),
+        "env": _gpu_description(),
+        "base_url": args.base_url,
+        "model": model,
+        "clone_reference": args.clone_reference,
+        "caps": {
+            "pool_slots": args.chatterbox_pool_slots,
+            "concurrency": concurrency,
+            "requests": len(specs),
+        },
+        "summary": {
+            key: value for key, value in summary.items() if key not in ("ar_trace", "records_detail")
+        },
+        "ar_trace": summary["ar_trace"],
+        "records": summary["records_detail"],
+    }
+
+
+def _ar_exhaustion_markdown(report: dict) -> str:
+    """Markdown block for one AR exhaustion run."""
+    summary = report["summary"]
+    caps = report.get("caps") or {}
+    env = report.get("env") or {}
+    lines = [
+        f"### {report['label']} — {report['timestamp_utc']}",
+        "",
+        f"* commit `{report.get('commit') or 'dirty'}` · torch {env.get('torch')} · "
+        f"{env.get('gpu') or 'CPU'} · driver {env.get('driver') or 'n/a'}",
+        f"* config: {report.get('config') or 'n/a'}",
+        f"* pool slots ~{caps.get('pool_slots')} · client concurrency {caps.get('concurrency')} · "
+        f"{caps.get('requests')} requests · reference mode {report.get('clone_reference')}",
+        "",
+        "| Metric | Value |",
+        "|---|---|",
+        f"| Requests submitted | {summary['requests']} |",
+        f"| Requests answered (loss) | {summary['records']} ({summary['request_loss']}) |",
+        f"| Completed / failed | {summary['completed']} / {summary['failures']} |",
+        f"| Timeouts | {summary['timeouts']} |",
+        f"| Wall / throughput | {summary['wall_s']} s / {summary['throughput_rps']} req/s |",
+        f"| p50 / p95 | {summary['p50_ms']} ms / {summary['p95_ms']} ms |",
+        f"| Max slots active | {summary['max_slots_active']} |",
+        f"| Slot grants / refusals (delta) | {summary['grants_delta']} / {summary['refusals_delta']} |",
+        f"| Max tokens/step | {summary['max_tokens_per_step']} |",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def ar_scenario_recipe(args) -> str:
+    """Shell recipe for the Phase 9-6 three-way comparison + exhaustion."""
+    port = args.base_url.rsplit(":", 1)[-1]
+    engine_log = args.engine_log or "out/bench/engine-ar.log"
+    log_flag = f" --engine-log {engine_log}"
+    md_flag = " --md-out docs/benchmarks/throughput.md"
+    lines = [
+        "# Phase 9-6 Chatterbox AR scenarios. One idle benchmark host (RTX 5060 Ti,",
+        "# CUDA_VISIBLE_DEVICES=1). Every cell needs a matching engine boot; the",
+        "# results are _tbd_ in docs/benchmarks/throughput.md §Phase 9.",
+        "",
+        "# Boot A - shipped AR runner (max_batch_size 4, ar_inference 1 GiB / 768)",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path config.gpu.yml \\",
+        f"    --port {port} > {engine_log} 2>&1",
+        "",
+        "# Three-way: full AR runner at c=4,8,20 for both families",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 4,8,20 --requests 20 --label phase9-chatterbox-ar-runner{log_flag}{md_flag}",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox_turbo \\",
+        f"    --concurrency 4,8,20 --requests 20 --label phase9-chatterbox-turbo-ar-runner{log_flag}{md_flag}",
+        "",
+        "# Boot B - sequential loop (batched_inference: false, max_batch_size 1)",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path out/bench/config-phase9-loop.yml \\",
+        f"    --port {port} > {engine_log} 2>&1",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 4,8,20 --requests 20 --label phase9-chatterbox-sequential{log_flag}{md_flag}",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox_turbo \\",
+        f"    --concurrency 4,8,20 --requests 20 --label phase9-chatterbox-turbo-sequential{log_flag}{md_flag}",
+        "",
+        "# AR-0: the same boots on the parent commit (Phase 9-1's cleaned loop)",
+        "git worktree add ../hse-ar0-before 4081d97",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 4,8,20 --requests 20 --label phase9-chatterbox-ar0{log_flag}{md_flag}",
+        "",
+        "# Cache composition: same vs distinct voice x cache on/off (two boots)",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 8 --requests 20 --clone-reference same --embedding-cache on \\",
+        f"    --label phase9-cache-same-on{log_flag}{md_flag}",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 8 --requests 20 --clone-reference distinct --embedding-cache on \\",
+        f"    --label phase9-cache-distinct-on{log_flag}{md_flag}",
+        "# restart with --no-embedding-cache, then the two off rows",
+        "python scripts/bench_throughput.py --scenario chatterbox-ar --families chatterbox \\",
+        f"    --concurrency 8 --requests 20 --clone-reference same --embedding-cache off \\",
+        f"    --label phase9-cache-same-off{log_flag}{md_flag}",
+        "",
+        "# Mixed-length rows: the flood rotates CHATTERBOX_TEXTS, so short and long",
+        "# rows leave the batch at different decode steps. Watch hse_ar_decode_* in",
+        "# the metrics trace (tokens/step = active batch width).",
+        "",
+        "# Exhaustion: 100 distinct-voice requests against a pool sized for ~8 slots.",
+        "# Boot with ar_inference.kv_cache_budget_bytes = 8 x slab (the startup arena",
+        "# table prints the slab size). Record loss (must be 0) and refusal delta.",
+        "python scripts/bench_throughput.py --scenario chatterbox-exhaustion \\",
+        "    --clone-reference distinct --chatterbox-flood-requests 100 \\",
+        "    --chatterbox-flood-concurrency 100 --chatterbox-pool-slots 8 \\",
+        f"    --label phase9-exhaustion{log_flag}{md_flag}",
+        "",
+        "# Print this recipe",
+        "python scripts/bench_throughput.py --print-ar-scenarios",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 #: Step label for every engine DEBUG line that reports padded sub-batching.
 STEP_LOG_LABELS = {
     "HarmonySpeech encoder": "embed",
@@ -1067,7 +1535,15 @@ async def _one_request(client, base_url: str, family: str, payload: dict, timeou
 
 
 async def _run_level(
-    client, base_url, family, payloads, concurrency: int, total: int, timeout: float, log_tail=None
+    client,
+    base_url,
+    family,
+    payloads,
+    concurrency: int,
+    total: int,
+    timeout: float,
+    log_tail=None,
+    ar_sampler=None,
 ):
     queue: asyncio.Queue = asyncio.Queue()
     for index in range(total):
@@ -1095,9 +1571,12 @@ async def _run_level(
     if log_tail is not None:
         # Warmup and previous levels must not pollute this level's composition.
         log_tail.flush()
+    if ar_sampler is not None:
+        await ar_sampler.start()
     started = time.perf_counter()
     await asyncio.gather(*(worker() for _ in range(concurrency)))
     wall = time.perf_counter() - started
+    ar_trace = await ar_sampler.stop() if ar_sampler is not None else []
     steps = parse_step_composition(log_tail.drain()) if log_tail is not None else {}
     return LevelResult(
         concurrency=concurrency,
@@ -1106,6 +1585,7 @@ async def _run_level(
         wall_s=wall,
         latencies_s=latencies,
         steps=steps,
+        ar_trace=ar_trace,
     )
 
 
@@ -1158,6 +1638,7 @@ async def run_benchmark(args) -> dict:
     max_connections, max_keepalive = http_client_limits(levels, args.http_max_connections)
     log_tail = EngineLogTail(args.engine_log) if args.engine_log else None
     cache_requested = getattr(args, "embedding_cache", "auto")
+    ar_sampler_enabled = getattr(args, "scenario", "throughput") == "chatterbox-ar"
     overtime: dict[str, list[LevelResult]] = {}
     skipped: dict[str, str] = {}
 
@@ -1205,6 +1686,11 @@ async def run_benchmark(args) -> dict:
                 count=args.requests,
                 text_override=args.text,
             )
+            if getattr(args, "mixed_lengths", False) and family in ("chatterbox", "chatterbox_turbo"):
+                # Mixed-length rows: short and long texts leave the AR batch at
+                # different decode steps (the owner's sub-batch sanity check).
+                for index, payload in enumerate(payloads):
+                    payload["input"] = CHATTERBOX_TEXTS[index % len(CHATTERBOX_TEXTS)]
             for payload in payloads:
                 payload["model"] = model
 
@@ -1213,6 +1699,11 @@ async def run_benchmark(args) -> dict:
 
             results = []
             for level in levels:
+                level_sampler = (
+                    ARMetricsSampler(client, args.base_url, args.ar_sample_interval)
+                    if ar_sampler_enabled
+                    else None
+                )
                 result = await _run_level(
                     client,
                     args.base_url,
@@ -1222,6 +1713,7 @@ async def run_benchmark(args) -> dict:
                     args.requests,
                     args.timeout,
                     log_tail=log_tail,
+                    ar_sampler=level_sampler,
                 )
                 results.append(result)
                 print(
@@ -1516,6 +2008,41 @@ def _markdown(report: dict) -> str:
         lines.append("")
         for family, reason in report["skipped"].items():
             lines.append(f"* {family}: skipped — {reason}")
+    ar_rows = [
+        (family, level["concurrency"], level["ar_trace"])
+        for family, levels in report["families"].items()
+        for level in levels
+        if level.get("ar_trace")
+    ]
+    if ar_rows:
+        lines += [
+            "",
+            "AR pool utilization (sampled from `/metrics`; Phase 9-6):",
+            "",
+            "| Family | Concurrency | Max slots active | Grants Δ | Refusals Δ | Max tokens/step |",
+            "|---|---|---|---|---|---|",
+        ]
+        for family, concurrency, trace in ar_rows:
+            first = next((sample["cache"] for sample in trace if sample.get("cache")), {})
+            last = next((sample["cache"] for sample in reversed(trace) if sample.get("cache")), {})
+            grants = max(0, int(last.get("grants_total", 0) or 0) - int(first.get("grants_total", 0) or 0))
+            refusals = max(
+                0, int(last.get("refusals_total", 0) or 0) - int(first.get("refusals_total", 0) or 0)
+            )
+            max_active = max(
+                (int(sample.get("cache", {}).get("slots_active", 0) or 0) for sample in trace), default=0
+            )
+            max_tps = max(
+                (
+                    float(detail.get("tokens_per_step", 0.0) or 0.0)
+                    for sample in trace
+                    for detail in (sample.get("models") or {}).values()
+                ),
+                default=0.0,
+            )
+            lines.append(
+                f"| {family} | {concurrency} | {max_active} | {grants} | {refusals} | {round(max_tps, 3)} |"
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -1693,11 +2220,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--scenario",
-        choices=("throughput", "whisper-flood", "whisper-fairness", "whisper-budget-trip"),
+        choices=(
+            "throughput",
+            "whisper-flood",
+            "whisper-fairness",
+            "whisper-budget-trip",
+            "chatterbox-ar",
+            "chatterbox-exhaustion",
+        ),
         default="throughput",
         help=(
             "throughput (default) runs the family matrix; whisper-flood / whisper-fairness / "
-            "whisper-budget-trip run the Phase 10-5 exhaustion scenarios"
+            "whisper-budget-trip run the Phase 10-5 exhaustion scenarios; chatterbox-ar runs "
+            "the Phase 9-6 AR three-way comparison with pool-metrics sampling; "
+            "chatterbox-exhaustion runs the tight-pool 100-request trace"
         ),
     )
     parser.add_argument(
@@ -1760,6 +2296,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the Phase 10-5 Whisper recipe (boots, sweeps, exhaustion, budget trip) and exit",
     )
     parser.add_argument(
+        "--print-ar-scenarios",
+        action="store_true",
+        help="print the Phase 9-6 Chatterbox AR recipe (three-way, cache matrix, exhaustion) and exit",
+    )
+    parser.add_argument(
+        "--chatterbox-flood-requests",
+        type=int,
+        default=CHATTERBOX_FLOOD_REQUESTS,
+        help="requests in the AR tight-pool exhaustion trace (default 100)",
+    )
+    parser.add_argument(
+        "--chatterbox-flood-concurrency",
+        type=int,
+        default=CHATTERBOX_FLOOD_REQUESTS,
+        help="client concurrency for the AR exhaustion trace (default: all at once)",
+    )
+    parser.add_argument(
+        "--chatterbox-pool-slots",
+        type=int,
+        default=CHATTERBOX_FLOOD_POOL_SLOTS,
+        help="declared slot count of the tight AR pool (recorded in the block)",
+    )
+    parser.add_argument(
+        "--ar-sample-interval",
+        type=float,
+        default=0.5,
+        help="seconds between /metrics AR-pool samples during a chatterbox-ar run",
+    )
+    parser.add_argument(
+        "--mixed-lengths",
+        action="store_true",
+        help="rotate CHATTERBOX_TEXTS across AR payloads so rows leave the batch at different steps",
+    )
+    parser.add_argument(
         "--print-scenarios",
         action="store_true",
         help="print the Phase 8 clone-flood recipe (two server boots x two reference modes) and exit",
@@ -1789,6 +2359,24 @@ def main(argv=None) -> int:
     if args.print_whisper_scenarios:
         print(whisper_scenario_recipe(args))
         return 0
+    if args.print_ar_scenarios:
+        print(ar_scenario_recipe(args))
+        return 0
+
+    if args.scenario == "chatterbox-exhaustion":
+        report = asyncio.run(run_chatterbox_exhaustion(args))
+        if args.json_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2)
+        table = _ar_exhaustion_markdown(report)
+        if args.md_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.md_out)), exist_ok=True)
+            with open(args.md_out, "a", encoding="utf-8") as handle:
+                handle.write(table)
+        print(table)
+        summary = report["summary"]
+        return 0 if summary["failures"] == 0 and summary["request_loss"] == 0 else 1
 
     whisper_scenarios = {"whisper-flood", "whisper-fairness", "whisper-budget-trip"}
     if args.scenario in whisper_scenarios:

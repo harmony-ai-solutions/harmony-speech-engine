@@ -24,6 +24,10 @@ class EngineArgs:
     embedding_cache_ttl_s: float | None = None
     embedding_cache_max_entries: int | None = None
     no_embedding_cache: bool = False
+    # Shared AR KV-cache pool overrides (Phase 9-2); None keeps the config-file
+    # value. `--no-ar-cache` disables the pool (metrics stay present as zeros).
+    ar_cache_budget_bytes: int | None = None
+    no_ar_cache: bool = False
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -70,6 +74,20 @@ class EngineArgs:
             action="store_true",
             help="Disable the cross-request embedding cache entirely.",
         )
+        parser.add_argument(
+            "--ar-cache-budget-bytes",
+            type=int,
+            default=None,
+            help=(
+                "Device-wide byte budget for the shared autoregressive KV-cache pool, "
+                "overriding the config file (ar_inference.kv_cache_budget_bytes)."
+            ),
+        )
+        parser.add_argument(
+            "--no-ar-cache",
+            action="store_true",
+            help="Disable the shared autoregressive KV-cache pool entirely.",
+        )
         return parser
 
     @classmethod
@@ -93,6 +111,10 @@ class EngineArgs:
             overrides["embedding_cache_max_entries"] = self.embedding_cache_max_entries
         if self.no_embedding_cache:
             overrides["embedding_cache_enabled"] = False
+        if self.ar_cache_budget_bytes is not None:
+            overrides["ar_cache_budget_bytes"] = self.ar_cache_budget_bytes
+        if self.no_ar_cache:
+            overrides["ar_cache_enabled"] = False
         if overrides:
             return dataclasses.replace(base_config, **overrides)
         return base_config

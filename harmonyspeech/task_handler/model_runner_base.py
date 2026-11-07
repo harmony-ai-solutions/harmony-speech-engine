@@ -81,6 +81,7 @@ Phase 10 invariants (Whisper serving)
 """
 
 import copy
+import contextlib
 import io
 import json
 import threading
@@ -106,6 +107,7 @@ from harmonyspeech.common.outputs import (
     SpeechSynthesisRequestOutput,
     SpeechTranscriptionRequestOutput,
     TextToSpeechRequestOutput,
+    UnfinishedRequestOutput,
     VocodeRequestOutput,
     VoiceConversionRequestOutput,
 )
@@ -121,6 +123,7 @@ from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.batching import (
+    ar_batching_enabled,
     batched_inference_enabled,
     collapse_per_sample,
     default_token_budget,
@@ -549,6 +552,7 @@ class ModelRunnerBase:
         *args,
         weight_registry=None,
         embedding_cache=None,
+        ar_cache_pool=None,
         **kwargs,
     ):
         self.model_config = model_config
@@ -560,6 +564,11 @@ class ModelRunnerBase:
         # disabled — every handler guards once at entry and then behaves
         # exactly like pre-Phase-7. Also optional for tests/standalone runners.
         self.embedding_cache = embedding_cache
+        # Engine-owned shared AR KV-cache pool (Phase 9-2); None means disabled.
+        # 9-3's AR runner registers its descriptor on first load and acquires one
+        # slot per in-flight request; a refused grant falls back to the
+        # sequential loop. Optional for tests/standalone runners.
+        self.ar_cache_pool = ar_cache_pool
         # Cache identity (name/type/dtype/repo + load_version); built on every
         # model load by `_refresh_model_identity`. None until the first load.
         self.model_identity: str | None = None
@@ -586,6 +595,10 @@ class ModelRunnerBase:
         # captured yet"; `_restore_chatterbox_state` then treats the baseline
         # as "no conditionals".
         self._baseline_state: dict | None = None
+        # Phase 9-3 token-level AR decode runner for the Chatterbox English/Turbo
+        # roles; created at model load (`_init_ar_runner`) when the pool and the
+        # family flag allow it. None keeps the sequential loop.
+        self._ar_runner = None
 
     def _load_model(self):
         # Every load (first boot or reload) starts a fresh cache generation:
@@ -770,6 +783,345 @@ class ModelRunnerBase:
         conds.t3 = t3_cond.to(device=device, dtype=dtype)
         if exaggeration is not None and getattr(conds.t3, "emotion_adv", None) is not None:
             conds.t3.emotion_adv = exaggeration * torch.ones(1, 1, 1, dtype=dtype, device=device)
+
+    # ------------------------------------------------------------------
+    # Token-level AR decode runner (Phase 9-3)
+    # ------------------------------------------------------------------
+    def _init_ar_runner(self):
+        """Create + register the AR runner for a Chatterbox English/Turbo model.
+
+        Registration happens here (right after model load) so the engine's
+        startup arena table lists the arena, and the arena is keyed by the
+        scheduler's model name (9-4's capacity-admission convention). Returns
+        ``None`` for every other model, when the family flag is off, or when the
+        pool refuses the descriptor — the sequential loop then remains the path.
+        """
+        model = getattr(self, "model", None)
+        if model is None or not hasattr(model, "t3"):
+            self._ar_runner = None
+            return None
+        if not ar_batching_enabled(self.model_config):
+            self._ar_runner = None
+            return None
+        from harmonyspeech.task_handler.ar_runner import ARBatchRunner
+
+        runner = ARBatchRunner(
+            t3=model.t3,
+            pool=getattr(self, "ar_cache_pool", None),
+            model_key=self.model_config.name,
+            model_config=self.model_config,
+        )
+        runner.register()
+        self._ar_runner = runner
+        return runner
+
+    def _get_ar_runner(self):
+        """Return the AR runner, creating it lazily for shell/test runners."""
+        runner = getattr(self, "_ar_runner", None)
+        if runner is None:
+            runner = self._init_ar_runner()
+        return runner
+
+    def release_request(self, request_id: str) -> None:
+        """Engine hook (Phase 9-4): drop an AR row that will never run again.
+
+        Called on abort/disconnect and deadline expiry mid-decode. A runner
+        without an active row for ``request_id`` is a no-op.
+        """
+        runner = getattr(self, "_ar_runner", None)
+        if runner is not None:
+            runner.release_request(request_id)
+
+    def _ar_conditionals(self, params, initial_request, *, turbo: bool):
+        """Resolve per-request conditionals without leaving them on the model.
+
+        Pre-computed conditionals (the embedding-step hop) are used by
+        reference. A request that clones from raw audio goes through upstream's
+        ``prepare_conditionals`` and the baseline object is restored immediately:
+        the AR decode never reads or writes ``model.conds`` (the conditionals
+        live on the runner's row), so the object identity the Phase 0-2 restore
+        protects is unchanged for the whole decode. A request with no
+        conditioning uses a copy of the model's bundled default voice.
+        """
+        from harmonyspeech.task_handler.ar_runner import cast_conditionals
+
+        if turbo:
+            _text, speaker, _temperature, _repetition, _top_p, _top_k, norm_loudness = params
+            exaggeration = None
+        else:
+            _text, speaker, exaggeration, _cfg, _temperature, _repetition, _top_p, _min_p = params
+            norm_loudness = None
+
+        conditionals = _chatterbox_conditionals(speaker, self.device)
+        if conditionals is None and speaker is not None and speaker.reference_audio is not None:
+            previous = getattr(self.model, "conds", None)
+            try:
+                if turbo:
+                    self.model.prepare_conditionals(
+                        _wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness
+                    )
+                else:
+                    self.model.prepare_conditionals(
+                        _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
+                    )
+                conditionals = self.model.conds
+            finally:
+                if hasattr(self.model, "conds"):
+                    self.model.conds = previous
+        if conditionals is None:
+            baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
+            if baseline is None and getattr(self.model, "conds", None) is None:
+                raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
+            source = baseline if baseline is not None else getattr(self.model, "conds", None)
+            conditionals = _clone_conditionals(source)
+        return cast_conditionals(conditionals, self.model.t3)
+
+    def _execute_chatterbox_tts_ar(self, runner, inputs, requests_to_batch, *, turbo: bool):
+        """One batched AR decode step for the requests in this partition.
+
+        New rows are prefilled; every active row (including continuations from
+        previous engine steps) samples one token and advances one KV position.
+        Rows that hit EOS/the token cap finalize through the padded S3Gen hop
+        (Phase 9-5; turbo's meanflow hop stays per row) and return a final
+        result; the rest return ``UnfinishedRequestOutput``.
+        ``len == 1`` for a *new* request and a refused slot fall back to the
+        sequential loop for that request only.
+        """
+        from harmonyspeech.task_handler.ar_runner import english_text_tokens, turbo_text_tokens
+
+        sequential = (
+            self._execute_chatterbox_turbo_tts_sequential
+            if turbo
+            else self._execute_chatterbox_tts_sequential
+        )
+        text_tokens_for = turbo_text_tokens if turbo else english_text_tokens
+
+        new_indices = [
+            index for index, request in enumerate(requests_to_batch) if not runner.has_row(request.request_id)
+        ]
+        # The single-request fast path stays 9-1's cleaned sequential loop.
+        if len(inputs) == 1 and new_indices:
+            return sequential(inputs, requests_to_batch)
+
+        results: list = [None] * len(inputs)
+        for index in new_indices:
+            params = inputs[index]
+            request = requests_to_batch[index]
+            if _request_finished(request):
+                # Aborted between scheduling and execution: never start a row
+                # (9-4 already released anything that existed).
+                continue
+            try:
+                conditionals = self._ar_conditionals(params, request, turbo=turbo)
+                text_tokens = text_tokens_for(self.model, params[0])
+                options = getattr(request.request_data, "generation_options", None)
+                seed = getattr(options, "seed", None)
+                if turbo:
+                    _text, _speaker, temperature, repetition_penalty, top_p, top_k, _norm = params
+                    row = runner.begin(
+                        request.request_id,
+                        conds=conditionals,
+                        text_tokens=text_tokens,
+                        seed=seed,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        top_p=top_p,
+                        top_k=top_k,
+                    )
+                else:
+                    _text, _speaker, _exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = params
+                    row = runner.begin(
+                        request.request_id,
+                        conds=conditionals,
+                        text_tokens=text_tokens,
+                        cfg_weight=cfg_weight,
+                        seed=seed,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        top_p=top_p,
+                        min_p=min_p,
+                    )
+            except Exception as error:  # noqa: BLE001 - errors this request alone
+                results[index] = self._build_error_result(request, error)
+                continue
+            if row is None:
+                # Pool refusal / disabled arena: honest sequential fallback.
+                results[index] = sequential([params], [request])[0]
+
+        active = [request.request_id for request in requests_to_batch if runner.has_row(request.request_id)]
+        outcomes = {outcome.request_id: outcome for outcome in runner.step(active)} if active else {}
+
+        finished: list[tuple] = []
+        for index, request in enumerate(requests_to_batch):
+            if results[index] is not None:
+                continue
+            if _request_finished(request):
+                # Aborted/deadline-expired during this step: 9-4 already released
+                # the row; make sure nothing lingers and emit no client output.
+                if runner.has_row(request.request_id):
+                    runner.pop(request.request_id)
+                continue
+            outcome = outcomes.get(request.request_id)
+            try:
+                if outcome is None:
+                    raise RuntimeError(f"AR row for request {request.request_id} disappeared")
+                if outcome.error is not None:
+                    runner.pop(request.request_id)
+                    results[index] = self._build_error_result(request, outcome.error)
+                elif outcome.finished:
+                    try:
+                        tokens, conds, seed = self._take_ar_row(runner, request.request_id)
+                    except Exception as error:  # noqa: BLE001 - errors this request alone
+                        if runner.has_row(request.request_id):
+                            runner.pop(request.request_id)
+                        results[index] = self._build_error_result(request, error)
+                        continue
+                    finished.append((index, request, tokens, conds, seed, dict(outcome.progress)))
+                else:
+                    results[index] = ExecutorResult(
+                        request.request_id,
+                        request.request_data,
+                        UnfinishedRequestOutput(
+                            request_id=request.request_id, progress=dict(outcome.progress)
+                        ),
+                    )
+            except Exception as error:  # noqa: BLE001 - errors this request alone
+                runner.pop(request.request_id)
+                results[index] = self._build_error_result(request, error)
+        # Phase 9-5: vocode this step's finished rows together (padded S3Gen hop).
+        if finished:
+            self._finalize_ar_rows(finished, results, turbo=turbo)
+        # A request aborted between scheduling and execution produces no result.
+        return [result for result in results if result is not None]
+
+    def _take_ar_row(self, runner, request_id: str):
+        """Copy a finished row's token stream/conditionals out and free its slots."""
+        row = runner.row(request_id)
+        if row is None:
+            raise RuntimeError(f"no AR row for request {request_id}")
+        tokens = runner.final_tokens(request_id)
+        conds = row.conds
+        seed = getattr(row, "seed", None)
+        # Release the slot as soon as the tokens are copied out; S3Gen needs none.
+        runner.pop(request_id)
+        if tokens is None or tokens.numel() == 0:
+            raise ValueError("AR decode produced no valid speech tokens")
+        return tokens, conds, seed
+
+    def _finalize_ar_rows(self, finished, results, *, turbo: bool) -> None:
+        """Vocode the rows that finished this step (Phase 9-5 padded S3Gen hop).
+
+        Non-turbo rows are grouped into length-similar sub-batches on the token
+        axis and vocoded with one padded :func:`inference_batched` forward per
+        group. A single-row group, an unsupported graph (turbo's meanflow hop is
+        the documented skip) or any batch failure falls back to the per-row
+        upstream call, so a poisoned row errors alone (8-3 deviation-6).
+        """
+        from harmonyspeech.modeling.models.chatterbox.s3gen_batch import (
+            S3GenRow,
+            inference_batched,
+            supports_batched_s3gen,
+        )
+
+        s3gen = getattr(self.model, "s3gen", None)
+        if turbo or not supports_batched_s3gen(s3gen):
+            for row in finished:
+                self._finish_ar_row(results, *row[:5], row[5], turbo=turbo)
+            return
+
+        lengths = [int(row[2].numel()) for row in finished]
+        batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+        budget = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
+            lengths, batch_size
+        )
+        groups = plan_batches(lengths, batch_size, budget)
+
+        for group in groups:
+            group_rows = [finished[position] for position in group]
+            if len(group_rows) == 1:
+                self._finish_ar_row(results, *group_rows[0][:5], group_rows[0][5], turbo=turbo)
+                continue
+            try:
+                rows = [
+                    S3GenRow(tokens=tokens, ref_dict=conds.gen, seed=seed)
+                    for _index, _request, tokens, conds, seed, _progress in group_rows
+                ]
+                with torch.no_grad():
+                    waveforms = inference_batched(s3gen, rows)
+            except Exception as error:  # noqa: BLE001 - degrade this group to the loop
+                logger.warning(
+                    f"Chatterbox S3Gen padded batch failed ({error}); falling back to per-row vocode"
+                )
+                for row in group_rows:
+                    self._finish_ar_row(results, *row[:5], row[5], turbo=turbo)
+                continue
+            for row, waveform in zip(group_rows, waveforms, strict=True):
+                index, request, _tokens, _conds, _seed, progress = row
+                try:
+                    artifact = self._artifact_from_waveform(waveform)
+                    result = self._build_result(request, "", TextToSpeechRequestOutput)
+                    result.result_data.audio_artifact = artifact
+                    result.result_data.progress = progress
+                    results[index] = result
+                except Exception as error:  # noqa: BLE001 - errors this request alone
+                    results[index] = self._build_error_result(request, error)
+
+    def _finish_ar_row(self, results, index, request, tokens, conds, seed, progress, *, turbo):
+        """Per-row upstream vocode: the fast path and the fallback."""
+        try:
+            artifact = self._vocode_ar_row(tokens, conds, seed, turbo=turbo)
+            result = self._build_result(request, "", TextToSpeechRequestOutput)
+            result.result_data.audio_artifact = artifact
+            result.result_data.progress = progress
+            results[index] = result
+        except Exception as error:  # noqa: BLE001 - errors this request alone
+            results[index] = self._build_error_result(request, error)
+
+    @contextlib.contextmanager
+    def _seeded_rng(self, seed):
+        """Seed the global RNG for one upstream vocode, then restore it.
+
+        The padded hop draws each row's noise from a ``torch.Generator`` seeded
+        with the row's seed; seeding the global RNG the same way makes the
+        per-row upstream fallback produce the *same* audio, so a batch failure
+        is a performance fallback, not an audio change.
+        """
+        if seed is None:
+            yield
+            return
+        cpu_state = torch.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        try:
+            torch.manual_seed(int(seed))
+            yield
+        finally:
+            torch.set_rng_state(cpu_state)
+            if cuda_states is not None:
+                torch.cuda.set_rng_state_all(cuda_states)
+
+    def _vocode_ar_row(self, tokens, conds, seed, *, turbo: bool):
+        """Turn one row's token stream into audio through the upstream S3Gen."""
+        s3gen = self.model.s3gen
+        with self._seeded_rng(seed):
+            if turbo:
+                from chatterbox.models.s3gen.const import S3GEN_SIL
+
+                silence = torch.tensor(
+                    [S3GEN_SIL, S3GEN_SIL, S3GEN_SIL], dtype=torch.long, device=self.device
+                )
+                speech_tokens = torch.cat([tokens.to(self.device), silence])
+                wav, _ = s3gen.inference(
+                    speech_tokens=speech_tokens, ref_dict=conds.gen, n_cfm_timesteps=2
+                )
+            else:
+                wav, _ = s3gen.inference(speech_tokens=tokens.to(self.device), ref_dict=conds.gen)
+        return self._artifact_from_waveform(wav)
+
+    def _artifact_from_waveform(self, wav):
+        """Watermark a waveform and wrap it in an ``AudioArtifact``."""
+        wav = wav.squeeze(0).detach().cpu().numpy()
+        wav = self.model.watermarker.apply_watermark(wav, sample_rate=self.model.sr)
+        return _audio_artifact_from_tensor(torch.from_numpy(wav).unsqueeze(0), self.model.sr)
 
     @torch.inference_mode()
     def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
@@ -2315,8 +2667,16 @@ class ModelRunnerBase:
     # ------------------------------------------------------------------
 
     def _execute_chatterbox_tts(self, inputs, requests_to_batch):
-        """Execute ChatterboxTTS to generate speech audio from text."""
+        """Execute ChatterboxTTS: AR batch runner when eligible, else the loop."""
         assert_batch_aligned("_execute_chatterbox_tts", inputs, requests_to_batch)
+        runner = self._get_ar_runner()
+        if runner is None or not runner.enabled:
+            return self._execute_chatterbox_tts_sequential(inputs, requests_to_batch)
+        return self._execute_chatterbox_tts_ar(runner, inputs, requests_to_batch, turbo=False)
+
+    def _execute_chatterbox_tts_sequential(self, inputs, requests_to_batch):
+        """Per-request loop: the ``len == 1`` fast path and the fallback."""
+        assert_batch_aligned("_execute_chatterbox_tts_sequential", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = input_params
@@ -2369,8 +2729,16 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_chatterbox_turbo_tts(self, inputs, requests_to_batch):
-        """Execute ChatterboxTurboTTS to generate speech audio from text."""
+        """Execute ChatterboxTurboTTS: AR batch runner when eligible, else the loop."""
         assert_batch_aligned("_execute_chatterbox_turbo_tts", inputs, requests_to_batch)
+        runner = self._get_ar_runner()
+        if runner is None or not runner.enabled:
+            return self._execute_chatterbox_turbo_tts_sequential(inputs, requests_to_batch)
+        return self._execute_chatterbox_tts_ar(runner, inputs, requests_to_batch, turbo=True)
+
+    def _execute_chatterbox_turbo_tts_sequential(self, inputs, requests_to_batch):
+        """Per-request loop: the ``len == 1`` fast path and the fallback."""
+        assert_batch_aligned("_execute_chatterbox_turbo_tts_sequential", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, speaker, temperature, repetition_penalty, top_p, top_k, norm_loudness = input_params
@@ -2558,6 +2926,15 @@ class ModelRunnerBase:
 
         slots = self._resolve_cache_slots(cache, requests_to_batch, _lookup)
 
+        # Phase 9-5: the VC vocode step is the same audited S3Gen graph, so a
+        # multi-request step can batch it. The shipped `max_batch_size: 1` keeps
+        # this dormant (the family is `loop`-class until 9-6); an explicit
+        # `batched_inference: false` keeps the per-item loop.
+        if len(inputs) > 1 and getattr(self.model_config, "batched_inference", None) is not False:
+            batched = self._try_batched_chatterbox_vc(inputs, requests_to_batch, slots)
+            if batched is not None:
+                return batched
+
         def convert(input_params, initial_request, index):
             source_artifact, target_speaker, target_audio_artifact = input_params
             key, cached = slots[index]
@@ -2597,3 +2974,91 @@ class ModelRunnerBase:
                 self._restore_chatterbox_state()
             outputs.append(result)
         return outputs
+
+    def _chatterbox_vc_tokens(self, source_artifact):
+        """Tokenize a VC source clip exactly as upstream ``ChatterboxVC.generate``."""
+        import librosa
+        from chatterbox.models.s3tokenizer import S3_SR
+
+        audio_16, _ = librosa.load(_wav_buffer(_bind_to_device(source_artifact, "cpu")), sr=S3_SR)
+        audio_16 = torch.from_numpy(audio_16).float().to(self.device)[None]
+        tokens, _ = self.model.s3gen.tokenizer(audio_16)
+        return tokens[0]
+
+    def _try_batched_chatterbox_vc(self, inputs, requests_to_batch, slots):
+        """Batch a multi-request VC step's vocode hop; ``None`` = use the loop.
+
+        Resolves each request's target ``ref_dict`` (precomputed / cache /
+        ``set_target_voice``), tokenizes its source clip and vocodes the rows in
+        length-similar sub-batches. Any preparation or batch failure returns
+        ``None`` so the caller falls back to the per-item loop, where a poisoned
+        request errors alone.
+        """
+        from harmonyspeech.modeling.models.chatterbox.s3gen_batch import (
+            S3GenRow,
+            inference_batched,
+            supports_batched_s3gen,
+        )
+
+        s3gen = getattr(self.model, "s3gen", None)
+        if not supports_batched_s3gen(s3gen) or not hasattr(s3gen, "tokenizer"):
+            return None
+
+        prepared: list[tuple] = []
+        try:
+            for index, (source_artifact, target_speaker, target_audio_artifact) in enumerate(inputs):
+                key, cached = slots[index]
+                conditionals = _chatterbox_conditionals(target_speaker, self.device)
+                if conditionals is not None:
+                    ref_dict = conditionals.gen
+                elif cached is not None:
+                    ref_dict = cached.conditionals
+                elif target_audio_artifact is not None:
+                    self.model.set_target_voice(
+                        _wav_buffer(_bind_to_device(target_audio_artifact, "cpu"))
+                    )
+                    ref_dict = dict(self.model.ref_dict)
+                    self._store_embedding_cache_entry(
+                        key,
+                        SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox"),
+                    )
+                else:
+                    raise ValueError("voice conversion requires target_audio or target_embedding")
+                prepared.append((index, self._chatterbox_vc_tokens(source_artifact), ref_dict))
+        except Exception as error:  # noqa: BLE001 - degrade the whole step to the loop
+            logger.warning(f"Chatterbox VC batch preparation failed ({error}); using the per-item loop")
+            return None
+        finally:
+            # ``set_target_voice`` mutated ``model.ref_dict``; the rows hold their
+            # own references, and the loop below re-resolves per request.
+            self._restore_chatterbox_state()
+
+        lengths = [int(tokens.numel()) for _index, tokens, _ref in prepared]
+        batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
+        budget = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
+            lengths, batch_size
+        )
+        results: list = [None] * len(inputs)
+        for group in plan_batches(lengths, batch_size, budget):
+            group_rows = [prepared[position] for position in group]
+            try:
+                rows = [
+                    S3GenRow(tokens=tokens, ref_dict=ref_dict, seed=None)
+                    for _index, tokens, ref_dict in group_rows
+                ]
+                with torch.no_grad():
+                    waveforms = inference_batched(s3gen, rows)
+            except Exception as error:  # noqa: BLE001 - whole-step fallback
+                logger.warning(f"Chatterbox VC padded batch failed ({error}); using the per-item loop")
+                return None
+            for (index, _tokens, _ref), waveform in zip(group_rows, waveforms, strict=True):
+                try:
+                    artifact = self._artifact_from_waveform(waveform)
+                    result = self._build_result(
+                        requests_to_batch[index], "", VoiceConversionRequestOutput
+                    )
+                    result.result_data.audio_artifact = artifact
+                    results[index] = result
+                except Exception as error:  # noqa: BLE001 - errors this request alone
+                    results[index] = self._build_error_result(requests_to_batch[index], error)
+        return [result for result in results if result is not None]

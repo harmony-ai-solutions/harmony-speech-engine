@@ -159,6 +159,41 @@ above, not the legacy 7.30 GiB torch-reserved number. Until the benchmark-host
 measurement lands, the conservative input is the nvidia-smi figure (7.10 GiB)
 minus the measured Whisper probe peaks and a safety margin.
 
+### Phase 9-6 — AR KV-cache arena table
+
+The shared pool's budget (`ar_inference.kv_cache_budget_bytes`, 1 GiB
+owner-approved initial) is the denominator, and the **device-level** headroom
+from Phase 10-3 is what it must fit inside. Slabs are ordinary PyTorch
+allocations, so they already count in `hse_vram_device_used_bytes`; the arena
+table below is the explicit accounting.
+
+Slab size = `layers × 2 (K/V) × cap_tokens × kv_heads × head_dim × dtype_bytes`,
+at the default 768-token slot:
+
+| Family | Layers | KV heads | Head dim | dtype | Slab | Shipped slots | Arena |
+|---|---:|---:|---:|---|---:|---:|---:|
+| `chatterbox` (English) | 30 | 16 | 64 | fp16 | 90 MiB | 8 (4 requests × 2 CFG rows) | 720 MiB |
+| `chatterbox_turbo` | 24 | 16 | 64 | fp16 | 72 MiB | 4 (4 requests × 1 row) | 288 MiB |
+| **total** | | | | | | **12** | **1008 MiB** |
+
+The widths are the Phase 9-6 admission decision: both families fit the 1 GiB
+budget at once with 16 MiB to spare, which is why the shipped configs declare
+`max_batch_size: 4`. On the CPU config the slabs are fp32 (2× larger): English
+clamps to 5 slots (2 concurrent requests) and Turbo's arena cannot fit the
+remaining budget, so that model takes the sequential fallback (never an error).
+
+| Metric | Value | Notes |
+|---|---|---|
+| Pool budget | 1073741824 B (1 GiB) | `ar_inference.kv_cache_budget_bytes` |
+| Pool resident (`hse_ar_cache_pool_bytes`) | _tbd_ | measured after boot |
+| Peak `hse_vram_device_used_bytes` with the pool | _tbd_ | must stay inside the 10-3 device headroom |
+| Device free headroom during the AR flood | _tbd_ | 10-3 `mem_get_info` free |
+| AR activation peak (`hse_model_peak_activation_bytes`) | _tbd_ | per-model probe |
+
+Boot with `ar_inference.enabled: false` (or `--no-ar-cache`) to measure the same
+catalogue without the pool; the difference is the pool's real device footprint
+(it should match the 1008 MiB arena table plus allocator rounding).
+
 ### Whisper governance knobs
 
 | Config key | Default | Meaning |

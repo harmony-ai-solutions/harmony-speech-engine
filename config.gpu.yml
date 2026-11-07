@@ -5,6 +5,18 @@
 # `num_workers` (FasterWhisper only) = CTranslate2 inter_threads: concurrent
 # transcribes on the shared weights. Phase 10-1 initial values, pending the
 # Phase 10-5 benchmark: turbo 2 / tiny 4; unset means 1 (today's behaviour).
+# `ar_inference` = the shared autoregressive KV-cache pool (Phase 9-2). The
+# Chatterbox English/Turbo entries are `ar_decode`-class as of Phase 9-6 with an
+# initial admission width of 4, justified from this budget: 4 English requests
+# (2 CFG rows each = 8 slabs × 90 MiB) + 4 Turbo requests (4 slabs × 72 MiB) =
+# 1008 MiB ≤ 1 GiB at the default 768-token slot. Pending the benchmark-host
+# `batching:1-vs-N` gate; set `batched_inference: false` (or width 1) to force
+# the proven sequential loop.
+ar_inference:
+  kv_cache_budget_bytes: 1073741824   # 1 GiB, owner-approved initial value (2026-11-07)
+  default_cap_tokens: 768             # ≈30 s per sequence at 25 Hz
+  enabled: true
+
 model_configs:
   - name: "hs1-encoder"
     model: "harmony-ai/harmony-speech-v1"
@@ -245,7 +257,7 @@ model_configs:
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxTTS"
     watermark: true          # Set to false to disable perth audio watermarking
-    max_batch_size: 1
+    max_batch_size: 4        # AR admission width (initial, pending the host gate)
     dtype: "float16"         # T3 backbone; S3Gen/VE stay float32 (see docs/models.md)
     backbone_group: "chatterbox-base"  # shares S3Gen/VE with the other Chatterbox roles
     device_config:
@@ -256,7 +268,7 @@ model_configs:
     model: "resemble-ai/chatterbox-turbo"
     model_type: "ChatterboxTurboTTS"
     watermark: true
-    max_batch_size: 1
+    max_batch_size: 4        # AR admission width (initial, pending the host gate)
     dtype: "float16"         # T3 backbone; own meanflow S3Gen (ungrouped)
     device_config:
      device: "cuda"

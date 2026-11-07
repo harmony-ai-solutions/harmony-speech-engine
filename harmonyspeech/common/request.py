@@ -82,6 +82,14 @@ class EngineRequest:
         # ``pipeline_registry.advance()`` on every forwarding hop, so the engine
         # never has to infer the pipeline position from field presence.
         self.pipeline_state = pipeline_state
+        # Phase 9-4: multi-step decode state. ``unfinished`` means the last
+        # executor result for this request was a partial/progress result, so the
+        # request stays in the scheduler's ``running`` set and is scheduled
+        # again next step. ``progress`` is the latest per-request progress
+        # payload (never client-visible). Both are cleared on every terminal
+        # transition (``clear_progress`` via ``update_request_status``).
+        self.unfinished = False
+        self.progress: dict = {}
 
     def get_artifact(self, field: str):
         """Return the artifact cached for ``field``, or ``None``."""
@@ -112,6 +120,21 @@ class EngineRequest:
         artifacts.clear()
         self.artifacts = None
         logger.debug(f"Request {self.request_id}: released artifacts [{fields}]")
+
+    def set_progress(self, progress: dict | None = None) -> None:
+        """Record a partial decode result (Phase 9-4).
+
+        Marks the request unfinished so the scheduler keeps it in ``running``
+        and schedules it again next step. ``progress`` is request-scoped state
+        only; artifacts are untouched.
+        """
+        self.unfinished = True
+        self.progress = dict(progress or {})
+
+    def clear_progress(self) -> None:
+        """Drop multi-step decode state on a terminal transition (Phase 9-4)."""
+        self.unfinished = False
+        self.progress = {}
 
     def is_waiting(self) -> bool:
         return RequestStatus.is_finished(self.status)

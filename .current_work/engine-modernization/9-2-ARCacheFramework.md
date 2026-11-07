@@ -49,8 +49,52 @@ ar_inference:
 
 ## Checklist
 
-- [ ] Pool + descriptor + allocator landed with unit tests
-- [ ] Config/CLI keys + boot validation + startup arena table
-- [ ] `/metrics` + `/health` series (zero-valued when disabled)
-- [ ] Slot-lifecycle isolation invariant documented + poisoned-slot test green
-- [ ] `summary.md` Implementation Status updated
+- [x] Pool + descriptor + allocator landed with unit tests
+- [x] Config/CLI keys + boot validation + startup arena table
+- [x] `/metrics` + `/health` series (zero-valued when disabled)
+- [x] Slot-lifecycle isolation invariant documented + poisoned-slot test green
+- [x] `summary.md` Implementation Status updated
+
+## Deviations (2026-11-07)
+
+1. **Metrics renderer split into its own module.** The files table lists only
+   `engine/ar_cache.py`, but the metrics text exporter lives in
+   `engine/ar_cache_metrics.py`, following the Phase 7-3/10-1 precedent
+   (`embedding_cache_metrics.py`, `whisper_lane_metrics.py`): a pure renderer is
+   unit-testable without a pool or a GPU. `ar_cache.py` stays torch-only (no
+   logging, no Prometheus).
+2. **`slots` and `cap_tokens` are optional descriptor fields.** `cap_tokens=None`
+   resolves to the pool's `default_cap_tokens` (config `ar_inference.default_cap_tokens`);
+   `slots=None` means "as many whole slabs as the remaining budget fits" (at
+   least one), which is the literal reading of "slot count comes from pool
+   availability + descriptor". An explicit count or slab that does not fit is a
+   `ARCacheBudgetError` at registration (boot error).
+3. **One extra metric series.** The spec's seven series are all emitted; an
+   eighth, `hse_ar_cache_enabled`, follows the embedding-cache/Whisper-lane
+   convention so dashboards can distinguish "disabled" from "zero traffic".
+   `hse_ar_cache_*` are unlabelled aggregate series because the pool is
+   device-wide; per-family detail is in the `/health` `ar_cache.arenas` map and
+   the startup arena table.
+4. **`get_ar_cache_stats()` is also nested in `get_vram_stats()`.** The slabs are
+   ordinary torch allocations and were already inside the device-level
+   `allocated_bytes` / `device_used_bytes` numbers; the explicit `ar_cache` entry
+   makes the pool's footprint honest in the Phase 10-3 story instead of hiding
+   inside "torch allocations". A per-model attribution is deliberately not
+   attempted (the pool is shared).
+5. **`AsyncHarmonySpeech` gained an `get_ar_cache_stats()` proxy.** The serving
+   layer holds the async wrapper, so `/metrics` and `/health` would otherwise
+   read a disabled pool in production. (Note: the wrapper still has no
+   `get_whisper_lane_stats()` proxy — a pre-existing Phase 10-1 gap, out of
+   scope here; the `/metrics` handler degrades to zeroed Whisper series.)
+6. **`tests/unit/initialization/test_engine.py` was updated** to include the new
+   `ar_cache_pool=` kwarg in its two exact-call assertions. That is a direct
+   consequence of threading the pool through the executor seam, not a behaviour
+   change.
+7. **Shipped configs unchanged.** The `ar_inference` block is supported but not
+   written into `config.yml` / `config.gpu.yml`, matching the embedding-cache
+   precedent (keys are documented, defaults apply). The config-honesty table's
+   Chatterbox entries stay `loop` until 9-6 moves them to `ar_decode`.
+8. **README bullet added** (unlike the embedding-cache Phase 7 precedent, which
+   had a docs page only) because the budget/CLI/metrics surface is
+   operator-visible now; the wording states the pool is the foundation for
+   batched AR decoding, not that batching already ships.

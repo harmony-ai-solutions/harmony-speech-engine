@@ -107,9 +107,11 @@ def test_matrix_documents_the_phase_8_5_skip_evidence():
     assert "1.71×" in text and "1.91×" in text
     # Silero: sequential verdict with lane numbers.
     assert "0.95×" in text
-    # Chatterbox: the product decision, quoted verbatim (allow line wrapping).
+    # Chatterbox: Phase 9-3's AR decode + the multilingual documented skip.
     normalized = " ".join(text.replace(">", " ").split())
-    assert "explicitly out of scope** per the product decision (2026-11-05)" in normalized
+    assert "Chatterbox AR decode (Phase 9-3)" in text
+    assert "Multilingual is a documented skip" in text
+    assert "per-request loop with `max_batch_size: 1`" in normalized
 
 
 @pytest.mark.unit

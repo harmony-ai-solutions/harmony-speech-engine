@@ -381,7 +381,14 @@ class AsyncHarmonySpeech:
         for request_output in request_outputs:
             self._request_tracker.process_request_output(request_output, verbose=self.log_requests)
 
-        return (len(request_outputs) + len(forwarded_requests)) > 0
+        # Phase 9-4: a step that only advanced an unfinished decode produces no
+        # client output, but the loop must keep stepping or the row would stall
+        # until a new request arrived. Any remaining waiting/running work counts
+        # as "in progress" (the same predicate the outer loop uses).
+        return bool(
+            (len(request_outputs) + len(forwarded_requests)) > 0
+            or self.engine.has_unfinished_requests()
+        )
 
     async def _engine_abort(self, request_ids: Iterable[str]):
         self.engine.abort_request(request_ids)
@@ -581,3 +588,20 @@ class AsyncHarmonySpeech:
     def get_embedding_cache_stats(self) -> dict:
         """Cross-request embedding-cache accounting of the underlying engine."""
         return self.engine.get_embedding_cache_stats()
+
+    def get_ar_cache_stats(self) -> dict:
+        """Shared AR KV-cache pool accounting of the underlying engine (Phase 9-2)."""
+        return self.engine.get_ar_cache_stats()
+
+    def get_ar_decode_stats(self) -> dict:
+        """Per-AR-model decode progress of the underlying engine (Phase 9-4)."""
+        return self.engine.get_ar_decode_stats()
+
+    def get_whisper_lane_stats(self) -> dict:
+        """Whisper lane accounting of the underlying engine (Phase 10-1).
+
+        The serving layer holds this wrapper, so without this proxy ``/metrics``
+        would render the Whisper lane family as zeros in production (the
+        Phase 10-1 gap recorded in 9-2's deviation 5).
+        """
+        return self.engine.get_whisper_lane_stats()

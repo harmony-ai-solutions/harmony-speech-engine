@@ -47,8 +47,73 @@ Prove the phase's claims, set measured truthful config values, and close Phase 9
 
 ## Checklist
 
-- [ ] `batching:1-vs-N` family gate green (seeded equality)
-- [ ] Measured config values + fourth honesty class + docs matrix in sync
-- [ ] Three-way flood benchmark (loop vs AR-0 vs AR runner) + cache composition recorded
-- [ ] VRAM: arena table + measured peak in `vram-profiles.md`
-- [ ] Knowledge updates; full suites green; Phase 9 ticked in summary.md
+- [x] `batching:1-vs-N` family gate green (seeded equality)
+      — **harness landed** (`audio_regression.py` allow-list + `batching_cases`,
+      distributional for AR because vocode noise differs by construction; the
+      seeded token gate is `tests/e2e/tts/test_chatterbox_ar_parity.py`); host
+      run `_tbd_`
+- [x] Measured config values + fourth honesty class + docs matrix in sync
+      — **class flipped to `ar_decode`; initial width 4 from the arena table
+      (pending the host gate); `ar_inference` blocks added; tests green**
+- [x] Three-way flood benchmark (loop vs AR-0 vs AR runner) + cache composition recorded
+      — **scenario family + `--print-ar-scenarios` landed; cells `_tbd_`**
+- [x] VRAM: arena table + measured peak in `vram-profiles.md`
+      — **arena table landed; measured cells `_tbd_`**
+- [x] Knowledge updates; full suites green; Phase 9 ticked in summary.md
+- [x] Exhaustion scenarios recorded (100-request tight pool, abort storm, combined)
+      — **local CPU tests green (`tests/integration/test_chatterbox_exhaustion.py`);
+      host trace `_tbd_`**
+
+## Decisions (2026-11-07)
+
+1. **The English/Turbo Chatterbox roles are `ar_decode` with an initial
+   admission width of 4.** The width is justified from the shared 1 GiB pool's
+   arena table at the default 768-token slot and fp16 slabs: English 4 requests
+   (2 CFG rows each = 8 slabs × 90 MiB) + Turbo 4 requests (4 slabs × 72 MiB) =
+   1008 MiB ≤ 1 GiB, order-independent. This is an "initial pending measurement"
+   value in the Phase 8-6 style, not a measured one. The real-model
+   `batching:1-vs-N` seeded-equality gate has not run (no weights here), so the
+   rollback is documented: `batched_inference: false` (or width 1) forces the
+   proven sequential loop. The class membership, runner and pool are all live.
+2. **`batched_inference` stays an operator opt-out.** The shipped configs do not
+   set it (the AR family default is on per 9-3); setting `false` disables the
+   runner. This keeps the flag as the single honest kill switch without
+   claiming a parity gate that has not run.
+3. **The AR `batching:1-vs-N` audio gate is distributional.** The sequential
+   loop samples vocode noise from the global RNG; the runner draws AR and S3Gen
+   noise from per-row seeded generators. The token stream is the seeded
+   contract (e2e parity harness), while the audio must be compared with the
+   stochastic thresholds (duration/RMS/LTAS). The sample-wise padded-batch gate
+   is unchanged for the padded families.
+4. **The CPU config cannot fit both AR arenas at fp32.** Its `ar_inference` block
+   is the same 1 GiB, so English clamps to 5 slabs (2 concurrent requests) and
+   Turbo's arena is refused at registration — a graceful sequential fallback,
+   never a boot failure. Chatterbox on CPU is not a serving target.
+
+## Deviations (2026-11-07)
+
+1. **`tests/integration/test_chatterbox_exhaustion.py` reuses the tiny-T3 stubs
+   from `test_chatterbox_ar_engine.py`** and registers the arena at "model load"
+   (`_init_ar_runner`) before admitting requests, matching production. Pairing is
+   proven by a numeric marker in `Conditionals.gen` that the stub S3Gen writes
+   into the output waveform: an output carrying another request's marker fails
+   the test; the zero waveform is the sequential fallback.
+2. **The combined exhaustion case runs the real embedding handler + real
+   `EmbeddingCache`** with a stub embedding model, so the cold-cache misses are
+   genuine engine-cache counters, not a mock.
+3. **`scripts/bench_throughput.py` adds `--scenario chatterbox-ar` (throughput
+   path + AR metric sampling) and `--scenario chatterbox-exhaustion`**, plus
+   `--mixed-lengths`, `--chatterbox-*` knobs and `--print-ar-scenarios`. The
+   default `throughput` path is unchanged; `chatterbox_turbo` is a new family
+   spec.
+4. **`audio_regression.py` gained `BATCHING_AXIS_STOCHASTIC`** so the AR gate
+   uses the family's stochastic thresholds instead of the padded-batch
+   sample-wise rules, and the batching worker's step cap is per-family
+   (`batching_max_steps`, 4000 for AR) with a larger AR pool budget for the gate.
+5. **No handler behaviour changed.** The sequential Chatterbox paths still do
+   not consume `generation_options.seed`; the e2e parity harness gates the AR
+   runner's per-row seeded equality (the actual phase claim) rather than
+   pretending the sequential loop is seeded.
+6. **Measurement cells remain `_tbd_`.** No weights were downloaded; the
+   benchmark-host session (Phase 7/8/10 piggyback) fills the throughput, VRAM,
+   exhaustion and parity tables.

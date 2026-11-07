@@ -413,7 +413,7 @@ def test_batching_axis_allow_list_is_registered_and_split_from_pending():
 
 
 def test_batching_axis_covers_every_family_with_a_batched_handler():
-    """8-4 enabled the last two families; nothing is left waiting."""
+    """8-4 enabled the padded-batch families; 9-6 adds the AR-decode families."""
     assert ar.BATCHING_AXIS_PENDING == {}
     assert {
         "openvoice_v1",
@@ -421,10 +421,32 @@ def test_batching_axis_covers_every_family_with_a_batched_handler():
         "melotts",
         "harmonyspeech",
         "voicefixer",
+        "chatterbox",
+        "chatterbox_turbo",
     } == ar.BATCHING_AXIS_ENABLED
-    for family in ("harmonyspeech", "voicefixer"):
+    for family in ("harmonyspeech", "voicefixer", "chatterbox", "chatterbox_turbo"):
         cases = ar._cases_for_axis(ar.parse_axis("batching:1-vs-4"), family)
         assert cases is ar.FAMILY_SPECS[family]["batching_cases"]
+    # AR decode's audio gate is distributional (vocode noise differs by
+    # construction); the seeded token gate lives in the e2e parity harness.
+    assert ar.BATCHING_AXIS_STOCHASTIC == {"chatterbox", "chatterbox_turbo"}
+
+
+def test_ar_batching_verdict_is_distributional_not_sample_wise():
+    axis = ar.parse_axis("batching:1-vs-4")
+    metrics = {
+        "passed": True,
+        "failures": [],
+        "max_abs_diff": 0.5,
+        "duration_pct": 0.0,
+        "logmel_mse": 0.5,
+        "corr": 0.5,
+    }
+    passed, failures = ar.verdict_for_axis(axis, metrics, family="chatterbox")
+    assert passed is True and failures == []
+    # The same metrics on a padded-batch family would fail the sample-wise gate.
+    passed, failures = ar.verdict_for_axis(axis, metrics, family="openvoice_v1")
+    assert passed is False and failures
 
 
 def test_batching_axis_returns_the_registered_cases_for_an_enabled_family():

@@ -7,6 +7,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, avoids a runtime import cyc
 
 __all__ = [
     "RequestOutput",
+    "UnfinishedRequestOutput",
     "TextToSpeechRequestOutput",
     "SpeechEmbeddingRequestOutput",
     "SpeechSynthesisRequestOutput",
@@ -26,6 +27,13 @@ class RequestOutput:
         finish_reason: Reason why this request finished, if set.
         error: Error message if finish_reason is "error", otherwise None.
         metrics: Metrics associated with the request.
+        unfinished: ``True`` for a partial/progress result from an executor
+            that is still decoding this request across engine steps (Phase
+            9-4). Such a result is consumed by the engine, never handed to the
+            client; it has no ``finish_reason``.
+        progress: Per-request progress payload for an ``unfinished`` result
+            (convention: ``{"tokens": int, "step": int}``). ``None`` for a
+            terminal result.
     """
 
     def __init__(
@@ -34,14 +42,55 @@ class RequestOutput:
         finish_reason: str | None = None,
         error: str | None = None,
         metrics: RequestMetrics | None = None,
+        unfinished: bool = False,
+        progress: dict | None = None,
     ) -> None:
         self.request_id = request_id
         self.finish_reason = finish_reason
         self.error = error
         self.metrics = metrics
+        self.unfinished = bool(unfinished)
+        self.progress = progress
 
     def finished(self) -> bool:
         return self.finish_reason is not None
+
+    def is_unfinished(self) -> bool:
+        """True when this is a partial decode result (never client-visible)."""
+        return self.unfinished
+
+
+class UnfinishedRequestOutput(RequestOutput):
+    """Partial result for a request that is still decoding (Phase 9-4).
+
+    An executor returns this instead of a final output while its row is still
+    producing tokens. The engine records ``progress`` on the in-flight
+    ``EngineRequest`` and keeps the request in the scheduler's ``running`` set
+    for the next step; the client receives exactly one final response once a
+    terminal result arrives.
+
+    ``finish_reason`` is deliberately ``None``: :meth:`RequestOutput.finished`
+    stays ``False`` so no code path can mistake progress for completion. The
+    ``unfinished`` marker (not a null finish reason) is what the engine keys on,
+    because an error result also carries ``finish_reason``.
+    """
+
+    def __init__(
+        self,
+        request_id: str,
+        progress: dict | None = None,
+        metrics: RequestMetrics | None = None,
+    ) -> None:
+        super().__init__(
+            request_id=request_id,
+            finish_reason=None,
+            metrics=metrics,
+            unfinished=True,
+            progress=dict(progress or {}),
+        )
+
+    def __repr__(self) -> str:
+        return f"UnfinishedRequestOutput(request_id={self.request_id}, progress={self.progress})"
 
 
 class TextToSpeechRequestOutput(RequestOutput):

@@ -13,7 +13,9 @@ class ExecutorBase(ABC):
     that can execute the model on multiple devices.
     """
 
-    def __init__(self, model_config: ModelConfig, weight_registry=None, embedding_cache=None) -> None:
+    def __init__(
+        self, model_config: ModelConfig, weight_registry=None, embedding_cache=None, ar_cache_pool=None
+    ) -> None:
         self.model_config = model_config
         self.device_config = model_config.device_config
         # Engine-owned shared-weight registry (Phase 4-3). Executors for configs
@@ -22,6 +24,9 @@ class ExecutorBase(ABC):
         # Engine-owned cross-request embedding cache (Phase 7-1); None means
         # disabled — every consumer must stay None-safe.
         self.embedding_cache = embedding_cache
+        # Engine-owned shared AR KV-cache pool (Phase 9-2); None means disabled —
+        # consumers fall back to their sequential path.
+        self.ar_cache_pool = ar_cache_pool
 
         self._init_executor()
         logger.info(
@@ -42,6 +47,20 @@ class ExecutorBase(ABC):
         """Checks if the executor is healthy. If not, it should raise an
         exception."""
         raise NotImplementedError
+
+    def release_request(self, request_id: str) -> None:
+        """Tell the runner a request will never be scheduled again (Phase 9-4).
+
+        Duck-typed hook the engine calls on abort/disconnect and deadline expiry
+        mid-decode. The AR runner (9-3) uses it to drop the decode row and free
+        its 9-2 cache slot. A runner without the hook is a no-op, so no executor
+        is forced to implement it.
+        """
+        worker = getattr(self, "driver_worker", None)
+        runner = getattr(worker, "model_runner", None)
+        hook = getattr(runner, "release_request", None)
+        if callable(hook):
+            hook(request_id)
 
 
 class ExecutorAsyncBase(ExecutorBase):

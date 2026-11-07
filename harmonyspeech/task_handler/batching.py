@@ -17,7 +17,8 @@ the historical name (Phase 5-2 measured phones); the machinery is unit-agnostic:
 axis unit      one row         steps that pad on it
 =============  ==============  ===============================================
 ``token``      phones / ids    synthesizers (OpenVoice V1, MeloTTS, Harmony
-                               Speech): phone / tone / language-id sequences
+                               Speech): phone / tone / language-id sequences;
+                               the Phase 9-5 S3Gen hop: speech-token sequences
 ``frame``      mel frames      tone converters, restorers, vocoders, Harmony
                                Speech encoder: mel or feature ``[bins, T]``
 ``sample``     audio samples   speaker embedders and any raw-waveform step
@@ -90,6 +91,34 @@ BATCHED_INFERENCE_FAMILIES = frozenset(
 def supports_batched_inference(model_config) -> bool:
     """Return True when this executor's model type has a batched forward."""
     return getattr(model_config, "model_type", None) in BATCHED_INFERENCE_FAMILIES
+
+
+#: Model types whose decode is a token-level AR loop on the shared KV pool
+#: (Phase 9-3). They are not padded-batch families: one engine step decodes one
+#: speech token per active row through :class:`ARBatchRunner`. This set must stay
+#: equal to ``processing.scheduler.AR_INFERENCE_MODEL_TYPES`` (the runtime
+#: admission flag); both name the same two Phase 9 members.
+AR_INFERENCE_FAMILIES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+
+
+def supports_ar_batching(model_config) -> bool:
+    """True when this model type has the Phase 9-3 token-level AR runner."""
+    return getattr(model_config, "model_type", None) in AR_INFERENCE_FAMILIES
+
+
+def ar_batching_enabled(model_config) -> bool:
+    """Resolve the AR-runner flag for a model.
+
+    ``batched_inference`` is shared with the padded-batch families: ``None``
+    (unset) uses the family default (on for the AR families), ``False`` forces
+    the sequential loop even when the pool is available. The caller still has to
+    check the pool/arena and the ``len == 1`` fallback.
+    """
+    if not supports_ar_batching(model_config):
+        return False
+    flag = getattr(model_config, "batched_inference", None)
+    return True if flag is None else bool(flag)
+
 
 
 def batched_inference_enabled(model_config) -> bool:
@@ -308,9 +337,7 @@ def plan_batches(
         group_min = max(1, min(int(lengths[index]) for index in current + [candidate_index]))
         if group_max / group_min > max_ratio:
             return False
-        if token_budget is not None and (len(current) + 1) * group_max > token_budget:
-            return False
-        return True
+        return not (token_budget is not None and (len(current) + 1) * group_max > token_budget)
 
     for index in order:
         if current and not _fits(index):

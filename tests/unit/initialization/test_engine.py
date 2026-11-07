@@ -90,6 +90,7 @@ def test_engine_uses_cpu_executor_for_cpu_device(mock_cpu_exec, mock_scheduler, 
         model_config=cpu_model_config,
         weight_registry=engine.weight_registry,
         embedding_cache=engine.embedding_cache,
+        ar_cache_pool=engine.ar_cache_pool,
     )
     assert engine.model_executors["tts-cpu"] is mock_instance
 
@@ -108,6 +109,7 @@ def test_engine_uses_gpu_executor_for_gpu_device(mock_gpu_exec, mock_scheduler, 
         model_config=gpu_model_config,
         weight_registry=engine.weight_registry,
         embedding_cache=engine.embedding_cache,
+        ar_cache_pool=engine.ar_cache_pool,
     )
     assert engine.model_executors["tts-gpu"] is mock_instance
 

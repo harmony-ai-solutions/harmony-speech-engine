@@ -193,6 +193,17 @@ class EngineConfig:
     # Longest audio a single Whisper request may carry (Phase 10-3). The startup
     # probe runs this shape and the value is the whisper-side request-size cap.
     whisper_max_audio_seconds: float = 300.0
+    # Shared autoregressive KV-cache pool (Phase 9-2). One device-wide budget
+    # for every AR family's static KV slabs; `False` (CLI `--no-ar-cache`)
+    # disables the pool entirely and callers take their sequential fallback.
+    # YAML surface is the nested `ar_inference` block:
+    #   ar_inference:
+    #     kv_cache_budget_bytes: 1073741824
+    #     default_cap_tokens: 768
+    # 1 GiB is the owner-approved initial value (2026-11-07); tune on data.
+    ar_cache_enabled: bool = True
+    ar_cache_budget_bytes: int = 1073741824
+    ar_cache_default_cap_tokens: int = 768
 
     def __post_init__(self):
         """Verify configs are valid & consistent with each other."""
@@ -218,6 +229,13 @@ class EngineConfig:
                 f"got {self.whisper_max_audio_seconds!r}"
             )
 
+        budget = self.ar_cache_budget_bytes
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ValueError(f"ar_cache_budget_bytes must be a positive int, got {budget!r}")
+        cap_tokens = self.ar_cache_default_cap_tokens
+        if isinstance(cap_tokens, bool) or not isinstance(cap_tokens, int) or cap_tokens <= 0:
+            raise ValueError(f"ar_cache_default_cap_tokens must be a positive int, got {cap_tokens!r}")
+
     def to_dict(self):
         """Return the configs as a dictionary, for use in **kwargs."""
         return dict((field.name, getattr(self, field.name)) for field in fields(self))
@@ -233,6 +251,20 @@ class EngineConfig:
             del model_cfg["device_config"]
             model_configs.append(ModelConfig(device_config=device_config, **model_cfg))
 
+        # Phase 9-2: the AR cache knobs live in one nested block so future AR
+        # tuning stays grouped; flat `ar_cache_*` aliases are accepted for
+        # deployments that prefer the embedding-cache style.
+        ar_inference = config_data.get("ar_inference") or {}
+        if not isinstance(ar_inference, dict):
+            raise ValueError(f"ar_inference must be a mapping, got {type(ar_inference).__name__}")
+        ar_budget = ar_inference.get(
+            "kv_cache_budget_bytes", config_data.get("ar_cache_budget_bytes", 1073741824)
+        )
+        ar_cap_tokens = ar_inference.get(
+            "default_cap_tokens", config_data.get("ar_cache_default_cap_tokens", 768)
+        )
+        ar_enabled = ar_inference.get("enabled", config_data.get("ar_cache_enabled", True))
+
         return EngineConfig(
             model_configs=model_configs,
             request_timeout_s=config_data.get("request_timeout_s", 120.0),
@@ -247,6 +279,9 @@ class EngineConfig:
                 else int(config_data["whisper_vram_budget_bytes"])
             ),
             whisper_max_audio_seconds=float(config_data.get("whisper_max_audio_seconds", 300.0)),
+            ar_cache_enabled=bool(ar_enabled),
+            ar_cache_budget_bytes=int(ar_budget),
+            ar_cache_default_cap_tokens=int(ar_cap_tokens),
         )
 
 

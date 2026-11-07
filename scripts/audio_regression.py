@@ -115,8 +115,16 @@ BATCHING_CORR_MIN = 0.999
 #: and its config flag land — never before, the flag must not advertise a
 #: capability the executor lacks).
 BATCHING_AXIS_ENABLED = frozenset(
-    {"openvoice_v1", "openvoice_v2", "melotts", "harmonyspeech", "voicefixer"}
+    {"openvoice_v1", "openvoice_v2", "melotts", "harmonyspeech", "voicefixer", "chatterbox", "chatterbox_turbo"}
 )
+
+#: AR-decode families whose ``batching:1-vs-N`` gate is **distributional**, not
+#: sample-wise: the sequential loop samples vocode noise from the global RNG while
+#: the AR runner draws each row's AR + S3Gen noise from a per-row seeded
+#: generator, so the two paths agree on the token stream (the e2e seeded parity
+#: harness gates that) but not sample-for-sample on the audio. The gate still
+#: asserts duration/RMS/LTAS stay inside the stochastic thresholds.
+BATCHING_AXIS_STOCHASTIC = frozenset({"chatterbox", "chatterbox_turbo"})
 
 #: Families with ``batching_cases`` already registered (so a later Phase 8 task
 #: only flips the allow-list entry above) and the task that enables them.
@@ -254,6 +262,44 @@ FAMILY_SPECS: dict[str, dict] = {
                 "label": "real speech -> synthetic vowel timbre: isolates timbre porting (WER reported, not gated)",
             },
         ],
+        # `batching:1-vs-N` axis (Phase 9-6): the AR runner decodes N requests in
+        # shared steps. Four mixed-length texts so rows leave the batch at
+        # different decode steps. The verdict is distributional (see
+        # BATCHING_AXIS_STOCHASTIC); the seeded token equality is the e2e
+        # parity harness (tests/e2e/tts/test_chatterbox_ar_parity.py).
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "chatterbox",
+                "text": "batch_1",
+                "label": "short text",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "chatterbox",
+                "text": "batch_2",
+                "label": "medium text",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "chatterbox",
+                "text": "batch_3",
+                "label": "long text",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "chatterbox",
+                "text": "batch_4",
+                "label": "shortest text",
+            },
+        ],
+        # AR decode spans one engine step per token; the generic 20-step cap in
+        # `_run_batching_worker` is far too small.
+        "batching_max_steps": 4000,
     },
     "chatterbox_turbo": {
         "models": [
@@ -263,6 +309,40 @@ FAMILY_SPECS: dict[str, dict] = {
         "cases": [
             {"name": "tts_bundled_voice", "kind": "tts", "model": "chatterbox_turbo", "text": "en_short"},
         ],
+        # `batching:1-vs-N` axis (Phase 9-6): Turbo's AR runner (one row per
+        # request, no CFG). Distributional verdict; seeded token equality is the
+        # e2e parity harness.
+        "batching_cases": [
+            {
+                "name": "batch_short",
+                "kind": "tts",
+                "model": "chatterbox_turbo",
+                "text": "batch_1",
+                "label": "short text",
+            },
+            {
+                "name": "batch_medium",
+                "kind": "tts",
+                "model": "chatterbox_turbo",
+                "text": "batch_2",
+                "label": "medium text",
+            },
+            {
+                "name": "batch_long",
+                "kind": "tts",
+                "model": "chatterbox_turbo",
+                "text": "batch_3",
+                "label": "long text",
+            },
+            {
+                "name": "batch_shortest",
+                "kind": "tts",
+                "model": "chatterbox_turbo",
+                "text": "batch_4",
+                "label": "shortest text",
+            },
+        ],
+        "batching_max_steps": 4000,
     },
     "chatterbox_multilingual": {
         "models": [
@@ -969,9 +1049,9 @@ def _run_batching_worker(job, engine, text_table) -> dict:
             pending.append(request_id)
 
         seen: set[str] = set()
-        seen: set[str] = set()
         steps = 0
-        while pending and steps < 20:
+        max_steps = int(job.get("batching_max_steps", 20))
+        while pending and steps < max_steps:
             steps += 1
             outputs, _forwarded = await engine.engine.step_async()
             for output in outputs:
@@ -1050,7 +1130,10 @@ def run_worker(job_path: str) -> int:
     engine_args = AsyncEngineArgs(disable_log_stats=True, disable_log_requests=True)
     from harmonyspeech.common.config import EngineConfig
 
-    engine_config = EngineConfig(model_configs=model_configs)
+    engine_config = EngineConfig(
+        model_configs=model_configs,
+        ar_cache_budget_bytes=int(job["settings"].get("ar_cache_budget_bytes", 1073741824)),
+    )
     engine = AsyncHarmonySpeech.from_engine_args_and_config(
         engine_args, engine_config, start_engine_loop=not batching_axis
     )
@@ -1248,7 +1331,7 @@ SHARING_MAX_ABS_DIFF = 1e-3
 SHARING_LOG_MEL_MSE = 1e-2
 
 
-def verdict_for_axis(axis: Axis, metrics: dict) -> tuple[bool, list[str]]:
+def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tuple[bool, list[str]]:
     """Apply axis-specific rules on top of the family metrics."""
     if axis.identity:
         # Same configuration twice must be bit-identical.
@@ -1269,6 +1352,11 @@ def verdict_for_axis(axis: Axis, metrics: dict) -> tuple[bool, list[str]]:
         return (not failures), failures
 
     if axis.kind == "batching":
+        if family in BATCHING_AXIS_STOCHASTIC:
+            # AR decode: the token stream is seeded, but the vocode noise differs
+            # by construction between the loop (global RNG) and the runner
+            # (per-row generators). Assert the distribution, not the samples.
+            return metrics["passed"], list(metrics["failures"])
         # Padded batching is a pure reshaping of the same computation (noise
         # disabled on both sides), so a sample inside a batch must match the
         # solo run up to GPU accumulation-order noise.
@@ -1336,12 +1424,19 @@ def _run_side(
 ) -> dict:
     out_dir = os.path.join(workdir, f"{family}_{side}")
     manifest_path = os.path.join(workdir, f"{family}_{side}.json")
+    spec = FAMILY_SPECS[family]
+    settings = side_settings(axis, side)
+    if axis.kind == "batching" and family in BATCHING_AXIS_STOCHASTIC:
+        # AR slabs are large; give the gate enough budget for N requests so the
+        # comparison really is N-in-one-batch (not a pool-refused fallback).
+        settings["ar_cache_budget_bytes"] = 4 * 1024**3
     job = {
         "family": family,
         "side": side,
-        "settings": side_settings(axis, side),
+        "settings": settings,
         "use_gpu": use_gpu,
         "cases": cases if cases is not None else _cases_for_axis(axis, family),
+        "batching_max_steps": spec.get("batching_max_steps", 20),
         "out_dir": out_dir,
         "manifest": manifest_path,
     }
@@ -1472,9 +1567,11 @@ def run_harness(args) -> int:
         side_b = _run_side(family, axis.side_b, axis, use_gpu, workdir, cases=cases)
 
         if axis.kind == "batching":
-            # The family's stochastic thresholds are not what this axis asserts;
-            # the batching verdict below is sample-wise.
-            kind = "deterministic"
+            # The family's stochastic thresholds are not what a padded-batch
+            # axis asserts (it is sample-wise). AR decode is the exception: its
+            # vocode noise differs by construction, so its gate stays
+            # distributional.
+            kind = "stochastic" if family in BATCHING_AXIS_STOCHASTIC else "deterministic"
 
         family_entry = {
             "kind": kind,
@@ -1508,7 +1605,7 @@ def run_harness(args) -> int:
                 report["passed"] = False
                 continue
             metrics = compute_metrics(a["wav"], b["wav"], kind)
-            passed, failures = verdict_for_axis(axis, metrics)
+            passed, failures = verdict_for_axis(axis, metrics, family=family)
 
             # Content fidelity for VC: both rendered sides must transcribe to
             # the known source sentence. Reported always; soft gate (warn) at

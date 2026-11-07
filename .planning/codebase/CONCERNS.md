@@ -29,11 +29,8 @@ limits, real batching/streaming, VRAM residency management, dependency hygiene.
 | `max_batch_size` was decorative: schedulers admitted 10 requests and handlers looped one at a time | **RESOLVED** (5-2, 5-3) | padded-batch forward for the one-shot synthesizers (`infer_batched`, length-similar sub-batching, token budget); every value in `config.gpu.yml`/`config.yml` now matches executor reality (loops = 1, Chatterbox = 1) |
 | Requests above a model's `max_batch_size` were silently dropped by the scheduler | **RESOLVED** (5-1) | `_schedule_waiting_requests` returns the leftover queue instead of the drained input copy; regression test in `tests/integration/test_batching_invariants.py` |
 | Batch mispairing could only be caught in review | **RESOLVED** (5-1) | `assert_batch_aligned` + `EngineBatchError` (typed per-request errors) and a per-step request-id uniqueness guard in `_build_result`; engine-level invariant suite |
-| "Real batching" listed as an open gap (`gpu_model_runner` loop) | **PARTIALLY RESOLVED** (5-2) | one-shot synthesis families batch for real; Chatterbox stays autoregressive by decision (needs a per-sequence KV cache) and scales by replicas, documented in `docs/batching.md` |
-
-Still open after Phase 5 (now addressed by Phase 8): Chatterbox AR batching
-with a KV cache; batched tone-converter/encoder hops (they were per-item
-loops and capped end-to-end clone throughput at ~1.9 req/s).
+| "Real batching" listed as an open gap (`gpu_model_runner` loop) | **RESOLVED** (5-2, 8-6, 9-6) | every batchable family has a padded-batch, lane or AR-decode path; Chatterbox English/Turbo decode token-level AR rows on the shared KV pool (`ar_decode`, width 4), documented in `docs/batching.md` |
+| Chatterbox AR batching (per-sequence KV cache) | **RESOLVED** (9-1…9-6) | shared size-capped `ARCachePool` (9-2), `ARBatchRunner` with per-row seeded generators (9-3), "unfinished" multi-step scheduling + capacity admission (9-4), padded S3Gen vocode hop (9-5), class flip + measured-from-arena width (9-6) |
 
 ## Phase 7 resolutions (2026-11-06)
 
@@ -55,9 +52,9 @@ until Phase 8 gave them a padded-batch forward.
 | KittenTTS could not batch at all (static ONNX batch dim 1) | **RESOLVED** (8-5) | parallel lanes over one shared session: `max_batch_size` *is* the lane count (`4`), 1.71× at 4 lanes through the HTTP path is re-measured in §Phase 8 |
 | HarmonySpeech synthesizer stayed a loop | **DOCUMENTED SKIP** (8-4) | vendored ForwardTacotron drifts 0.16 peak under padding (bidirectional predictors/postnet); `max_batch_size: 1` is the honest value |
 
-Remaining batching work after Phase 8: the Chatterbox family only (per-sequence
-KV-cache scheduler, a separate workstream). Everything else is either batched,
-laned, or a documented skip in `docs/batching.md`.
+The last remaining batching family after Phase 8 was Chatterbox; Phase 9 closed
+it (shared KV-cache pool + AR runner). Everything else is either batched, laned,
+or a documented skip in `docs/batching.md`.
 
 ## Phase 10 resolutions (2026-11-07)
 
@@ -69,12 +66,21 @@ laned, or a documented skip in `docs/batching.md`.
 | The window batcher changes output semantics and has not been parity-gated on real weights | **OPEN BY DECISION** (10-5, dated 2026-11-07) | stays **opt-in** (`batched_inference` unset in shipped configs) until the benchmark-host B=1 parity gate passes; hermetic parity harness + three safe fallbacks are in place |
 | Phase 10 measurements | **PENDING** | every Phase 10 table cell is `_tbd_` until the benchmark-host session (piggyback on the Phase 7/8 run) |
 
+## Phase 9 resolutions (2026-11-07)
+
+| Finding | Status | Fix |
+|---|---|---|
+| Chatterbox English/Turbo could only decode one request per step (flat ~0.6 req/s at c=8) | **RESOLVED** (9-1…9-6) | `ARBatchRunner` decodes one speech token per row per engine step on the shared, size-capped `ARCachePool`; per-row `torch.Generator` seeded from the request; rows drop on EOS/cap; capacity admission + "unfinished" scheduling; the sequential loop is the `len==1`/refusal/flag-off fallback. Shipped class `ar_decode`, width 4 justified from the 1 GiB arena table |
+| Chatbot Turbo T3 could not load from its checkpoint (`T3Config(**_TURBO_HP)` built from the wrong keys) | **RESOLVED** (9-3) | fixed in the Chatterbox factory; Turbo's structurally different `inference_turbo` loop (no CFG, logits-processor sampler) has its own runner contract |
+| Turbo's meanflow vocode hop batches nothing | **DOCUMENTED SKIP** (9-5) | `flow_inference` hard-codes `torch.randn(1, 80, …)` and the `noised_mels` placement uses one `prompt_len`; Turbo AR decode is batched, its vocode stays per row |
+| AR batching could change output | **GATED** (9-3/9-6) | per-row generators make a row's tokens identical alone or batched (unit + e2e parity harness); the real-model `batching:1-vs-N` audio gate is distributional by construction (vocode noise differs) and is `_tbd_` on the host |
+
 ## Overview
 
 The engine hosts every model in a YAML config as a permanently resident executor, executes batches request-by-request in Python loops, and transports all audio as base64 inside JSON. Three properties dominate the risk profile:
 
 1. **VRAM residency.** `config.gpu.yml` declares 28 models, 20 of them on `cuda`, and every CUDA model is loaded onto the same device at startup.
-2. **No streaming (batching resolved).** Phase 5/8 gave every batchable family a padded-batch or lane path; the Chatterbox family stays a per-request loop by decision. `output_options.stream=true` is still rejected.
+2. **No streaming (batching resolved).** Phase 5/8/9 gave every batchable family a padded-batch, lane or AR-decode path; Chatterbox English/Turbo now decode on the shared KV pool. `output_options.stream=true` is still rejected.
 3. **Transport and dependency coupling.** Full WAV payloads cross the API as base64 JSON, and a module-level `import chatterbox` makes the optional `--no-deps` Chatterbox install mandatory for the server to boot at all.
 
 ## Highest-Risk Items
@@ -269,14 +275,14 @@ The engine hosts every model in a YAML config as a permanently resident executor
 ### Per-Request Batching in Name Only — RESOLVED (Phases 5 & 8; Chatterbox excepted by decision)
 
 - **Was:** The scheduler built per-model batches up to `max_batch_size`, but every `_execute_*` method looped `for i, x in enumerate(inputs)` and ran the model once per item; `max_batch_size` was decorative for most families.
-- **Now:** the one-shot synthesizers (Phase 5-2), the speaker embedders (8-2), the tone converters (8-3), the HarmonySpeech vocoder and VoiceFixer restorer/vocoder (8-4) forward padded sub-batches; KittenTTS runs parallel lanes (8-5); Whisper runs M CTranslate2 lanes with an opt-in cross-request window batcher (10-1/10-2); Silero's sequential queue is a documented skip. Every remaining `1` in the configs is a measured decision (`docs/batching.md`). The Chatterbox family stays a per-request loop by product decision (KV-cache workstream, Phase 9).
+- **Now:** the one-shot synthesizers (Phase 5-2), the speaker embedders (8-2), the tone converters (8-3), the HarmonySpeech vocoder and VoiceFixer restorer/vocoder (8-4) forward padded sub-batches; KittenTTS runs parallel lanes (8-5); Whisper runs M CTranslate2 lanes with an opt-in cross-request window batcher (10-1/10-2); Chatterbox English/Turbo decode token-level AR rows on the shared KV pool (9-1…9-6); Silero's sequential queue and multilingual/embedding/VC are documented skips. Every remaining `1` in the configs is a measured decision (`docs/batching.md`).
 - **Files:** `harmonyspeech/task_handler/model_runner_base.py`, `harmonyspeech/task_handler/batching.py`, `docs/batching.md`
 - **Remaining:** remove the historical `# FIXME: This is not properly batched` comments that still sit on migrated handlers, and the Comment/Chapter GPU runner stub (already tracked above).
 
 
 ### Scheduler Serializes Models With In-Flight Work
 
-- **Problem:** `_schedule_waiting_requests` refuses to admit new requests for a model while it has running requests (`scheduler.py:172-175`). Because `free_finished_requests()` runs only after a full step, a multi-step pipeline holds the model slot across steps and blocks unrelated requests for that model.
+- **Problem:** `_schedule_waiting_requests` refuses to admit new requests for a model while it has running requests (`scheduler.py:172-175`). Because `free_finished_requests()` runs only after a full step, a multi-step pipeline holds the model slot across steps and blocks unrelated requests for that model. **Phase 9-4** adds a capacity-based exception for AR families: unfinished rows stay RUNNING and the model keeps admitting while the shared pool has free slots and the per-step width allows, so a Chatterbox decode no longer starves its own family. Non-AR families keep the boolean rule byte-for-byte.
 - **Files:** `harmonyspeech/processing/scheduler.py:134-230`
 - **Impact:** Head-of-line blocking across multi-step pipelines (VAD → embed → synth → tone convert); a slow Chatterbox request stalls all Chatterbox traffic.
 - **Improvement path:** Track per-model in-flight capacity instead of a boolean, and release slots when a pipeline step finishes rather than at step end.
