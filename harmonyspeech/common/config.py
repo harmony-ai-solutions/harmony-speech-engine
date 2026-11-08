@@ -27,7 +27,7 @@ class DeviceConfig:
 
 #: Accepted ``s3gen_precision`` values (Phase 11-3). Deliberately strict: the
 #: knob mirrors the docs/models.md precision table, not every torch dtype alias.
-_VALID_S3GEN_PRECISIONS = ("fp32", "fp16")
+_VALID_S3GEN_PRECISIONS = ("float32", "float16")
 
 
 class ModelConfig:
@@ -89,8 +89,8 @@ class ModelConfig:
             (``max_batch_size``). Default ``8`` (owner-approved initial value);
             inert for every other model type.
         s3gen_precision: Precision for the S3Gen vocoder hop of a Chatterbox
-            entry (Phase 11-3). ``"fp32"`` (default) keeps the pre-experiment
-            behaviour byte-identical; ``"fp16"`` runs S3Gen's *forwards* under
+            entry (Phase 11-3). ``"float32"`` (default) keeps the pre-experiment
+            behaviour byte-identical; ``"float16"`` runs S3Gen's *forwards* under
             CUDA ``torch.autocast`` while its master weights stay float32 (the
             Phase 11-2 experiment: seeded audibility gate 7/7 PASS, batched VC
             c=8 1.51×). It is per-model, so a mixed deployment stays honest.
@@ -122,7 +122,7 @@ class ModelConfig:
         batch_token_budget: int | None = None,
         num_workers: int = 1,
         whisper_window_batch_size: int = 8,
-        s3gen_precision: str = "fp32",
+        s3gen_precision: str = "float32",
     ) -> None:
         self.name = name
         self.model = model
@@ -180,19 +180,19 @@ class ModelConfig:
             )
         self.whisper_window_batch_size = whisper_window_batch_size
 
-        # Phase 11-3: S3Gen vocode precision knob. Default "fp32" is the
-        # pre-experiment behaviour; "fp16" promotes the Phase 11-2 autocast
+        # Phase 11-3: S3Gen vocode precision knob. Default "float32" is the
+        # pre-experiment behaviour; "float16" promotes the Phase 11-2 autocast
         # experiment to an honest, per-model config value. Kept strict (no
         # dtype aliases) so the shipped surface matches docs/models.md.
         if not isinstance(s3gen_precision, str):
             raise ValueError(
-                "s3gen_precision must be 'fp32' or 'fp16', "
+                "s3gen_precision must be 'float32' or 'float16', "
                 f"got {s3gen_precision!r}"
             )
         normalized_precision = s3gen_precision.strip().lower()
         if normalized_precision not in _VALID_S3GEN_PRECISIONS:
             raise ValueError(
-                "s3gen_precision must be 'fp32' or 'fp16', "
+                "s3gen_precision must be 'float32' or 'float16', "
                 f"got {s3gen_precision!r}"
             )
         self.s3gen_precision = normalized_precision
@@ -320,6 +320,7 @@ class EngineConfig:
         )
         ar_enabled = ar_inference.get("enabled", config_data.get("ar_cache_enabled", True))
 
+        EngineConfig._verify_backbone_group_s3gen_precision(model_configs)
         return EngineConfig(
             model_configs=model_configs,
             request_timeout_s=config_data.get("request_timeout_s", 120.0),
@@ -338,6 +339,38 @@ class EngineConfig:
             ar_cache_budget_bytes=int(ar_budget),
             ar_cache_default_cap_tokens=int(ar_cap_tokens),
         )
+
+    @staticmethod
+    def _verify_backbone_group_s3gen_precision(model_configs: list[ModelConfig]) -> None:
+        """Phase 11-3 flip guard: one shared S3Gen, one precision.
+
+        Entries in the same ``backbone_group`` share a single S3Gen instance,
+        so a mixed ``s3gen_precision`` across the group would silently become
+        "last writer wins" at load time. Fail loudly instead. Only the
+        S3Gen-vocode families participate (``ChatterboxEmbedding`` has no
+        vocode and never writes the seam value).
+        """
+        s3gen_model_types = {
+            "ChatterboxTTS",
+            "ChatterboxMultilingualTTS",
+            "ChatterboxVC",
+        }
+        seen: dict[str, tuple[str, str]] = {}
+        for cfg in model_configs:
+            group = getattr(cfg, "backbone_group", None)
+            if not group or cfg.model_type not in s3gen_model_types:
+                continue
+            precision = getattr(cfg, "s3gen_precision", "float32")
+            if group in seen:
+                other_name, other_precision = seen[group]
+                if other_precision != precision:
+                    raise ValueError(
+                        f"backbone_group '{group}' shares one S3Gen, so all its"
+                        f" S3Gen-vocode entries must agree on s3gen_precision:"
+                        f" {other_name}={other_precision}, {cfg.name}={precision}."
+                    )
+            else:
+                seen[group] = (cfg.name, precision)
 
 
 _STR_DTYPE_TO_TORCH_DTYPE = {

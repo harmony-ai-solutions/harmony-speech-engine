@@ -931,13 +931,13 @@ class HarmonySpeechEngine:
             # Phase 11-3: prove which S3Gen vocode precision this model's
             # Chatterbox family actually runs. Only the families whose vocode
             # uses S3Gen carry the field; the env gate is applied so an operator
-            # sees the effective value (config default fp32).
+            # sees the effective value (config default float32).
             if getattr(model_config, "model_type", None) in _S3GEN_PRECISION_MODEL_TYPES:
                 from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
                     effective_s3gen_precision,
                 )
 
-                configured = getattr(model_config, "s3gen_precision", "fp32")
+                configured = getattr(model_config, "s3gen_precision", "float32")
                 # Prefer the loaded S3Gen's own seam value: a shared backbone
                 # group has one S3Gen instance, so this reports what the vocode
                 # actually runs even if two entries asked for different values.

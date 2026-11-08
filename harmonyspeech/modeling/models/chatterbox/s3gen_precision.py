@@ -3,8 +3,8 @@
 Two inputs select whether the S3Gen vocoder hop (flow-matching mel decoder +
 HiFT waveform decoder) runs under CUDA ``torch.autocast``:
 
-* the per-model ``ModelConfig.s3gen_precision`` key — ``"fp32"`` (default,
-  byte-identical to the pre-experiment build) or ``"fp16"`` (Phase 11-3: the
+* the per-model ``ModelConfig.s3gen_precision`` key — ``"float32"`` (default,
+  byte-identical to the pre-experiment build) or ``"float16"`` (Phase 11-3: the
   approved promotion of the 11-2 experiment); and
 * the ``HSE_S3GEN_AUTOCAST`` environment variable — ``off`` | ``bfloat16`` |
   ``float16``. **The environment variable overrides the config value** when it
@@ -19,7 +19,7 @@ after the AR stage. This is a different shape — fp32 master weights, per-op
 casting, with norms/softmax/reductions staying fp32 — and it is **falsifiable**:
 ``scripts/audio_regression.py``'s ``dtype:fp32-vs-autocast`` axis compares
 seeded A/B renders per family. The 11-2 verdict (fp16 PASS, bf16 rejected) is
-what made ``"fp16"`` an approved config value.
+what made ``"float16"`` an approved config value.
 
 Where it is applied
 -------------------
@@ -60,6 +60,7 @@ __all__ = [
     "autocast_enabled",
     "effective_s3gen_precision",
     "install_inference_autocast",
+    "normalize_s3gen_precision",
     "s3gen_autocast",
     "s3gen_autocast_dtype",
 ]
@@ -67,9 +68,10 @@ __all__ = [
 #: Environment variable selecting the experiment's precision (overrides config).
 S3GEN_AUTOCAST_ENV = "HSE_S3GEN_AUTOCAST"
 
-#: Config spellings (``ModelConfig.s3gen_precision``).
-S3GEN_PRECISION_FP32 = "fp32"
-S3GEN_PRECISION_FP16 = "fp16"
+#: Config spellings (``ModelConfig.s3gen_precision``) — the same vocabulary as
+#: ``dtype`` (Phase 11-3 owner review: identical meaning, identical identifier).
+S3GEN_PRECISION_FP32 = "float32"
+S3GEN_PRECISION_FP16 = "float16"
 VALID_S3GEN_PRECISIONS = (S3GEN_PRECISION_FP32, S3GEN_PRECISION_FP16)
 
 #: Accepted env spellings, normalised to the torch dtype.
@@ -91,16 +93,17 @@ _WARNED: set[str] = set()
 def _configured_dtype(configured) -> torch.dtype | None:
     """Map a config ``s3gen_precision`` value to a torch dtype (or ``None``).
 
-    ``ModelConfig`` only admits ``fp32``/``fp16``; the aliases here keep a
+    ``ModelConfig`` only admits ``float32``/``float16``; the aliases here
+    (including the pre-alignment ``fp32``/``fp16`` spellings) keep a
     hand-built config or a probe honest without widening the shipped surface.
-    An unknown value is treated as fp32 (a typo must never change numerics).
+    An unknown value is treated as float32 (a typo must never change numerics).
     """
     if configured is None:
         return None
     raw = str(configured).strip().lower()
-    if raw in ("", S3GEN_PRECISION_FP32, "float32", "none", "off"):
+    if raw in ("", S3GEN_PRECISION_FP32, "fp32", "none", "off"):
         return None
-    if raw in (S3GEN_PRECISION_FP16, "float16", "half"):
+    if raw in (S3GEN_PRECISION_FP16, "fp16", "half"):
         return torch.float16
     if raw in ("bfloat16", "bf16"):
         return torch.bfloat16
@@ -114,7 +117,7 @@ def s3gen_autocast_dtype(environ=None, configured=None) -> torch.dtype | None:
     variable is present (including an explicit ``off``, which forces fp32 even
     if the config says ``fp16`` — the bench/testing escape hatch). When the
     variable is absent, ``configured`` (the model's ``s3gen_precision``)
-    decides: ``fp16`` → ``torch.float16``, ``fp32``/``None`` → ``None``.
+    decides: ``float16`` → ``torch.float16``, ``float32``/``None`` → ``None``.
 
     Read on every call (not cached at import) so an operator — or a test — can
     flip either input without reloading the model. An unknown env value logs
@@ -141,7 +144,7 @@ def s3gen_autocast_dtype(environ=None, configured=None) -> torch.dtype | None:
 def effective_s3gen_precision(configured=S3GEN_PRECISION_FP32, environ=None) -> str:
     """Return the effective precision name for observability (``/health``).
 
-    The config knob only names ``fp32``/``fp16``; an env override may name
+    The config knob only names ``float32``/``float16``; an env override may name
     ``bfloat16`` (the rejected experiment) or ``off``. This reports exactly
     what the seam will do, not merely what the config asked for.
     """
@@ -212,6 +215,22 @@ def _restore_float32(value):
     return value
 
 
+def normalize_s3gen_precision(value) -> str:
+    """Canonicalise any accepted spelling to ``float32``/``float16``.
+
+    Same rule as :func:`_configured_dtype` but returns the canonical config
+    name (unknown values are float32 — a typo must never change numerics).
+    The pre-alignment ``fp32``/``fp16`` spellings alias to the canonical ones
+    so hand-built configs and probes keep working.
+    """
+    if value is None:
+        return S3GEN_PRECISION_FP32
+    raw = str(value).strip().lower()
+    if raw in (S3GEN_PRECISION_FP16, "fp16", "half"):
+        return S3GEN_PRECISION_FP16
+    return S3GEN_PRECISION_FP32
+
+
 def install_inference_autocast(s3gen, precision=None):
     """Wrap one loaded S3Gen's ``inference`` with the autocast seam (idempotent).
 
@@ -228,10 +247,7 @@ def install_inference_autocast(s3gen, precision=None):
     if s3gen is None or not hasattr(s3gen, "inference"):
         return s3gen
     if precision is not None:
-        raw = str(precision).strip().lower()
-        s3gen._hse_s3gen_precision = (
-            raw if raw in VALID_S3GEN_PRECISIONS else S3GEN_PRECISION_FP32
-        )
+        s3gen._hse_s3gen_precision = normalize_s3gen_precision(precision)
     if getattr(s3gen, "_hse_autocast_seam", False):
         return s3gen
 

@@ -517,11 +517,11 @@ def test_s3gen_precision_defaults_to_fp32(cpu_device):
         device_config=cpu_device,
         dtype="float32",
     )
-    assert cfg.s3gen_precision == "fp32"
+    assert cfg.s3gen_precision == "float32"
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value", ["fp16", "FP16", " fp16 "])
+@pytest.mark.parametrize("value", ["float16", "FLOAT16", " float16 "])
 def test_s3gen_precision_accepts_fp16(cpu_device, value):
     cfg = ModelConfig(
         name="chatterbox",
@@ -532,11 +532,11 @@ def test_s3gen_precision_accepts_fp16(cpu_device, value):
         dtype="float32",
         s3gen_precision=value,
     )
-    assert cfg.s3gen_precision == "fp16"
+    assert cfg.s3gen_precision == "float16"
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("invalid", ["bf16", "float16", "half", "", "fpxx", None, 16, True])
+@pytest.mark.parametrize("invalid", ["bf16", "fp16", "fp32", "half", "", "fpxx", None, 16, True])
 def test_s3gen_precision_rejects_unknown_values(cpu_device, invalid):
     with pytest.raises(ValueError, match="s3gen_precision"):
         ModelConfig(
@@ -552,14 +552,78 @@ def test_s3gen_precision_rejects_unknown_values(cpu_device, invalid):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
-def test_shipped_configs_do_not_flip_s3gen_precision(config_name):
-    """Phase 11-3 ships the knob but no config sets it: the flip is the owner's
-    follow-up commit after the listening pass."""
+def test_shipped_s3gen_precision_matches_owner_flip(config_name):
+    """Phase 11-3 flip (owner decision + listening pass, 2026-11-08): the four
+    Chatterbox S3Gen-vocode families ship ``float16`` autocast on GPU; the
+    embedding role (no S3Gen) and the CPU config stay unset (float32)."""
     entries = _shipped_config(config_name)["model_configs"]
+    fp16_expected_gpu = {
+        "chatterbox",
+        "chatterbox_turbo",
+        "chatterbox_multilingual",
+        "chatterbox_vc",
+    }
     for entry in entries:
-        assert entry.get("s3gen_precision", "fp32") == "fp32", (
-            f"{config_name}: {entry['name']} must not set s3gen_precision yet"
-        )
+        name = entry["name"]
+        effective = entry.get("s3gen_precision", "float32")
+        if config_name == "config.gpu.yml":
+            expected = "float16" if name in fp16_expected_gpu else "float32"
+            assert effective == expected, (
+                f"{config_name}: {name} s3gen_precision must be {expected}, got {effective}"
+            )
+        else:
+            assert effective == "float32", (
+                f"{config_name}: {name} must not set s3gen_precision (CPU stays float32)"
+            )
+
+
+@pytest.mark.unit
+def test_backbone_group_must_agree_on_s3gen_precision(cpu_device, tmp_path):
+    """Phase 11-3 flip guard: a shared backbone_group has ONE S3Gen instance,
+    so mixed s3gen_precision across its vocode entries is a silent
+    last-writer-wins — rejected at load time instead."""
+    import yaml as _yaml
+
+    from harmonyspeech.common.config import EngineConfig
+
+    def entry(name, model_type, precision):
+        block = {
+            "name": name,
+            "model": "resemble-ai/chatterbox",
+            "model_type": model_type,
+            "max_batch_size": 4,
+            "dtype": "float16",
+            "backbone_group": "chatterbox-base",
+            "device_config": {"device": "cpu"},
+        }
+        if precision is not None:
+            block["s3gen_precision"] = precision
+        return block
+
+    mismatched = {
+        "model_configs": [
+            entry("chatterbox", "ChatterboxTTS", "float16"),
+            entry("chatterbox_vc", "ChatterboxVC", "float32"),
+        ]
+    }
+    path = tmp_path / "mixed-group.yml"
+    path.write_text(_yaml.safe_dump(mismatched))
+    with pytest.raises(ValueError, match="must agree on s3gen_precision"):
+        EngineConfig.load_config_from_yaml(str(path))
+
+    # Embedding never participates (no vocode), so an unset embedding next to
+    # a float16 vocode group is fine.
+    with_embedding = {
+        "model_configs": [
+            entry("chatterbox", "ChatterboxTTS", "float16"),
+            entry("chatterbox_vc", "ChatterboxVC", "float16"),
+            entry("chatterbox_embedding", "ChatterboxEmbedding", None),
+        ]
+    }
+    path2 = tmp_path / "with-embedding.yml"
+    path2.write_text(_yaml.safe_dump(with_embedding))
+    config = EngineConfig.load_config_from_yaml(str(path2))
+    assert len(config.model_configs) == 3
 
 
 @pytest.mark.unit

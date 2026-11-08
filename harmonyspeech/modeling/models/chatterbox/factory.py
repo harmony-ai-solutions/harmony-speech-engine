@@ -482,7 +482,7 @@ def assemble_role(
     *,
     repo: str,
     revision: str | None,
-    s3gen_precision: str = "fp32",
+    s3gen_precision: str = "float32",
 ) -> object:
     """Construct a role wrapper around the shared backbone references.
 
@@ -500,7 +500,14 @@ def assemble_role(
             device=device,
             conds=_load_conditionals(repo, revision, device, role=ROLE_TTS),
         )
-        apply_model_dtype(model, backbone.dtype, s3gen_precision)
+        # Phase 11-3 flip guard: the embedding role never vocodes, so it must
+        # not write a (default float32) precision onto the SHARED S3Gen seam —
+        # it would clobber the vocode roles' value in a backbone group
+        # (embedding builds last in shipped config order). ``None`` wraps the
+        # seam idempotently without setting the instance value.
+        apply_model_dtype(
+            model, backbone.dtype, None if role == ROLE_EMBEDDING else s3gen_precision
+        )
         return model
 
     if role == ROLE_VC:
@@ -586,7 +593,7 @@ def build_role_model(model_config, device, registry: WeightRegistry | None):
         backbone,
         repo=repo,
         revision=revision,
-        s3gen_precision=getattr(model_config, "s3gen_precision", "fp32"),
+        s3gen_precision=getattr(model_config, "s3gen_precision", "float32"),
     )
     logger.info(
         f"Assembled Chatterbox role '{role}' from backbone group "

@@ -23,9 +23,34 @@ from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
     autocast_enabled,
     effective_s3gen_precision,
     install_inference_autocast,
+    normalize_s3gen_precision,
     s3gen_autocast,
     s3gen_autocast_dtype,
 )
+
+
+def test_normalize_aligns_aliases_to_the_dtype_vocabulary():
+    """Phase 11-3 alignment: canonical spellings are float32/float16 (like
+    ``dtype``); the pre-alignment fp32/fp16 remain runtime aliases, and
+    anything unknown normalises to float32 (typo-safe)."""
+    assert normalize_s3gen_precision("float16") == "float16"
+    assert normalize_s3gen_precision("float32") == "float32"
+    assert normalize_s3gen_precision("fp16") == "float16"
+    assert normalize_s3gen_precision("FP16") == "float16"
+    assert normalize_s3gen_precision("fp32") == "float32"
+    assert normalize_s3gen_precision("bogus") == "float32"
+    assert normalize_s3gen_precision(None) == "float32"
+
+
+def test_install_none_preserves_the_shared_seam_value():
+    """Phase 11-3 flip guard (embedding-role build): ``precision=None`` wraps
+    the seam idempotently but must NOT write a value onto a SHARED S3Gen —
+    the embedding role (no vocode) builds last in a backbone group and would
+    otherwise clobber the vocode roles' precision back to float32."""
+    s3gen = _StubS3Gen(dtype=torch.float32)
+    install_inference_autocast(s3gen, precision="float16")
+    install_inference_autocast(s3gen, precision=None)
+    assert s3gen._hse_s3gen_precision == "float16"
 
 
 @pytest.fixture(autouse=True)
@@ -195,33 +220,33 @@ def test_loader_installs_the_seam():
 def test_config_fp32_is_the_default_and_resolves_to_off():
     assert s3gen_autocast_dtype(configured=S3GEN_PRECISION_FP32) is None
     assert s3gen_autocast_dtype(configured=None) is None
-    assert effective_s3gen_precision(S3GEN_PRECISION_FP32) == "fp32"
+    assert effective_s3gen_precision(S3GEN_PRECISION_FP32) == "float32"
 
 
 def test_config_fp16_resolves_when_the_env_is_absent():
     assert s3gen_autocast_dtype(configured=S3GEN_PRECISION_FP16) is torch.float16
-    assert effective_s3gen_precision(S3GEN_PRECISION_FP16) == "fp16"
+    assert effective_s3gen_precision(S3GEN_PRECISION_FP16) == "float16"
 
 
 def test_env_overrides_config():
     """The env escape hatch wins in both directions, including an explicit off."""
     assert (
-        s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "bfloat16"}, configured="fp16")
+        s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "bfloat16"}, configured="float16")
         is torch.bfloat16
     )
-    assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "off"}, configured="fp16") is None
-    assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "float16"}, configured="fp32") is torch.float16
-    assert effective_s3gen_precision("fp16", environ={S3GEN_AUTOCAST_ENV: "off"}) == "fp32"
-    assert effective_s3gen_precision("fp32", environ={S3GEN_AUTOCAST_ENV: "bfloat16"}) == "bfloat16"
+    assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "off"}, configured="float16") is None
+    assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "float16"}, configured="float32") is torch.float16
+    assert effective_s3gen_precision("float16", environ={S3GEN_AUTOCAST_ENV: "off"}) == "float32"
+    assert effective_s3gen_precision("float32", environ={S3GEN_AUTOCAST_ENV: "bfloat16"}) == "bfloat16"
 
 
 def test_install_stores_the_configured_precision_and_drives_the_seam(monkeypatch):
     """The fp16 config path engages autocast without any env variable."""
     monkeypatch.setattr(precision, "_autocast_device_type", lambda device: "cpu")
     s3gen = _StubS3Gen(dtype=torch.float16)
-    install_inference_autocast(s3gen, precision="fp16")
+    install_inference_autocast(s3gen, precision="float16")
 
-    assert s3gen._hse_s3gen_precision == "fp16"
+    assert s3gen._hse_s3gen_precision == "float16"
     wav, sources = s3gen.inference(torch.zeros(1, 2, dtype=torch.long))
     assert s3gen.autocast_seen == [True]
     assert wav.dtype == torch.float32  # cast back for the fp32 artifact path
@@ -232,7 +257,7 @@ def test_install_defaults_to_fp32_and_is_bit_identical(monkeypatch):
     """Default install (no config value) leaves the seam off."""
     s3gen = _StubS3Gen(dtype=torch.float32)
     install_inference_autocast(s3gen)
-    assert getattr(s3gen, "_hse_s3gen_precision", S3GEN_PRECISION_FP32) == "fp32"
+    assert getattr(s3gen, "_hse_s3gen_precision", S3GEN_PRECISION_FP32) == "float32"
 
     wav, sources = s3gen.inference(torch.zeros(1, 2, dtype=torch.long))
     assert s3gen.autocast_seen == [False]
@@ -241,23 +266,23 @@ def test_install_defaults_to_fp32_and_is_bit_identical(monkeypatch):
 
 def test_install_can_update_precision_after_the_seam_exists():
     s3gen = _StubS3Gen()
-    install_inference_autocast(s3gen, precision="fp32")
-    install_inference_autocast(s3gen, precision="fp16")
-    assert s3gen._hse_s3gen_precision == "fp16"
+    install_inference_autocast(s3gen, precision="float32")
+    install_inference_autocast(s3gen, precision="float16")
+    assert s3gen._hse_s3gen_precision == "float16"
 
 
 def test_context_precision_argument_resolves_the_config(monkeypatch):
     monkeypatch.setattr(precision, "_autocast_device_type", lambda device: "cpu")
-    with s3gen_autocast("cpu", precision="fp16") as active:
+    with s3gen_autocast("cpu", precision="float16") as active:
         assert active is torch.float16
-    with s3gen_autocast("cpu", precision="fp32") as active:
+    with s3gen_autocast("cpu", precision="float32") as active:
         assert active is None
 
 
 def test_autocast_enabled_honors_precision(monkeypatch):
     monkeypatch.setattr(precision, "_autocast_device_type", lambda device: "cpu")
-    assert autocast_enabled("cpu", precision="fp16") is True
-    assert autocast_enabled("cpu", precision="fp32") is False
+    assert autocast_enabled("cpu", precision="float16") is True
+    assert autocast_enabled("cpu", precision="float32") is False
 
 
 def test_batched_path_threads_the_instance_precision(monkeypatch):
@@ -278,11 +303,11 @@ def test_batched_path_threads_the_instance_precision(monkeypatch):
     s3gen.flow = nn.Linear(2, 2)
     s3gen.mel2wav = nn.Linear(2, 2)
     s3gen.meanflow = False
-    install_inference_autocast(s3gen, precision="fp16")
+    install_inference_autocast(s3gen, precision="float16")
 
     rows = [
         s3gen_batch.S3GenRow(tokens=torch.zeros(4, dtype=torch.long), ref_dict={}, seed=1),
         s3gen_batch.S3GenRow(tokens=torch.zeros(4, dtype=torch.long), ref_dict={}, seed=2),
     ]
     s3gen_batch.inference_batched(s3gen, rows)
-    assert seen["precision"] == "fp16"
+    assert seen["precision"] == "float16"

@@ -15,7 +15,7 @@ Promote fp16 S3Gen autocast from the 11-2 env gate (`HSE_S3GEN_AUTOCAST`) to a f
 3. **Honesty/config tests:** knob validation; default `fp32` byte-identical (existing bit-identity/poison gates keep passing); `fp16` path exercises the seam (mock/monkeypatched on CPU); docs-matrix/config-honesty table updated if it enumerates precision.
 4. **Listening-pass artifacts:** a small render mode (extend `scripts/bench_s3gen_autocast.py` or a sibling) that writes seeded pairs `fp32.wav` / `fp16.wav` per family (chatterbox bundled voice, clone voice, VC speech→B, VC speech→synth, multilingual en + de-accent, turbo bundled) into `out/bench/listening-11-3/` (untracked) + a one-screen index (README.md) listing case → files → the 11-2 gate numbers. ~7–8 pairs, ~3–4 s each.
 5. **Docs:** `docs/models.md` §Precision — fp16 autocast becomes an approved config option (reference 11-2 numbers; bf16 stays documented-rejected); config-field documentation (`docs/` wherever `dtype` is documented); CHANGELOG entry.
-6. **No shipped-config flip in this task.** Exit = knob + tests + docs + artifacts green; the flip (config.gpu.yml chatterbox entries → `s3gen_precision: "fp16"`) is the owner's call after listening.
+6. **No shipped-config flip in this task.** Exit = knob + tests + docs + artifacts green; the flip (config.gpu.yml chatterbox entries → `s3gen_precision: "float16"`) is the owner's call after listening.
 
 ## Environment facts
 
@@ -84,3 +84,7 @@ field; listening case set + README renderer.
 5. **No commits/pushes** (task constraint). `out/bench/` (including the
    listening pairs and `report.json`) is untracked.
 
+
+## Follow-up: shipped flip (2026-11-08)
+
+Owner listened to the seven seeded pairs (`out/bench/listening-11-3/`) and approved: "everything sounds fine". The flip commit sets `s3gen_precision: "float16"` on the four S3Gen-vocode families in `config.gpu.yml` (embedding untouched; CPU config untouched) and re-pins the shipped-state honesty test (`test_shipped_s3gen_precision_matches_owner_flip`). Same commit aligns the knob's value vocabulary with `dtype` — `"fp32"/"fp16"` → `"float32"/"float16"` (owner review: identical meaning must use identical identifier); the old spellings remain tolerated aliases in the runtime parser only. `/health` therefore reports `float16`/`float32`.

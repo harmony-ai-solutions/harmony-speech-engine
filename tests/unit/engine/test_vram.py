@@ -105,14 +105,14 @@ def test_check_health_surfaces_effective_s3gen_precision(monkeypatch):
     monkeypatch.delenv("HSE_S3GEN_AUTOCAST", raising=False)
     engine = _engine_shell()
     executor = _fake_executor("chatterbox")
-    executor.model_config.s3gen_precision = "fp16"
+    executor.model_config.s3gen_precision = "float16"
     engine.model_executors = {"chatterbox": executor}
 
-    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "fp16"
+    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "float16"
 
     # The env escape hatch overrides the config value in the observable field.
     monkeypatch.setenv("HSE_S3GEN_AUTOCAST", "off")
-    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "fp32"
+    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "float32"
 
     # A family whose vocode does not use S3Gen carries no such field.
     monkeypatch.delenv("HSE_S3GEN_AUTOCAST", raising=False)

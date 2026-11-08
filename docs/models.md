@@ -120,15 +120,19 @@ still fp32. It is CUDA-only; on CPU it is a no-op.
 
 | `s3gen_precision` | Behaviour |
 |---|---|
-| `"fp32"` (default) | No autocast. Byte-identical to the pre-Phase-11 build. |
-| `"fp16"` | S3Gen autocast to `float16` (Phase 11-2 verdict: **approved**). |
+| `"float32"` (default) | No autocast. Byte-identical to the pre-Phase-11 build. |
+| `"float16"` | S3Gen autocast to `float16` (Phase 11-2 verdict: **approved**). |
 
-It applies per config entry to the Chatterbox families whose vocode uses S3Gen
+The value vocabulary matches `dtype` (`float32`/`float16`) — same meaning,
+same identifier. It applies per config entry to the Chatterbox families whose
+vocode uses S3Gen
 (`ChatterboxTTS`, `ChatterboxMultilingualTTS`, `ChatterboxVC`,
 `ChatterboxTurboTTS`), so a mixed deployment stays honest: one model can run
-fp16 vocode while another stays fp32. `ChatterboxEmbedding` has no vocode and
+float16 vocode while another stays float32. `ChatterboxEmbedding` has no vocode and
 ignores the key. The effective value is surfaced per model on `/health`
-(`models.<name>.s3gen_precision`).
+(`models.<name>.s3gen_precision`). The four S3Gen-vocode families ship
+`"float16"` in `config.gpu.yml` since the owner-approved flip of 2026-11-08
+(seeded listening pass); the CPU config stays `"float32"`.
 
 **Environment override.** `HSE_S3GEN_AUTOCAST` (`off` | `bfloat16` |
 `float16`) **overrides** the config value when set — an explicit `off` forces
@@ -368,7 +372,7 @@ Consequences:
 - name: "chatterbox"
   model_type: "ChatterboxTTS"
   max_batch_size: 4
-  s3gen_precision: "fp32"   # "fp16" opts into the 11-3 S3Gen autocast vocode
+  s3gen_precision: "float32" # "float16" opts into the 11-3 S3Gen autocast vocode
   device_config: { device: "cuda:0" }
 
 - name: "faster-whisper-tiny"

@@ -265,7 +265,11 @@ model_configs:
     model_type: "ChatterboxTTS"
     watermark: true          # Set to false to disable perth audio watermarking
     max_batch_size: 4        # AR admission width (initial, pending the host gate)
-    dtype: "float16"         # T3 backbone; S3Gen/VE stay float32 (see docs/models.md)
+    dtype: "float16"         # T3 backbone; VE stays float32 (see docs/models.md)
+    # Phase 11-3 (owner decision 2026-11-08, listening pass approved): fp16
+    # autocast on the S3Gen vocode hops (flow forwards; mel2wav stays fp32).
+    # Gate: docs/benchmarks/throughput.md §11-2 (7/7 pass); bf16 rejected there.
+    s3gen_precision: "float16"
     backbone_group: "chatterbox-base"  # shares S3Gen/VE with the other Chatterbox roles
     device_config:
       device: "cuda"
@@ -277,6 +281,7 @@ model_configs:
     watermark: true
     max_batch_size: 4        # AR admission width (initial, pending the host gate)
     dtype: "float16"         # T3 backbone; own meanflow S3Gen (ungrouped)
+    s3gen_precision: "float16"  # Phase 11-3 flip (2026-11-08): meanflow site, blanket autocast — gated in 11-2
     device_config:
      device: "cuda"
 
@@ -287,6 +292,7 @@ model_configs:
     watermark: true
     max_batch_size: 1
     dtype: "float16"
+    s3gen_precision: "float16"  # Phase 11-3 flip (2026-11-08): shared S3Gen runs fp16 autocast
     # Joins the base group on checkpoint-hash evidence (see
     # harmonyspeech/modeling/models/chatterbox/factory.py): s3gen.pt and ve.pt
     # are bit-identical to the base s3gen.safetensors / ve.safetensors.
@@ -302,6 +308,7 @@ model_configs:
     max_batch_size: 8        # padded batch: source tokenize + S3Gen vocode (Phase 11-1)
     batched_inference: true
     dtype: "float16"         # no T3 here; grouped for the shared S3Gen/VE
+    s3gen_precision: "float16"  # Phase 11-3 flip (2026-11-08): vocode-dominated family — 1.51x at c=8 (11-2)
     backbone_group: "chatterbox-base"
     device_config:
      device: "cuda"

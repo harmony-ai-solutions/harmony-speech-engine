@@ -75,7 +75,7 @@ def _submodule_dtypes(model) -> dict[str, str]:
     return result
 
 
-def apply_model_dtype(model, dtype: torch.dtype | None, s3gen_precision: str = "fp32") -> None:
+def apply_model_dtype(model, dtype: torch.dtype | None, s3gen_precision: str = "float32") -> None:
     """Apply the project dtype policy to a freshly loaded Chatterbox model.
 
     Casts the T3 backbone to ``dtype`` (on CUDA only) and leaves S3Gen / the
@@ -194,7 +194,7 @@ class ChatterboxTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        s3gen_precision: str = "fp32",
+        s3gen_precision: str = "float32",
         **kwargs,
     ) -> "ChatterboxTTS":
         """Load ChatterboxTTS model from pretrained weights.
@@ -204,8 +204,8 @@ class ChatterboxTTSModel:
             dtype: Requested precision for the T3 backbone (Phase 4-1). S3Gen
                 and the VoiceEncoder always stay float32 — see the module
                 docstring for the measured rationale.
-            s3gen_precision: S3Gen vocode precision (Phase 11-3): ``"fp32"``
-                (default) or ``"fp16"`` (CUDA autocast forwards).
+            s3gen_precision: S3Gen vocode precision (Phase 11-3): ``"float32"``
+                (default) or ``"float16"`` (CUDA autocast forwards).
             **kwargs: Additional arguments passed to ChatterboxTTS.from_pretrained.
 
         Returns:
@@ -234,7 +234,7 @@ class ChatterboxTurboTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        s3gen_precision: str = "fp32",
+        s3gen_precision: str = "float32",
         **kwargs,
     ) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
@@ -333,7 +333,7 @@ class ChatterboxMultilingualTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        s3gen_precision: str = "fp32",
+        s3gen_precision: str = "float32",
         **kwargs,
     ) -> "ChatterboxMultilingualTTS":
         """Load ChatterboxMultilingualTTS model from pretrained weights.
@@ -380,7 +380,7 @@ class ChatterboxVCModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
-        s3gen_precision: str = "fp32",
+        s3gen_precision: str = "float32",
         **kwargs,
     ) -> "ChatterboxVC":
         """Load ChatterboxVC model from pretrained weights.

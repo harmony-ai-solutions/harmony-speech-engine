@@ -295,7 +295,7 @@ def _flow_batched(
     # Phase 11-2/11-3: the surgical wrap. Autocast covers the encoder and CFM
     # decoder forwards only; the returned tensors are cast back to the flow
     # dtype so every ODE state update, mask, unpad and `mel2wav` call below
-    # stays float32. With the effective precision fp32 (config default and/or
+    # stays float32. With the effective precision float32 (config default and/or
     # `HSE_S3GEN_AUTOCAST` unset) the context is a no-op and the casts are
     # skipped, so this path is bit-identical.
     with s3gen_autocast(device, precision=precision) as autocast:

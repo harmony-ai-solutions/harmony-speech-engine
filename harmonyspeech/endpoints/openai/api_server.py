@@ -188,6 +188,10 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("vram"):
             # Phase 4-5: per-model VRAM accounting rides along with /health.
             health_status["vram"] = result["vram"]
+        if isinstance(result, dict) and result.get("models"):
+            # Phase 11-3: per-model health detail incl. the effective
+            # `s3gen_precision` (models.<name>.s3gen_precision).
+            health_status["models"] = result["models"]
         if isinstance(result, dict) and result.get("whisper_vram") is not None:
             # Phase 10-3: boot-time Whisper probe/budget report.
             health_status["whisper_vram"] = result["whisper_vram"]

@@ -298,7 +298,7 @@ def _build_chatterbox(model_config: ModelConfig, device: str, weight_registry, w
     return wrapper.from_pretrained(
         device=device,
         dtype=model_config.dtype,
-        s3gen_precision=getattr(model_config, "s3gen_precision", "fp32"),
+        s3gen_precision=getattr(model_config, "s3gen_precision", "float32"),
     )
 
 
