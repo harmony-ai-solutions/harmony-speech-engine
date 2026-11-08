@@ -26,10 +26,11 @@ Design notes
   A batch-level CT2 failure propagates so the handler can fall back to the
   sequential ``pipeline.transcribe`` path for the whole step (the Phase 8-3
   deviation-6 discipline: never de-batch neighbours silently).
-* **Bounded memory.** At most :data:`WHISPER_WINDOW_BATCH_SIZE` windows per
-  formed batch (owner-approved initial 8, 2026-11-07); batches are formed and
-  consumed one at a time, so peak activations are bounded by the cap, not by
-  the step's queue depth.
+* **Bounded memory.** At most ``window_batch_size`` windows per formed batch —
+  the per-model ``whisper_window_batch_size`` key (Phase 11-0, default 8,
+  owner-approved initial 2026-11-07); batches are formed and consumed one at a
+  time, so peak activations are bounded by the cap, not by the step's queue
+  depth.
 """
 
 from __future__ import annotations
@@ -54,7 +55,10 @@ from loguru import logger
 
 #: Owner-approved initial cap (2026-11-07) on windows per formed CT2 batch.
 #: This is a *memory* bound, not an admission width: the scheduler admits whole
-#: requests, the batcher folds their windows into batches of this size.
+#: requests, the batcher folds their windows into batches of this size. Since
+#: Phase 11-0 the live value is the per-model ``whisper_window_batch_size``
+#: config key (default: this constant), so an operator can tune it without a
+#: measurement wrapper.
 WHISPER_WINDOW_BATCH_SIZE = 8
 
 #: faster-whisper's windowing scale. Kept here (and in the scheduler) so the

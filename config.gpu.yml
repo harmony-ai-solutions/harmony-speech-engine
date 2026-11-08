@@ -162,6 +162,11 @@ model_configs:
     model_type: "FasterWhisper"
     max_batch_size: 16
     num_workers: 2
+    # Phase 11-0 (owner decision 2026-11-08): the B=1 real-model parity gate
+    # passed on text/segments/timings (language_probability moves 0.2-0.8 pp),
+    # so the cross-request window batcher is shipped ON.
+    batched_inference: true
+    whisper_window_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -171,6 +176,8 @@ model_configs:
     model_type: "FasterWhisper"
     max_batch_size: 16
     num_workers: 4
+    batched_inference: true
+    whisper_window_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cuda"
@@ -303,7 +310,12 @@ model_configs:
   - name: "chatterbox_embedding"
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxEmbedding"
-    max_batch_size: 1
+    # Phase 11-0 (dated decision 2026-11-08): admission depth 4. The executor
+    # still runs the embed step serially (one `prepare_conditionals` at a time),
+    # so this is a *queue depth*, not a batch width — it lets the clone pipeline
+    # hand four requests to the TTS AR step in one engine step instead of
+    # serialising the flood at embed admission.
+    max_batch_size: 4
     dtype: "float16"
     backbone_group: "chatterbox-base"  # shares S3Gen/VE/T3; owns its conds
     device_config:

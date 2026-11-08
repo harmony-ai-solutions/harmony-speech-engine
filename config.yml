@@ -3,8 +3,12 @@
 # model types to an initial 8; per-step tuning lands with the benchmark-host run
 # (docs/benchmarks/throughput.md, Phase 8 section).
 # `num_workers` (FasterWhisper only) = CTranslate2 inter_threads: concurrent
-# transcribes on the shared weights. Phase 10-1 initial values, pending the
-# Phase 10-5 benchmark: turbo 2 / tiny 4; unset means 1 (today's behaviour).
+# transcribes on the shared weights. Phase 10-1 initial values: turbo 2 / tiny 4;
+# unset means 1. Phase 11-0 (owner decision 2026-11-08) flips
+# `batched_inference: true` for Whisper in both shipped configs: the real-model
+# B=1 parity gate passed on text/segments/timings (only `language_probability`
+# moved 0.2-0.8 pp). `whisper_window_batch_size` (default 8) is the memory bound
+# on one formed cross-request window batch.
 # `ar_inference` = the shared autoregressive KV-cache pool (Phase 9-2). The
 # Chatterbox English/Turbo entries are `ar_decode`-class as of Phase 9-6 with an
 # initial admission width of 4 (the same arena maths as config.gpu.yml). On this
@@ -182,6 +186,8 @@ model_configs:
     model: "medium"
     model_type: "FasterWhisper"
     max_batch_size: 16
+    batched_inference: true
+    whisper_window_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -191,6 +197,8 @@ model_configs:
     model_type: "FasterWhisper"
     max_batch_size: 16
     num_workers: 4
+    batched_inference: true
+    whisper_window_batch_size: 8
     dtype: "float32"
     device_config:
       device: "cpu"
@@ -320,7 +328,9 @@ model_configs:
 #  - name: "chatterbox_embedding"
 #    model: "resemble-ai/chatterbox"
 #    model_type: "ChatterboxEmbedding"
-#    max_batch_size: 1
+#    # Phase 11-0 (2026-11-08): admission depth, not batch width — the embed
+#    # step executes serially but no longer serialises the clone flood.
+#    max_batch_size: 4
 #    dtype: "float32"
 #    device_config:
 #      device: "cpu"

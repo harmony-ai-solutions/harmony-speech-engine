@@ -16,6 +16,13 @@ The probe is deliberately best-effort and never fails boot:
 * an unexpected runtime error is logged and reported as a skip, because a
   missing attribution is honest while a guessed number is not.
 
+Phase 11-0 fixed the probe's own input: all-zero audio made the batched pipeline
+raise ``No clip timestamps found`` for any ≥30 s shape, leaving
+``per_window_bytes = 0`` and the runtime governor inert. The probe now builds
+deterministic speech-like audio and passes explicit ≤30 s ``clip_timestamps``
+(no VAD dependence), so the max shape really runs and the measured cost is the
+served one. It also measures on the **model's** device (``cuda:1`` stays 1).
+
 The benchmark host fills the real numbers into
 ``docs/benchmarks/vram-profiles.md``; unit tests exercise the delta math with
 mocked CUDA calls.
@@ -24,7 +31,6 @@ mocked CUDA calls.
 from __future__ import annotations
 
 import contextlib
-import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -41,6 +47,51 @@ _SAMPLE_RATE = 16000
 _CLIP_SECONDS = 30.0
 #: Device-memory sampling interval used to catch the transient activation peak.
 _SAMPLE_INTERVAL_S = 0.02
+
+
+def _probe_audio(max_audio_seconds: float) -> "np.ndarray":
+    """Deterministic speech-like probe audio for the max-shape run.
+
+    All-zero audio used to make the batched pipeline raise
+    ``No clip timestamps found`` for any audio ≥30 s (Phase 11-0 finding 3).
+    Silence also under-measures the decoder side: Whisper stops after a token
+    or two on it. A harmonic stack amplitude-modulated at syllable rate gives
+    the encoder a normal spectrogram and the decoder a normal-length transcript,
+    so the measured peak is the served shape rather than a degenerate one.
+    """
+    import numpy as np
+
+    samples = max(1, int(_SAMPLE_RATE * float(max_audio_seconds)))
+    t = np.arange(samples, dtype=np.float64) / _SAMPLE_RATE
+    # Pitch glides like speech (not a stationary tone, which Whisper hallucinates on).
+    f0 = 120.0 + 10.0 * np.sin(2 * np.pi * 0.7 * t)
+    phase = 2 * np.pi * np.cumsum(f0) / _SAMPLE_RATE
+    signal = np.zeros(samples, dtype=np.float64)
+    for harmonic in range(1, 8):
+        signal += np.sin(harmonic * phase) / harmonic
+    # 4 Hz syllable envelope plus a little noise for consonant-like onsets.
+    signal *= 0.5 + 0.5 * np.sin(2 * np.pi * 4.0 * t)
+    signal += 0.02 * np.random.default_rng(0).standard_normal(samples)
+    peak = float(np.max(np.abs(signal))) or 1.0
+    return (0.25 * signal / peak).astype(np.float32)
+
+
+def _probe_clip_timestamps(max_audio_seconds: float) -> list[dict]:
+    """Explicit ≤30 s clip windows covering the probe audio.
+
+    ``BatchedInferencePipeline.transcribe`` raises for audio ≥30 s when neither
+    VAD nor ``clip_timestamps`` is supplied; synthesising the timestamps here
+    keeps the probe independent of VAD behaviour (silence has no speech to
+    detect) and exercises exactly the number of windows the served max shape
+    forms.
+    """
+    clips: list[dict] = []
+    offset = 0.0
+    while offset < float(max_audio_seconds):
+        end = min(offset + _CLIP_SECONDS, float(max_audio_seconds))
+        clips.append({"start": offset, "end": end})
+        offset = end
+    return clips
 
 
 def _skip_record(
@@ -139,7 +190,8 @@ def probe_whisper_peak(
     except Exception as exc:  # pragma: no cover - faster-whisper is a hard dependency in practice
         return _skip_record(f"faster-whisper-import-failed: {type(exc).__name__}", **shape)
 
-    audio = np.zeros(int(_SAMPLE_RATE * max_audio_seconds), dtype=np.float32)
+    audio = _probe_audio(max_audio_seconds)
+    clip_timestamps = _probe_clip_timestamps(max_audio_seconds)
 
     def _run_one(_index: int) -> None:
         # One pipeline per worker: it is a thin view over the shared model and
@@ -154,7 +206,10 @@ def probe_whisper_peak(
             beam_size=beam_size,
             best_of=beam_size,
             temperature=0.0,
+            # Phase 11-0: explicit clips (not VAD) so a ≥30 s probe never raises
+            # "No clip timestamps found" and the window count is exact.
             vad_filter=False,
+            clip_timestamps=clip_timestamps,
             without_timestamps=True,
         )
         for _segment in segments:
@@ -162,7 +217,15 @@ def probe_whisper_peak(
 
     try:
         if device_index is None:
-            device_index = int(torch.cuda.current_device())
+            # The model's own device wins over the process's active one: with
+            # explicit secondary-device placement (``cuda:1``) the two differ.
+            native_index = getattr(native, "device_index", None)
+            if isinstance(native_index, (list, tuple)) and native_index:
+                device_index = int(native_index[0])
+            elif isinstance(native_index, int):
+                device_index = native_index
+            else:
+                device_index = int(torch.cuda.current_device())
         free_before, total = torch.cuda.mem_get_info(device_index)
         free_before = int(free_before)
         total = int(total)
@@ -203,7 +266,7 @@ def probe_whisper_peak(
         )
         return _skip_record(f"probe-failed: {type(exc).__name__}: {exc}", **shape)
 
-    windows_per_worker = min(window_batch, max(1, math.ceil(max_audio_seconds / _CLIP_SECONDS)))
+    windows_per_worker = min(window_batch, len(clip_timestamps))
     windows_probed = workers * windows_per_worker
     if sample_peak:
         peak_bytes = max(0, max(peak_used, used_after) - baseline_used)

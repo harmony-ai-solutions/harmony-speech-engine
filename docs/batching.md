@@ -21,12 +21,13 @@ Every model type belongs to exactly one class, and its shipped config must match
 that class's semantics (owner decision 2026-11-07; the authoritative table is in
 `.current_work/engine-modernization/10-5-WhisperGatesBenchmarksExit.md`):
 
-| Class | Execution semantics | `max_batch_size` means | Additional knobs | Members (post-10) |
+| Class | Execution semantics | `max_batch_size` means | Additional knobs | Members (post-11-0) |
 |---|---|---|---|---|
 | `padded_batch` | one padded forward per length-similar sub-batch | sub-batch width | `batched_inference`, `batch_token_budget` | OpenVoice V1/V2 synthesizers and tone converters, their encoders, HarmonySpeech encoder/vocoder, VoiceFixer restorer/vocoder |
-| `loop` | per-request sequential | must be 1 | — | HarmonySpeech synthesizer, Chatterbox multilingual/embedding/VC (multilingual is the documented AR skip) |
+| `loop` | per-request sequential | must be 1 | — | HarmonySpeech synthesizer, Chatterbox multilingual/VC (multilingual is the documented AR skip) |
+| `loop_admission` | per-request sequential (serial) but several requests per engine step | admission depth | — | Chatterbox embedding (4; Phase 11-0 dated decision 2026-11-08) |
 | `queue_depth` | admission/backpressure only | queue depth | — | Silero VAD (16) |
-| `lanes_windows` | M parallel lanes × opt-in cross-request window batches | admission/lane depth | `num_workers`, window batch cap | Faster-Whisper (M workers, B=8 windows); KittenTTS (lanes only, 4) |
+| `lanes_windows` | M parallel lanes × cross-request window batches | admission/lane depth | `num_workers`, `whisper_window_batch_size` | Faster-Whisper (M workers, B=8 windows shipped on); KittenTTS (lanes only, 4) |
 | `ar_decode` | token-level AR decode on the shared KV pool | admission depth | pool slots, token budget | Chatterbox English + Turbo (4 requests each; 2 CFG rows per English request) |
 
 `ar_decode`'s English and Turbo Chatterbox members landed in Phase 9-3 (the
@@ -49,7 +50,7 @@ holds the shipped value. `tests/unit/test_batching_docs_matrix.py` parses this
 table, fails when a registered type is missing or listed twice, and checks that
 every shipped config entry declares exactly the `max_batch_size` this table
 promises; `tests/unit/initialization/test_config.py` asserts the shipped configs
-against the same policy (the five execution-model classes above).
+against the same policy (the six execution-model classes above).
 
 | Registry model type | Shipped entries | `max_batch_size` | Mechanism | Budget axis unit | Fallback | Why this value / skip reason |
 |---|---|---|---|---|---|---|
@@ -64,13 +65,13 @@ against the same policy (the five execution-model classes above).
 | `VoiceFixerRestorer` | `voicefixer-restorer` | `8` | padded batch on per-clip mel rows | mel frames | per-sub-batch loop | Landed in Phase 8-4; `8` is the initial capacity (tuning pending the benchmark-host run) |
 | `VoiceFixerVocoder` | `voicefixer-vocoder` | `8` | padded batch, one batched forward per sub-batch | mel frames | per-sub-batch loop | Landed in Phase 8-4; `8` is the initial capacity (tuning pending the benchmark-host run) |
 | `HarmonySpeechSynthesizer` | `hs1-synthesizer` | `1` | **loop** — no batch path | — (no padding-safe axis) | the loop is the only path | Evidence-based skip: the vendored ForwardTacotron drifts by 0.155 peak under padding (Phase 8-4 audit); padding-safe means rewriting three SeriesPredictors, a CBHG prenet, the LengthRegulator and a CBHG postnet |
-| `FasterWhisper` | `faster-whisper-large-v3-turbo`, `faster-whisper-tiny` | `16` | **lanes M × windows B** — M CTranslate2 workers (`num_workers`, parallel lanes) and, with opt-in `batched_inference: true`, one `encode` + one `generate` per formed batch of the admitted requests' ≤30 s windows (≤8 windows per batch); the per-request pipeline's own intra-audio CT2 batch is 16 | 30 s audio clip | per-request `pipeline.transcribe` (lane pool) | Phase 10-5 final: `16` is the admission/queue depth (two-lane fairness ≤30 s vs >30 s at 3:1), M is `num_workers` (turbo 2 / tiny 4 initial, pending the benchmark sweep), B is the window cap 8 (owner-approved initial), and the 16-clip intra-audio batch belongs to the per-request pipeline. The window batcher stays **opt-in** until the benchmark-host B=1 parity gate (dated decision 2026-11-07); fallbacks are `len == 1`, flag off, and any batch-level failure |
+| `FasterWhisper` | `faster-whisper-large-v3-turbo`, `faster-whisper-tiny` | `16` | **lanes M × windows B** — M CTranslate2 workers (`num_workers`, parallel lanes) and, with `batched_inference: true`, one `encode` + one `generate` per formed batch of the admitted requests' ≤30 s windows (`whisper_window_batch_size`, default 8); the per-request pipeline's own intra-audio CT2 batch is 16 | 30 s audio clip | per-request `pipeline.transcribe` (lane pool) | Phase 11-0 final: `16` is the admission/queue depth (two-lane fairness ≤30 s vs >30 s at 3:1), M is `num_workers` (turbo 2 / tiny 4), B is the per-model `whisper_window_batch_size` (default 8, owner-approved initial), and the 16-clip intra-audio batch belongs to the per-request pipeline. The window batcher is **shipped on** in both configs (owner decision 2026-11-08: the B=1 real-model gate passed on text/segments/timings; `language_probability` moves 0.2-0.8 pp and is informational); fallbacks are `len == 1`, flag off, and any batch-level failure |
 | `SileroVAD` | `silero-vad` | `16` | **loop** — no batch path, and lanes measured below break-even | — (single-stream 512-sample window) | the loop is the only path | Skip evidenced in Phase 8-5: `get_speech_timestamps` is a single-stream API; lanes on per-lane wrappers measured 1.10× / 0.95× / 0.92× at 4 / 8 / 16. `16` is queue depth only |
 | `KittenTTSSynthesizer` | `kitten-tts-mini`, `-micro`, `-nano`, `-nano-int8` | `4` | **parallel lanes** — one request per lane on one shared ONNX session | — (no batch axis: every graph has a static batch dimension of 1) | one lane, inline, when the step holds a single request | Static batch dim 1 makes batching impossible without a re-export. `4` *is* the lane count; measured 1.71× at 4 lanes and 1.91× at 8 lanes (mini, this machine) |
 | `ChatterboxTTS` | `chatterbox` | `4` | **AR decode** — token-level T3 decode on the shared KV pool (two CFG rows per request) plus the Phase 9-5 padded S3Gen hop for finished rows; the per-request loop is the fallback | one speech token per row per engine step (decode); speech tokens (vocode) | sequential loop (`len == 1`, `batched_inference: false`, pool refusal, per-row error) | Phase 9-6: `4` is the initial admission depth justified from the 1 GiB arena table (8 English rows × 90 MiB); pending the benchmark-host seeded-equality gate |
 | `ChatterboxTurboTTS` | `chatterbox_turbo` | `4` | **AR decode** — token-level T3 decode on the shared KV pool (one row, Turbo sampler); finished rows vocode per row (meanflow hop skip); the per-request loop is the fallback | one speech token per row per engine step | sequential loop (`len == 1`, `batched_inference: false`, pool refusal, per-row error) | Phase 9-6: `4` is the initial admission depth (4 Turbo rows × 72 MiB); Turbo AR decode is committed scope, the meanflow vocode hop is the documented Phase 9-5 skip; pending the host gate |
 | `ChatterboxMultilingualTTS` | `chatterbox_multilingual` | `1` | **loop** — no batch path | — (autoregressive token loop) | the loop is the only path | Same product decision |
-| `ChatterboxEmbedding` | `chatterbox_embedding` | `1` | **loop** — no batch path | — | the loop is the only path | Same product decision — its non-autoregressive members are deferred with the family |
+| `ChatterboxEmbedding` | `chatterbox_embedding` | `4` | **loop with admission depth** — one `prepare_conditionals` at a time, up to 4 requests handed to the executor per engine step | — (serial execution; the depth is admission, not a batch axis) | the loop is the only path | Phase 11-0 (dated decision 2026-11-08): the embed step executes serially, but a depth of 1 serialised the clone flood at embed admission so the TTS AR step never saw more than one request. `4` is an admission depth, not a batch width |
 | `ChatterboxVC` | `chatterbox_vc` | `1` | **loop** — no batch path at the shipped width; the vocode hop batches only when more than one request is admitted (dormant at `max_batch_size: 1`) | speech tokens | the loop is the only path | Same product decision; the Phase 9-5 batched S3Gen hop is ready for a 9-6 capacity change |
 
 An entry that declares a value its handler cannot honour is a bug: it makes
@@ -420,15 +421,16 @@ What Phase 10-1 adds is execution **width** around that call:
 `max_batch_size: 16` is the scheduler's admission width; `num_workers` is the
 number of transcribes that actually overlap.
 
-### Cross-request window batching (Phase 10-2, opt-in)
+### Cross-request window batching (Phase 10-2, shipped on as of 11-0)
 
 Setting `batched_inference: true` on a `FasterWhisper` entry adds a second
-execution path for steps with **more than one** request. It is opt-in so an
-existing deployment keeps the per-request path until the window batcher is
-enabled deliberately. **Phase 10-5 kept it opt-in (dated decision 2026-11-07):**
-the batcher has a hermetic parity harness and safe fallbacks, but the real-model
-B=1 parity gate has not run, so the shipped default remains the proven
-per-request path until that gate passes.
+execution path for steps with **more than one** request. **Phase 11-0 shipped it
+on (owner decision 2026-11-08):** the real-model B=1 parity gate passed on all
+three measured cases — text, segments, timings and language identical — with
+only `language_probability` moving 0.2-0.8 pp (the batch encoder output feeds
+language detection; the number is informational and the harness bounds it at
+`1e-2`). Both shipped configs set `batched_inference: true`; an operator can
+still set it `false` to force the proven per-request path.
 
 * **Window formation reuses upstream.** The collector runs the same
   `get_speech_timestamps` call as `BatchedInferencePipeline.transcribe`
@@ -437,7 +439,8 @@ per-request path until that gate passes.
   speech request forms three windows (30 + 30 + 5 s), each tagged with its
   request, window index and concatenated-speech offset.
 * **One encode + one generate per formed batch.** Rows from different requests
-  share a batch (capped at 8 windows, owner-approved initial value). CT2's
+  share a batch (capped at `whisper_window_batch_size` windows, default 8,
+  owner-approved initial value). CT2's
   `generate(encoder_output, prompts, …)` takes one prompt per row, so requests
   with different detected languages batch together; the KV cache and native
   beam search stay inside CT2 (vLLM's client-side beam search is explicitly not
@@ -496,8 +499,10 @@ neighbours (8-3 Deviation 6 discipline).
 **Multilingual is a documented skip.** `ChatterboxMultilingualTTS` stays the
 per-request loop with `max_batch_size: 1`: its `AlignmentStreamAnalyzer` keeps
 per-request attention-hook state and needs `output_attentions=True` on the
-shared Llama, both hostile to a shared batch. Embedding and VC stay loops too
-(non-AR).
+shared Llama, both hostile to a shared batch. VC stays a loop too (non-AR);
+the embedder is the `loop_admission` member (Phase 11-0): it executes serially
+but is admitted at depth 4 so a clone flood reaches the TTS AR step as a real
+batch of requests.
 
 **Conditioning-state deletion.** The AR path never assigns `model.conds`: the
 conditionals are projected into each row's prefill, so the Phase 0-2

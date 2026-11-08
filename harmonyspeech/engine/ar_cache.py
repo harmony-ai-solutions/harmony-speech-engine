@@ -46,6 +46,18 @@ The slot count comes from pool availability plus the descriptor (an explicit
 pool. An arena that cannot grant a slot returns ``None`` — the caller takes its
 sequential fallback — so the pool can never cause an out-of-memory failure.
 
+Per-device arenas (Phase 11-0)
+------------------------------
+The pool owns **one budget per device**. An arena is allocated on the resolved
+device of the model that registers it
+(:func:`~harmonyspeech.common.device.resolve_device`), so ``cuda`` and ``cuda:0``
+are the same device on a single-device host while an explicit ``cuda:1`` model
+gets its arena on ``cuda:1``. Each device's arenas are validated against that
+device's remaining budget, so a second device does not consume the first
+device's headroom. ``remaining_bytes`` keeps its historical meaning for the
+pool's **default** device (the single-device case);
+:meth:`ARCachePool.remaining_bytes_for` asks about a specific device.
+
 CPU fallback
 ------------
 ``device=None`` resolves to CUDA when available and to CPU otherwise. A CPU pool
@@ -68,6 +80,8 @@ from collections import deque
 from dataclasses import dataclass
 
 import torch
+
+from harmonyspeech.common.device import resolve_device
 
 __all__ = [
     "ARCacheArena",
@@ -445,12 +459,17 @@ class ARCachePool:
         self.default_cap_tokens = int(default_cap_tokens)
         if self.enabled and self.default_cap_tokens <= 0:
             raise ValueError(f"default_cap_tokens must be positive, got {default_cap_tokens!r}")
-        if device is None:
-            self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        else:
-            self.device = torch.device(device)
+        # Default device: the canonical indexed device (``cuda`` -> ``cuda:<active>``
+        # on a CUDA host, ``cpu`` otherwise). It is only the default for
+        # ``register`` calls that do not name a device; the engine's runners pass
+        # the requesting model's own device, which is what makes explicit
+        # secondary-device placement work (Phase 11-0).
+        self.device = resolve_device(device)
         self._arenas: dict[str, ARCacheArena] = {}
+        # Aggregate resident bytes (every device) and the per-device accounting
+        # that enforces one budget per device.
         self._used_bytes = 0
+        self._used_by_device: dict[torch.device, int] = {}
         self._lock = threading.Lock()
         # Monotonic counters (read by stats(); 9-6 may surface more of them).
         self.grants_total = 0
@@ -460,39 +479,62 @@ class ARCachePool:
     # -- registration ----------------------------------------------------
     @property
     def remaining_bytes(self) -> int:
+        """Remaining budget on the pool's **default** device.
+
+        Single-device deployments (the shipped configs) have one device, so this
+        is the whole remaining budget. Multi-device callers ask about their own
+        device with :meth:`remaining_bytes_for`.
+        """
+        return self.remaining_bytes_for(self.device)
+
+    def remaining_bytes_for(self, device: torch.device | str | None = None) -> int:
+        """Remaining budget on ``device`` (resolved; default: the pool device)."""
+        target = resolve_device(self.device if device is None else device)
         with self._lock:
-            return max(0, self.budget_bytes - self._used_bytes)
+            return max(0, self.budget_bytes - self._used_by_device.get(target, 0))
 
     @property
     def pool_bytes(self) -> int:
+        """Resident slab bytes across every device (the ``/metrics`` figure)."""
         with self._lock:
             return self._used_bytes if self.enabled else 0
 
-    def register(self, descriptor: ARCacheDescriptor) -> ARCacheArena | None:
-        """Allocate ``descriptor``'s arena; refuse it if it cannot fit.
+    def register(
+        self,
+        descriptor: ARCacheDescriptor,
+        *,
+        device: torch.device | str | None = None,
+    ) -> ARCacheArena | None:
+        """Allocate ``descriptor``'s arena on ``device``; refuse it if it cannot fit.
+
+        ``device`` defaults to the pool's device. The AR runner passes the
+        requesting model's resolved device, so an explicit ``cuda:1`` model gets
+        its arena on ``cuda:1`` while the pool's default stays where it was.
 
         Returns the arena (or ``None`` for a disabled pool). Raises
         :class:`ARCacheBudgetError` when the slab or the requested slot count
-        exceeds the remaining budget, and ``ValueError`` for a duplicate key or
-        invalid geometry — both are boot-time configuration errors.
+        exceeds the **device's** remaining budget, and ``ValueError`` for a
+        duplicate key or invalid geometry — both are boot-time configuration
+        errors.
         """
         if not self.enabled:
             return None
         if not isinstance(descriptor, ARCacheDescriptor):
             raise TypeError(f"expected an ARCacheDescriptor, got {type(descriptor).__name__}")
 
+        target = resolve_device(self.device if device is None else device)
         cap_tokens = descriptor.cap_tokens if descriptor.cap_tokens is not None else self.default_cap_tokens
         slab_bytes = descriptor.slab_bytes(cap_tokens)
 
         with self._lock:
             if descriptor.model_key in self._arenas:
                 raise ValueError(f"AR cache arena '{descriptor.model_key}' is already registered")
-            remaining = self.budget_bytes - self._used_bytes
+            remaining = self.budget_bytes - self._used_by_device.get(target, 0)
             if slab_bytes > remaining:
                 raise ARCacheBudgetError(
-                    f"AR cache arena '{descriptor.model_key}' needs a {slab_bytes / 2**20:.1f} MiB slab, "
-                    f"but only {remaining / 2**20:.1f} MiB of the "
-                    f"{self.budget_bytes / 2**20:.1f} MiB budget remains. Lower cap_tokens / slots, "
+                    f"AR cache arena '{descriptor.model_key}' needs a {slab_bytes / 2**20:.1f} MiB slab on "
+                    f"{target}, but only {remaining / 2**20:.1f} MiB of the "
+                    f"{self.budget_bytes / 2**20:.1f} MiB per-device budget remains. Lower cap_tokens / slots, "
                     "or raise ar_inference.kv_cache_budget_bytes."
                 )
             slots = descriptor.slots
@@ -503,9 +545,9 @@ class ARCachePool:
             if arena_bytes > remaining:
                 raise ARCacheBudgetError(
                     f"AR cache arena '{descriptor.model_key}' needs {arena_bytes / 2**20:.1f} MiB "
-                    f"({slots} slots × {slab_bytes / 2**20:.1f} MiB), but only "
-                    f"{remaining / 2**20:.1f} MiB of the {self.budget_bytes / 2**20:.1f} MiB budget remains. "
-                    "Lower slots or raise ar_inference.kv_cache_budget_bytes."
+                    f"({slots} slots × {slab_bytes / 2**20:.1f} MiB) on {target}, but only "
+                    f"{remaining / 2**20:.1f} MiB of the {self.budget_bytes / 2**20:.1f} MiB "
+                    "per-device budget remains. Lower slots or raise ar_inference.kv_cache_budget_bytes."
                 )
 
             try:
@@ -513,7 +555,7 @@ class ARCachePool:
                     descriptor,
                     cap_tokens=cap_tokens,
                     slots=slots,
-                    device=self.device,
+                    device=target,
                     pool=self,
                 )
             except (RuntimeError, MemoryError) as error:
@@ -522,10 +564,11 @@ class ARCachePool:
                 # raw allocation failure. Runtime exhaustion never allocates.
                 raise ARCacheBudgetError(
                     f"could not allocate AR cache arena '{descriptor.model_key}' "
-                    f"({arena_bytes / 2**20:.1f} MiB) on {self.device}: {error}"
+                    f"({arena_bytes / 2**20:.1f} MiB) on {target}: {error}"
                 ) from error
             self._arenas[descriptor.model_key] = arena
             self._used_bytes += arena_bytes
+            self._used_by_device[target] = self._used_by_device.get(target, 0) + arena_bytes
             return arena
 
     # -- slot lifecycle --------------------------------------------------
@@ -587,6 +630,8 @@ class ARCachePool:
             if not self.enabled:
                 return {
                     "enabled": False,
+                    "device": str(self.device),
+                    "devices": {},
                     "slots": 0,
                     "slots_active": 0,
                     "slots_free": 0,
@@ -604,6 +649,8 @@ class ARCachePool:
             active = sum(row["slots_active"] for row in arenas.values())
             return {
                 "enabled": True,
+                "device": str(self.device),
+                "devices": self._device_rows(),
                 "slots": sum(row["slots"] for row in arenas.values()),
                 "slots_active": active,
                 "slots_free": sum(row["slots_free"] for row in arenas.values()),
@@ -622,6 +669,7 @@ class ARCachePool:
                     "budget_bytes": self.budget_bytes,
                     "default_cap_tokens": self.default_cap_tokens,
                     "device": str(self.device),
+                    "devices": {},
                     "pool_bytes": 0,
                     "allocated_bytes": 0,
                     "slots": 0,
@@ -640,6 +688,10 @@ class ARCachePool:
                 "budget_bytes": self.budget_bytes,
                 "default_cap_tokens": self.default_cap_tokens,
                 "device": str(self.device),
+                # Per-device accounting (Phase 11-0): the budget applies to each
+                # device separately, so a mixed placement reports one row per
+                # device instead of one aggregate that would hide the split.
+                "devices": self._device_rows(),
                 # Resident slab footprint: ordinary torch allocations, so it also
                 # shows up in the device-level VRAM accounting (Phase 10-3).
                 "pool_bytes": self._used_bytes,
@@ -653,6 +705,17 @@ class ARCachePool:
                 "releases_total": self.releases_total,
                 "arenas": arenas,
             }
+
+    def _device_rows(self) -> dict[str, dict]:
+        """Per-device budget/usage rows (``{}`` when nothing is registered)."""
+        return {
+            str(device): {
+                "budget_bytes": self.budget_bytes,
+                "used_bytes": int(used),
+                "remaining_bytes": max(0, self.budget_bytes - int(used)),
+            }
+            for device, used in self._used_by_device.items()
+        }
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (

@@ -56,9 +56,64 @@ Findings (engine was frozen during the run; none fixed):
 
 ## Checklist
 
-- [ ] Pool device fix + per-device arenas; `cuda:1` placement proven end-to-end
-- [ ] Embedding admission depth + honest class re-classification
-- [ ] Whisper probe fixed; runtime budget governor live + validated
-- [ ] Finished-row guard; both parity harnesses green
-- [ ] Window-cap config key; whisper `batched_inference` flipped (dated)
-- [ ] Log-wrap fix; findings table annotated; suites green; `summary.md` ticked
+- [x] Pool device fix + per-device arenas; `cuda:1` placement proven end-to-end
+- [x] Embedding admission depth + honest class re-classification
+- [x] Whisper probe fixed; runtime budget governor live + validated
+- [x] Finished-row guard; both parity harnesses green
+- [x] Window-cap config key; whisper `batched_inference` flipped (dated)
+- [x] Log-wrap fix; findings table annotated; suites green; `summary.md` ticked
+
+## Deviations & decisions (2026-11-08)
+
+1. **Device utility module.** Added `harmonyspeech/common/device.py`
+   (`resolve_device`, `devices_match`, `cuda_index`, `device_key`) instead of
+   inlining normalization at each site; the pool, runner, worker, loader, probe
+   and VRAM accounting all use it. `DeviceConfig` itself is unchanged, so
+   executor selection and existing callers keep their semantics.
+2. **Per-device budget = one budget per device.** `ar_inference.kv_cache_budget_bytes`
+   is enforced per device (the pool is a device-wide pool; a second device is a
+   second pool). `remaining_bytes` keeps its single-device meaning (the pool's
+   default device) and `remaining_bytes_for(device)` is the per-device query.
+   `/health` gains `ar_cache.devices`; the boot arena table gains a device column.
+3. **Chatterbox dtype policy fix (found while gating).** `_resolve_load_dtype`
+   compared `device != "cuda"`, so handing the wrapper the canonical `cuda:0` (or
+   `cuda:1`) silently demoted T3 to fp32. The shipped GPU config then allocated
+   180 MiB fp32 English slabs, exhausted the 1 GiB pool and disabled Turbo. The
+   check now parses the device type; the shipped boot reports the documented fp16
+   arena table (8 × 90 MiB + 4 × 72 MiB = 1008 MiB). This is a consequence of the
+   device-resolution work, not an unrelated change.
+4. **`/health.whisper_admission`.** The governor decision (`allowed_windows`,
+   `per_window_bytes`, `device_used_bytes`, `budget_source`) is now observable;
+   the trip gate reads it directly instead of inferring the shrink from timing.
+5. **Whisper probe shape.** The probe now sends deterministic speech-like audio
+   with explicit ≤30 s `clip_timestamps` (no VAD dependence) and measures on the
+   model's device. The in-engine per-window values are larger than the old
+   external `nvidia-smi` estimate for tiny (61–66 MiB vs 19 MiB); the turbo value
+   matches (209.7 vs 211 MiB). `vram-profiles.md` records the engine-measured
+   values and why they are the conservative ones. A budget below the projected
+   peak now refuses the boot (the hard check works); the old 1 GiB trip is
+   therefore a boot error, and the runtime trip is demonstrated at 1.5 GiB.
+6. **`loop_admission` class (dated decision 2026-11-08).** `ChatterboxEmbedding`
+   moved from `loop` (which asserts width 1) to a sixth class whose semantics are
+   "per-request sequential execution, admission depth only". The executor is
+   unchanged (still one `prepare_conditionals` at a time); the honest statement
+   is that `max_batch_size` is admission depth there, not a batch width. Policy
+   test, docs class table and matrix row updated together.
+7. **Whisper parity tolerance.** `language_probability` is bounded at `1e-2` and
+   marked informational; text/segments/timings/language assertions are untouched
+   (dated decision 2026-11-08, owner-approved).
+8. **Test doubles.** `tests/integration/test_whisper_exhaustion.py`'s
+   `_TightBatcher` now accepts the runner-passed `window_batch_size`, and its
+   config declares `whisper_window_batch_size: 4` — the tight cap is now the real
+   knob rather than an instance override.
+9. **Observation (not a deviation).** At c=2 on a fresh server the first request
+   can take the `len == 1` sequential fast path and finish before the second is
+   admitted, so AR batching may not engage; c=4 (the gate) batches reliably. This
+   is pre-existing scheduler/arrival timing, unchanged by 11-0.
+10. **Gate 2 exit code.** `scripts/audio_regression.py --axis batching:1-vs-4`
+    printed `overall: PASS` and wrote `out/bench/gate-11-ar.json` with
+    `passed: true`; the PowerShell pipeline reported exit 1, which is a shell
+    artifact, not a gate failure.
+11. `out/bench/` (configs, logs, JSON reports, DLL shim) remains untracked and is
+    not part of the change set.
+

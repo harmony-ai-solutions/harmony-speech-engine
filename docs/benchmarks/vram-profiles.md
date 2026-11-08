@@ -144,8 +144,8 @@ device-free headroom) on the benchmark host:
 | device used (total − free) | — | **11.89 GiB** | includes CT2 + CUDA contexts |
 | free device memory (headroom) | 7.30 GiB (torch reserved) | **4.04 GiB** | the Phase 9 pool-sizing input |
 | non-torch delta (device used − torch reserved) | 0.21 GiB (8.83 − 8.62, nvidia-smi vs reserved) | **3.23 GiB** (11.89 − 8.66) | CT2 weights/activations + context |
-| Whisper turbo probe peak | — | **3380 MiB** (external) | 480 s max shape; the startup probe fails |
-| Whisper tiny probe peak | — | **308 MiB** (external) | 480 s max shape; the startup probe fails |
+| Whisper turbo probe peak | — | **4194 MiB / 209.7 MiB per window** (engine probe, fixed in 11-0) | 300 s × 2 workers × 10 windows (shipped shape), 20 windows probed |
+| Whisper tiny probe peak | — | **2442 MiB / 61.0 MiB per window** (engine probe, fixed in 11-0) | 300 s × 4 workers × 10 windows (shipped shape), 40 windows probed |
 
 Measured with `scripts/measure_vram.py --config config.gpu.yml --no-warmup`
 (full 28-model catalogue, `HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1`, idle GPU 1).
@@ -158,20 +158,26 @@ with Whisper resident is **4.04 GiB**. (The script's `nvidia-smi` row printed
 `CUDA_VISIBLE_DEVICES=1` maps `cuda:0` to physical GPU 1; use the
 `mem_get_info` figures above.)
 
-**Whisper probe defect (engine, frozen for this task).** The startup max-shape
-probe fails on its own synthetic audio:
+**Whisper probe defect (fixed in Phase 11-0).** The startup max-shape probe used
+to fail on its own all-zero audio for any shape ≥30 s:
 
 ```
 RuntimeError: No clip timestamps found. Set 'vad_filter' to True or provide 'clip_timestamps'.
 ```
 
-so `probe_measured` is false, `peak_activation_bytes` and `per_window_bytes`
-stay 0, and the two "probe peak" cells above had to be measured **externally**
-(load the model, read the device baseline, transcribe a 480 s tiled clip while
-sampling `nvidia-smi -i 1`). Per-window cost, had the engine measured it, would
-be 308/16 ≈ 19 MiB (tiny) and 3380/16 ≈ 211 MiB (turbo) for the 16-window
-pipeline batch. The probe failure also disables the runtime governor — see the
-budget-trip table below.
+so `probe_measured` was false, `peak_activation_bytes` and `per_window_bytes`
+stayed 0, and the two "probe peak" cells above had to be measured **externally**.
+Phase 11-0 fixed the probe's input (deterministic speech-like audio plus
+explicit ≤30 s `clip_timestamps`, so no VAD dependence) and its device (the
+model's own card, `cuda:1` included). The engine now measures the shipped
+shapes itself: tiny **2442 MiB / 61.0 MiB per window** (4 workers × 10 windows)
+and turbo **4194 MiB / 209.7 MiB per window** (2 workers × 10 windows) on the
+full-catalogue boot. The turbo figure agrees with the old external 211 MiB/window
+estimate; the tiny figure is higher than the old 19 MiB estimate, because the
+external run divided a peak that `nvidia-smi` sampled too sparsely. The measured
+value is the conservative one, and the governor uses it. Per-window cost is
+shape-dependent (batch width × audio length × worker count), so treat the cell
+as "what this boot measured", never a constant.
 
 ### Phase 9 pool-sizing input
 
@@ -212,13 +218,16 @@ remaining budget, so that model takes the sequential fallback (never an error).
 | AR activation peak (`hse_model_peak_activation_bytes`) | **0 (not probed)** | the AR probe is not implemented; activation peak unmeasured |
 
 The arena table is exact: 8 × 90 MiB + 4 × 72 MiB = 1008 MiB, and
-`hse_ar_cache_pool_bytes` reports 1056964608 B. Two caveats: the engine's pool is
+`hse_ar_cache_pool_bytes` reports 1056964608 B. The engine's pool used to be
 constructed on `torch.device("cuda")` (no index) while the model is `cuda:0`, so
-in the shipped build the runner is disabled and **nothing is resident** — these
-figures were measured with a measurement wrapper that indexes the pool device.
-And `hse_model_peak_activation_bytes` is 0 for AR models (no probe), so the
-activation component is not separately accounted; the 7036 MiB peak is the
-end-to-end device figure that matters for headroom.
+in the pre-11-0 build the runner disabled itself and **nothing was resident** —
+these figures needed a measurement wrapper that indexed the pool device. Phase
+11-0 fixed device resolution: a shipped `config.gpu.yml` boot now reports both
+arenas on `cuda:0` with fp16 slabs (8 + 4 slots, 1008 MiB), and an explicit
+`cuda:1` entry gets its arena on `cuda:1`. `hse_model_peak_activation_bytes` is
+still 0 for AR models (no probe), so the activation component is not separately
+accounted; the 7036 MiB peak is the end-to-end device figure that matters for
+headroom.
 
 Boot with `ar_inference.enabled: false` (or `--no-ar-cache`) to measure the same
 catalogue without the pool; the difference is the pool's real device footprint
@@ -254,12 +263,34 @@ crashed.
 | p50 / p95 | 8044.8 / 15737.8 ms | **8032.5 / 15675.3 ms** | no OOM, no crash |
 
 The 6 GiB trip passes trivially because the workload (1.5–2.1 GiB) is below the
-bound. The **1 GiB trip** is the real test and it **fails the requirement**: max
-device used 1.95 GiB, 95 % over budget, with p50 unchanged. The governor cannot
-throttle because the startup probe fails and leaves `per_window_bytes = 0`;
-`allowed_windows()` deliberately returns the cap rather than throttle on a zero
-cost. Until the probe is fixed, `whisper_vram_budget_bytes` is a boot-time
-projection check, **not** a runtime ceiling.
+bound. The **1 GiB trip** was the real test and it **failed the requirement**:
+max device used 1.95 GiB, 95 % over budget, with p50 unchanged. The governor
+could not throttle because the startup probe failed and left
+`per_window_bytes = 0`; `allowed_windows()` deliberately returns the cap rather
+than throttle on a zero cost.
+
+#### Phase 11-0 — the governor is live (revalidated 2026-11-08)
+
+With the fixed probe, `whisper_vram_budget_bytes` is a real runtime ceiling. A
+whisper-tiny boot on GPU 1 with `whisper_max_audio_seconds: 300`,
+`num_workers: 2`, `batched_inference: true` and a **1.5 GiB** budget:
+
+| Metric | Value |
+|---|---|
+| Boot check (`/health.whisper_vram`) | projected peak **1392.6 MiB** ≤ 1536 MiB → `status: ok` |
+| Measured probe | `peak_activation_bytes` **1382 MiB**, `per_window_bytes` **66.0 MiB** (20 windows) |
+| `allowed_windows` at rest (cap 16) | **2** — `(1536 − 1402) MiB // 66 MiB` |
+| 8-request flood (concurrency 8, ≤35 s clips) | 8/8 answered, **0 loss**, 0 failures, 0 timeouts |
+| Max `hse_vram_device_used_bytes` under the flood | **1470693376 B (1.37 GiB)** ≤ 1.5 GiB budget |
+| p50 / p95 | 559.0 / 891.9 ms |
+
+The 2-window admission and the 1.37 GiB peak are the same arithmetic: two
+windows × 66 MiB fit the 134 MiB the ceiling leaves, so the bound holds instead
+of being overshot. `/health` now exposes the live decision as
+`whisper_admission` (`allowed_windows`, `per_window_bytes`, `device_used_bytes`,
+`budget_source`), so a trip is observable without reading the effect. Note that
+a budget **below the projected peak** now refuses the boot (the hard check
+works): the old 1 GiB trip would be a boot error, not a silent overshoot.
 
 The hermetic proof (mocked `torch.cuda.mem_get_info`, real scheduler and
 `get_whisper_admission`) lives in

@@ -261,6 +261,81 @@ def test_probe_counts_only_real_30s_clips(monkeypatch):
     assert record["per_window_bytes"] == 300
 
 
+class _RecordingPipeline:
+    """Records what the probe actually sends to the batched pipeline."""
+
+    calls: list[tuple] = []
+
+    def __init__(self, model):
+        self.model = model
+        self.last_speech_timestamp = 0.0
+
+    def transcribe(self, audio, **kwargs):
+        _RecordingPipeline.calls.append((audio, kwargs))
+        return iter([]), None
+
+
+def test_probe_sends_speech_like_audio_with_explicit_clips(monkeypatch):
+    """Phase 11-0: a ≥30 s probe must not depend on VAD finding speech."""
+    import faster_whisper
+
+    _RecordingPipeline.calls.clear()
+    monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", _RecordingPipeline)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda index=None: None)
+    free_values = iter([(1000, 2000), (400, 2000)])
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda index=None: next(free_values))
+
+    model = SimpleNamespace(model=SimpleNamespace(device="cuda"))
+    record = probe_whisper_peak(
+        model,
+        workers=2,
+        window_batch=8,
+        beam_size=3,
+        max_audio_seconds=60.0,
+        sample_peak=False,
+    )
+
+    audio, kwargs = _RecordingPipeline.calls[0]
+    assert kwargs["clip_timestamps"] == [
+        {"start": 0.0, "end": 30.0},
+        {"start": 30.0, "end": 60.0},
+    ], "the probe must synthesise clips instead of asking VAD to find speech"
+    assert audio.shape[0] == 60 * 16000
+    assert float(abs(audio).max()) > 0.1, "the probe audio must not be silence"
+    assert record["windows_probed"] == 4, "2 workers x 2 clips"
+    assert record["measured"] is True
+
+
+def test_probe_uses_the_model_device_index_when_available(monkeypatch):
+    """A ``cuda:1`` model must be measured on ``cuda:1``, not the active card."""
+    import faster_whisper
+
+    _RecordingPipeline.calls.clear()
+    monkeypatch.setattr(faster_whisper, "BatchedInferencePipeline", _RecordingPipeline)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda index=None: None)
+    probed_indexes: list[int] = []
+
+    def _mem_get_info(index=None):
+        probed_indexes.append(index)
+        return (1000, 2000) if len(probed_indexes) == 1 else (900, 2000)
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", _mem_get_info)
+
+    model = SimpleNamespace(
+        model=SimpleNamespace(device="cuda", device_index=[1])
+    )
+    record = probe_whisper_peak(
+        model, workers=1, window_batch=1, max_audio_seconds=30.0, sample_peak=False
+    )
+
+    assert probed_indexes == [1, 1], f"probe read {probed_indexes}"
+    assert record["measured"] is True
+
+
 def test_probe_skips_without_cuda(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
 

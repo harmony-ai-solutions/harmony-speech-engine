@@ -78,6 +78,7 @@ from transformers.generation.logits_process import (
     TopPLogitsWarper,
 )
 
+from harmonyspeech.common.device import devices_match, resolve_device
 from harmonyspeech.engine.ar_cache import ARCacheBudgetError, ARCacheDescriptor, ARCachePool, ARCacheSlot
 from harmonyspeech.modeling.models.chatterbox.t3_ar import T3ARSampler
 
@@ -431,7 +432,10 @@ class ARBatchRunner:
         self.pool = pool
         self.model_key = model_key
         self.model_config = model_config
-        self.device = t3.device
+        # Canonical indexed device (Phase 11-0): ``t3.device`` is already
+        # indexed in practice, but resolving keeps a mocked/CPU t3 and an
+        # explicit ``cuda:1`` consistent with the pool's accounting.
+        self.device = resolve_device(getattr(t3, "device", None))
         model_type = model_type or getattr(model_config, "model_type", None)
         self.contract = contract or (TurboContract() if model_type == "ChatterboxTurboTTS" else EnglishContract())
         self.arena = None
@@ -465,9 +469,16 @@ class ARBatchRunner:
 
         ``model_key`` must be the scheduler's name (``ModelConfig.name`` /
         ``request_data.model``): 9-4's capacity admission reads the pool by that
-        key and treats any other key as "no signal". A pool on a different
-        device, a disabled pool, or a budget refusal disables the runner
+        key and treats any other key as "no signal". A disabled pool, a
+        non-CUDA pool for a CUDA model, or a budget refusal disables the runner
         (sequential fallback) instead of failing boot.
+
+        Phase 11-0: the arena is allocated on **this model's resolved device**
+        (``cuda`` and ``cuda:0`` are the same device; an explicit ``cuda:1`` is
+        honoured), and the budget check uses that device's remaining headroom.
+        The old code compared ``pool.device`` with ``self.device`` directly and
+        disabled the runner for every CUDA model because ``torch.device("cuda")
+        != torch.device("cuda:0")``.
         """
         with self._lock:
             if self.arena is not None:
@@ -479,13 +490,22 @@ class ARBatchRunner:
             if pool is None or not getattr(pool, "enabled", False):
                 self._registration_error = "no AR cache pool"
                 return False
-            if torch.device(pool.device) != torch.device(self.device):
-                self._registration_error = f"pool device {pool.device} != model device {self.device}"
+            model_device = resolve_device(self.device)
+            if model_device.type == "cuda" and not torch.cuda.is_available():
+                self._registration_error = f"model device {model_device} but CUDA is unavailable"
                 logger.warning(
                     f"AR runner for '{self.model_key}' disabled: {self._registration_error}; "
                     "Chatterbox requests use the sequential loop"
                 )
                 return False
+            if not devices_match(pool.device, model_device):
+                # Not a refusal (Phase 11-0): the pool allocates per device, so a
+                # model on a secondary device still gets a real arena there. Log
+                # it because the placement is worth seeing in the boot table.
+                logger.info(
+                    f"AR runner for '{self.model_key}': arena on {model_device} "
+                    f"(pool default {pool.device})"
+                )
             try:
                 layers, kv_heads, head_dim, dtype = self._geometry()
                 # Bound the arena to the maximum rows the scheduler can admit
@@ -508,7 +528,12 @@ class ARBatchRunner:
                     int(getattr(self.model_config, "max_batch_size", 1) or 1)
                     * self.contract.rows_per_request,
                 )
-                fit = max(1, int(pool.remaining_bytes) // slab)
+                remaining = (
+                    pool.remaining_bytes_for(model_device)
+                    if hasattr(pool, "remaining_bytes_for")
+                    else pool.remaining_bytes
+                )
+                fit = max(1, int(remaining) // slab)
                 slots = max(1, min(desired, fit))
                 arena = pool.register(
                     ARCacheDescriptor(
@@ -519,7 +544,8 @@ class ARBatchRunner:
                         dtype=dtype,
                         cap_tokens=None,  # pool default (`ar_inference.default_cap_tokens`)
                         slots=slots,
-                    )
+                    ),
+                    device=model_device,
                 )
             except ARCacheBudgetError as error:
                 self._registration_error = str(error)
@@ -534,8 +560,8 @@ class ARBatchRunner:
                 return False
             self.arena = arena
             logger.info(
-                f"AR decode arena '{self.model_key}': {arena.slots} slot(s) × {arena.cap_tokens} tokens, "
-                f"{arena.slab_bytes / 2**20:.1f} MiB/slot, dtype={dtype}"
+                f"AR decode arena '{self.model_key}' on {arena.device}: {arena.slots} slot(s) × "
+                f"{arena.cap_tokens} tokens, {arena.slab_bytes / 2**20:.1f} MiB/slot, dtype={dtype}"
             )
             return True
 
@@ -775,6 +801,13 @@ class ARBatchRunner:
             rows = [self.rows[request_id] for request_id in request_ids if request_id in self.rows]
             advance: list[ARRow] = []
             for row in rows:
+                if row.finished or row.error is not None:
+                    # A finished/errored row is never sampled again (Phase 11-0).
+                    # The engine pops finished rows per step, but the seeded
+                    # parity harness passes its whole row set every step; without
+                    # this guard a row that already hit EOS would draw an extra
+                    # token and its stream would no longer match the solo run.
+                    continue
                 row.steps += 1
                 try:
                     token = row.contract.sample(self.t3, row)

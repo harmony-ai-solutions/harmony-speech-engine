@@ -45,6 +45,19 @@ def test_resolve_load_dtype_forces_float32_on_cpu():
     assert _resolve_load_dtype("cuda", None) is torch.float32
 
 
+def test_resolve_load_dtype_treats_indexed_cuda_as_cuda():
+    """Phase 11-0: a resolved ``cuda:N`` keeps the requested dtype.
+
+    The loader now hands the wrapper the canonical indexed device; a string
+    equality test against ``"cuda"`` silently demoted every resolved device
+    (including the default ``cuda:0``) to float32.
+    """
+    assert _resolve_load_dtype("cuda:0", torch.float16) is torch.float16
+    assert _resolve_load_dtype("cuda:1", torch.float16) is torch.float16
+    assert _resolve_load_dtype(torch.device("cuda", 2), torch.bfloat16) is torch.bfloat16
+    assert _resolve_load_dtype("cuda:1", None) is torch.float32
+
+
 def test_apply_model_dtype_on_cpu_leaves_everything_float32():
     model = _fake_model("cpu")
     apply_model_dtype(model, torch.float16)

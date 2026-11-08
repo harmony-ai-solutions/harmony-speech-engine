@@ -77,17 +77,58 @@ alone). Two host facts are worth recording because they change the numbers:
   numbers below were measured with `INFO`; DEBUG runs are used only where the
   cell is the composition itself, and are marked.
 
-#### Open findings from this run (engine frozen; none fixed here)
+#### Open findings from this run (engine frozen during the run; **all fixed in Phase 11-0**)
 
-| # | Severity | Finding | Effect |
-|---|---|---|---|
-| 1 | **critical** | `ARCachePool` is built without `device=` → `torch.device("cuda")` vs `t3.device == cuda:0`; `ARBatchRunner.register()` disables the runner on every CUDA model | Phase 9 AR batching never engages in the shipped build; all Chatterbox requests take the sequential loop |
-| 2 | **high** | `chatterbox_embedding.max_batch_size: 1` serialises the voice-cloning pipeline's embed step | voice-cloning TTS always sees one request → `len == 1` fast path; AR runner unused even after #1 |
-| 3 | **high** | Whisper max-shape probe fails on its zero probe audio (`No clip timestamps found`) | `peak_activation_bytes`/`per_window_bytes` = 0; runtime budget governor inert (1 GiB budget overshot to 1.95 GiB) |
-| 4 | medium | `ARBatchRunner.step()` re-samples rows already `finished` | seeded parity gate goes red (extra EOS/decoder tokens); production engine does not hit it because it pops finished rows |
-| 5 | medium | window-batch cap is a module constant, no config key | the documented 4-vs-8 sweep and the exhaustion boot's window batch=4 need a measurement wrapper |
-| 6 | low | benchmark harness: DEBUG log wraps at ~80 columns, breaking `--engine-log` parsing; `parse_step_composition` needs re-joined lines | composition cells had to be parsed offline |
-| 7 | low | benchmark harness: `chatterbox-exhaustion` sent `single_speaker_tts` + `input_audio` (HTTP 400) | fixed in `scripts/bench_throughput.py` (use `voice_cloning` when a reference is present) |
+| # | Severity | Finding | Effect | Status (11-0) |
+|---|---|---|---|---|
+| 1 | **critical** | `ARCachePool` is built without `device=` → `torch.device("cuda")` vs `t3.device == cuda:0`; `ARBatchRunner.register()` disables the runner on every CUDA model | Phase 9 AR batching never engages in the shipped build; all Chatterbox requests take the sequential loop | **fixed ✓** — canonical device resolution (`cuda` ≡ `cuda:0`, explicit indices preserved) + per-device arenas; runner registers on the model's device |
+| 2 | **high** | `chatterbox_embedding.max_batch_size: 1` serialises the voice-cloning pipeline's embed step | voice-cloning TTS always sees one request → `len == 1` fast path; AR runner unused even after #1 | **fixed ✓** — admission depth 4 + honest `loop_admission` re-classification (dated 2026-11-08) |
+| 3 | **high** | Whisper max-shape probe fails on its zero probe audio (`No clip timestamps found`) | `peak_activation_bytes`/`per_window_bytes` = 0; runtime budget governor inert (1 GiB budget overshot to 1.95 GiB) | **fixed ✓** — speech-like probe audio + explicit ≤30 s clips, measured on the model's device; governor live and trip revalidated |
+| 4 | medium | `ARBatchRunner.step()` re-samples rows already `finished` | seeded parity gate goes red (extra EOS/decoder tokens); production engine does not hit it because it pops finished rows | **fixed ✓** — finished/errored rows are never re-sampled; seeded parity harness green |
+| 5 | medium | window-batch cap is a module constant, no config key | the documented 4-vs-8 sweep and the exhaustion boot's window batch=4 need a measurement wrapper | **fixed ✓** — per-model `whisper_window_batch_size` (default 8) plumbed to the batcher |
+| 6 | low | benchmark harness: DEBUG log wraps at ~80 columns, breaking `--engine-log` parsing; `parse_step_composition` needs re-joined lines | composition cells had to be parsed offline | **fixed ✓** — the engine-log sink uses a wide width when the stream is redirected (no wrap, no crop) |
+| 7 | low | benchmark harness: `chatterbox-exhaustion` sent `single_speaker_tts` + `input_audio` (HTTP 400) | — | fixed in `scripts/bench_throughput.py` (use `voice_cloning` when a reference is present) |
+
+#### Phase 11-0 — fixes verified on the same host (2026-11-08)
+
+The engine was unfrozen for 11-0. The headline tables above are unchanged; this
+block is the re-run evidence that the shipped build now delivers them. Host:
+RTX 5060 Ti, torch 2.9.1+cu130, `CUDA_VISIBLE_DEVICES=1` (GPU 1 idle).
+
+* **Parity harnesses green.** `tests/e2e/stt/test_whisper_window_parity.py` (tiny,
+  single-window + 65 s multi-window) **2 passed**; the tolerance is `1e-2` with
+  `language_probability` informational (dated decision 2026-11-08).
+  `tests/e2e/tts/test_chatterbox_ar_parity.py` (English + Turbo, seeded token
+  equality) **2 passed** — no tolerance was loosened.
+* **`batching:1-vs-4` AR families, shipped engine, no fixture.**
+  `scripts/audio_regression.py --families chatterbox,chatterbox_turbo --axis
+  batching:1-vs-4 --gpu` → **overall PASS**, all 8 cases (max log-mel MSE
+  1.4e-5, corr 1.0).
+* **Three-way spot check through the shipped `config.gpu.yml`** (no device
+  wrapper): both arenas registered on `cuda:0` (English 8 fp16 slots × 90 MiB,
+  Turbo 4 × 72 MiB = 1008 MiB), and at **c=4**:
+
+  | Run | req/s | p50 (ms) | Max slots active | Grants Δ | Max tokens/step |
+  |---|---|---|---|---|---|
+  | `chatterbox` (c=4) | 0.80 | 4490.4 | 6 | **14** | **3.952** |
+  | `chatterbox_turbo` (c=4) | 1.55 | 2502.3 | 3 | **7** | **3.956** |
+  | clone flood, distinct refs (c=4) | 0.90 | 2178.3 | 6 | **14** | **3.489** |
+
+  The runner is live in the shipped build (grants > 0, tokens/step > 1), and the
+  clone flood proves the `chatterbox_embedding` admission depth: 8/8 answered,
+  0 loss, 0 refusals.
+* **`cuda:1` placement.** A chatterbox entry on `cuda:1` registered its arena on
+  `cuda:1` (4 fp16 slots × 90 MiB; `/health.ar_cache.devices` = `["cuda:1"]`)
+  and served c=4 with **grants Δ 14**, tokens/step 2.0, 0 failures. A two-device
+  smoke (one tiny CT2 model on each card) passes. `docs/models.md` documents the
+  resolution rule (`cuda` ≡ active device, explicit indices preserved).
+* **Budget trip.** See
+  [VRAM profiles](vram-profiles.md#phase-11-0--the-governor-is-live-revalidated-2026-11-08):
+  real `per_window_bytes` (66.0 MiB), `allowed_windows` 16 → **2**, 8/8
+  answered, max device used 1.37 GiB ≤ 1.5 GiB.
+* **Log wrap.** The engine-log sink uses a wide width when the stream is
+  redirected, so `--engine-log` lines are no longer wrapped mid-sentence.
+
 
 ## Padded-batch equivalence gate
 
@@ -411,10 +452,11 @@ the gate that keeps `batched_inference: true` honest for the newly batched hops.
 `kittentts` has no `batching_cases` (it is a lanes family, not a padded-batch
 family), so it is not in this gate. All seven registered families pass; the
 residual MSEs are the documented float noise floor, not padding leakage. **Caveat
-on the AR rows:** with the shipped pool-device bug the engine's AR runner is
-disabled, so the "4" side can fall back to the sequential loop and the gate is
-weaker than it looks. The seeded token-equality probe in the 9-6 host-run notes
-is the stronger evidence for the AR runner itself.
+on the AR rows (fixed in 11-0):** at measurement time the shipped pool-device
+bug disabled the engine's AR runner, so the "4" side could fall back to the
+sequential loop and the gate was weaker than it looked. Phase 11-0 fixed the
+device resolution and the seeded parity harness (`tests/e2e/tts/test_chatterbox_ar_parity.py`)
+now passes green, so the AR row is a real batched-vs-sequential comparison.
 
 ### Scenario matrix — OpenVoice V2 clone (Whisper VAD → embed → MeloTTS → tone convert)
 
@@ -891,16 +933,15 @@ temperature 0:
 | `faster-whisper-large-v3-turbo` | wanda4 (3.6 s) | **yes** | 0.0 | 0.0 | language `ja` = `ja`; probability 0.9907 vs 0.9888 (**Δ 0.0020**) |
 | `faster-whisper-tiny` | 65 s tiled | **yes** | 0.0 | 0.0 | language `ja` = `ja`; probability 0.9507 vs 0.9585 (**Δ 0.0078**) |
 
-**Gate verdict: substantive contract PASS, the harness's 1e-3 probability
-tolerance FAILS.** Text, per-segment text, segment start/end and language are
-bit-identical in all three cases; the only delta is
+**Gate verdict: substantive contract PASS; the harness's 1e-3 probability
+tolerance failed and was widened.** Text, per-segment text, segment start/end
+and language are bit-identical in all three cases; the only delta is
 `language_probability`, 0.002–0.008 absolute (0.2–0.8 pp). This is the same
 batch-shape kernel-selection effect documented as the float noise floor, not a
 semantic difference: the batched path reuses the batch encoder output for
-language detection. Recommendation: widen the probability tolerance to 1e-2 (or
-make it informational, like the multi-window language edge) and flip
-`batched_inference` to `true` — the text/timing contract that users see holds.
-The multi-window test passes outright.
+language detection. **Owner decision 2026-11-08 (Phase 11-0):** the tolerance is
+now `1e-2` and `language_probability` is marked informational; the shipped
+configs set `batched_inference: true`. The multi-window test passes outright.
 
 Documented stochastic edge: the batched path pins `temperature=0` exactly like
 `BatchedInferencePipeline.transcribe`; the only semantic difference is the
@@ -911,22 +952,22 @@ lives in `tests/e2e/stt/test_whisper_window_parity.py` (skipped unless
 
 ### Honesty notes
 
-* **The window batcher is opt-in (dated decision 2026-11-07).** It has a
-  hermetic parity harness and safe fallbacks. The B=1 real-model parity gate has
-  now run (2026-11-08): text, segments, timings and language are identical on all
-  three cases; only `language_probability` moves 0.2–0.8 pp, beyond the harness's
-  1e-3 tolerance. The substantive contract passes. **Recommendation:** widen that
-  tolerance (or make the probability informational) and flip
-  `batched_inference: true`; until the config decision is taken, the shipped
-  configs still leave it unset and the default remains the per-request path.
+* **The window batcher is on in the shipped configs (dated decision
+  2026-11-08, Phase 11-0).** It has a hermetic parity harness and safe
+  fallbacks. The B=1 real-model parity gate ran (2026-11-08): text, segments,
+  timings and language are identical on all three cases; only
+  `language_probability` moves 0.2–0.8 pp, so the harness bounds it at `1e-2`
+  and marks it informational. `batched_inference: true` is now the shipped value
+  in both configs; `false` still forces the proven per-request path.
 * **Width is now measured — and it does not help throughput.** `num_workers`
   only changes how many independent requests overlap on shared weights; the
   M-sweep above is flat within ±2 % at every width for both models. Keep the
   shipped 2/4 as a fairness/isolation knob, not a throughput knob.
 * **Within one engine step, one model executes one step at a time.** The lanes
   overlap transcribes of the same model; they are not cross-model parallelism.
-* `16` remains the admission/queue depth; the window cap (`8`) is a memory
-  bound, and the per-request pipeline's intra-audio clip batch is `16`.
+* `16` remains the admission/queue depth; the window cap
+  (`whisper_window_batch_size`, default `8`) is a memory bound, and the
+  per-request pipeline's intra-audio clip batch is `16`.
 
 ### Reproduce
 
@@ -1278,23 +1319,25 @@ python scripts/audio_regression.py --families chatterbox,chatterbox_turbo \
 
 ### Host-run notes (2026-11-08) — how the AR-runner rows were obtained
 
-* **Pool device (engine bug).** The unmodified engine disables the runner on
-  CUDA (`pool.device == cuda` vs `t3.device == cuda:0`). The AR-runner rows used
-  `out/bench/serve_ar_pool_device.py`, a measurement wrapper that patches the
-  pool's default device to `torch.device("cuda", current_device())`; the engine
-  tree is untouched. Every row is labelled "AR runner (4) … pool device
-  patched". Re-run those cells only after the one-line engine fix.
-* **Voice-cloning admission.** `chatterbox_embedding.max_batch_size` was raised
-  from 1 to 4 for the voice-cloning cache/exhaustion runs; at 1 the pipeline's
-  embed step serialises and the TTS handler never batches.
-* **Seeded parity gate (9-6).** As written the gate is **red** for both
-  families, and the cause is the harness, not the runner:
-  `ARBatchRunner.step()` re-samples a row that is already `finished` when the
-  caller passes it again, so the gate's "step both until all finish" loop
-  appends extra EOS/decoder tokens to the short row. With finished rows excluded
-  (only-unfinished stepping, the engine's own pattern), the token streams are
-  **bit-identical alone vs batched for both English and Turbo** (probe:
-  `out/ar_parity_probe.py`; English 21 tokens, Turbo 24 tokens, equal). The
+* **Pool device (engine bug — fixed in 11-0).** The unmodified engine used to
+  disable the runner on CUDA (`pool.device == cuda` vs `t3.device == cuda:0`).
+  The AR-runner rows used `out/bench/serve_ar_pool_device.py`, a measurement
+  wrapper that patches the pool's default device to
+  `torch.device("cuda", current_device())`; the engine tree was untouched at
+  measurement time. Every row is labelled "AR runner (4) … pool device patched".
+  Phase 11-0 fixed device resolution in the engine, so the shipped build now
+  registers the arena on the model's device; the fixture is no longer needed.
+* **Voice-cloning admission (shipped in 11-0).** `chatterbox_embedding.max_batch_size`
+  was raised from 1 to 4 for the voice-cloning cache/exhaustion runs; at 1 the
+  pipeline's embed step serialises and the TTS handler never batches. Phase 11-0
+  ships depth 4 with an honest `loop_admission` re-classification.
+* **Seeded parity gate (9-6).** As written the gate was **red** for both
+  families, and the cause was the runner, not the harness:
+  `ARBatchRunner.step()` re-sampled a row that was already `finished` when the
+  caller passed it again, so the gate's "step both until all finish" loop
+  appended extra EOS/decoder tokens to the short row. Phase 11-0 guards finished
+  rows in `step()`; the harness now passes **without loosening token equality**
+  (probe: `out/ar_parity_probe.py`; English 21 tokens, Turbo 24 tokens, equal). The
   English gate also surfaces the downstream symptom: its stream contains
   several EOS tokens, and upstream `drop_invalid_tokens` then builds a
   multi-element index. Fix `step()` to skip finished rows (or fix the gate's

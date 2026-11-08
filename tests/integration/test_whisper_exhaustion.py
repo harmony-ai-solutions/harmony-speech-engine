@@ -57,10 +57,15 @@ class _StubExecutor:
 
 
 class _TightBatcher(whisper_batching.WhisperWindowBatcher):
-    """The exhaustion scenario's window batch cap: 4 instead of the shipped 8."""
+    """Window batcher for the tight-cap exhaustion scenario (cap 4).
 
-    def __init__(self, model):
-        super().__init__(model, window_batch_size=4)
+    The cap travels through the shipped ``whisper_window_batch_size`` config key
+    since Phase 11-0, so the double simply honours the value the runner passes
+    (the test config sets 4).
+    """
+
+    def __init__(self, model, window_batch_size=4):
+        super().__init__(model, window_batch_size=window_batch_size)
 
 
 class _BudgetExecutor(_StubExecutor):
@@ -96,7 +101,7 @@ class _SequentialPipeline:
         return [_SequentialSegment(f"seq{int(round(seconds * 1000))}")], _SequentialInfo(duration=seconds)
 
 
-def _config(*, max_batch_size=16, num_workers=2, batched_inference=True):
+def _config(*, max_batch_size=16, num_workers=2, batched_inference=True, whisper_window_batch_size=4):
     return ModelConfig(
         name="whisper",
         model="dummy/whisper",
@@ -104,6 +109,8 @@ def _config(*, max_batch_size=16, num_workers=2, batched_inference=True):
         max_batch_size=max_batch_size,
         num_workers=num_workers,
         batched_inference=batched_inference,
+        # Tight cap of the exhaustion scenario, now a real per-model knob.
+        whisper_window_batch_size=whisper_window_batch_size,
         device_config=DeviceConfig("cpu"),
         dtype="float32",
     )

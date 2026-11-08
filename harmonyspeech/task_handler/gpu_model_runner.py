@@ -31,7 +31,9 @@ class GPUModelRunner(ModelRunnerBase):
         super().__init__(model_config, device_config, is_driver_worker, *args, **kwargs)
 
     def load_model(self) -> None:
-        with CudaMemoryProfiler() as m:
+        # Per-device profiling (Phase 11-0): measure the delta on the device this
+        # runner actually uses, not on whichever device the process has active.
+        with CudaMemoryProfiler(device=self.device) as m:
             self.model = self._load_model()
 
         # Snapshot the conditioning baseline so per-request Chatterbox state can
@@ -55,6 +57,7 @@ class GPUModelRunner(ModelRunnerBase):
         """Run the Phase 10-3 max-shape probe for a Whisper config, if any."""
         if getattr(self.model_config, "model_type", None) != "FasterWhisper":
             return None
+        from harmonyspeech.common.device import cuda_index
         from harmonyspeech.modeling.whisper_probe import probe_whisper_peak
 
         return probe_whisper_peak(
@@ -67,6 +70,8 @@ class GPUModelRunner(ModelRunnerBase):
             max_audio_seconds=getattr(
                 self.model_config, "whisper_max_audio_seconds", 300.0
             ),
+            # Phase 11-0: probe the model's own device (``cuda:1`` stays 1).
+            device_index=cuda_index(self.device),
         )
 
     # @torch.inference_mode()

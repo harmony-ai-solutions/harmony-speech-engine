@@ -7,6 +7,7 @@ import torch.distributed
 from loguru import logger
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.common.device import resolve_device
 from harmonyspeech.common.request import EngineRequest, ExecutorResult
 from harmonyspeech.common.utils import in_wsl
 from harmonyspeech.modeling import set_random_seed
@@ -73,12 +74,20 @@ class GPUWorker(WorkerBase):
             # always call torch.cuda.device_count() before initialising device
             if in_wsl():
                 torch.cuda.device_count()
-            self.device = torch.device(f"cuda:{self.local_rank}")
+            # Phase 11-0: the worker's device is the *resolved* config device
+            # (``cuda`` -> ``cuda:<active>``, explicit ``cuda:1`` preserved), not
+            # ``cuda:<local_rank>``. ``local_rank`` is a rank within one model's
+            # placement and is always 0 here, which used to force every worker
+            # onto the process's first visible GPU even when the config asked
+            # for a secondary device.
+            self.device = resolve_device(self.device_config.device)
+            if self.device.index is None:
+                self.device = torch.device("cuda", torch.cuda.current_device())
             torch.cuda.set_device(self.device)
 
             _check_if_gpu_supports_dtype(self.model_config.dtype)
             torch.cuda.empty_cache()
-            self.init_gpu_memory = torch.cuda.mem_get_info()[0]
+            self.init_gpu_memory = torch.cuda.mem_get_info(self.device)[0]
         else:
             raise RuntimeError(f"Not support device type: {self.device_config.device}")
         # Set random seed

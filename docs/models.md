@@ -125,10 +125,13 @@ instance, so per-request conditioning (`conds` / `ref_dict`) remains isolated.
 two speaker-embedding steps (Phase 8-2), the two tone converters (Phase 8-3) and
 the two vocoders plus the VoiceFixer restorer (Phase 8-4)) selects the
 padded-batch forward for one-shot synthesis, embedding, tone conversion,
-vocoding and restoration. For **Faster-Whisper** the same flag is **opt-in** and
-selects the cross-request window batcher (one CT2 `encode` + one `generate` for
-all admitted requests' ≤30 s windows, up to 8 per formed batch); without it the
-per-request pipeline path (and the `num_workers` lanes) is used. The Harmony
+vocoding and restoration. For **Faster-Whisper** the same flag selects the
+cross-request window batcher (one CT2 `encode` + one `generate` for all admitted
+requests' ≤30 s windows, `whisper_window_batch_size` per formed batch, default
+8); it is **on in both shipped configs** since Phase 11-0 (owner decision
+2026-11-08 — the B=1 real-model gate passed on text/segments/timings), and
+`false` still forces the per-request pipeline path (and the `num_workers` lanes).
+The Harmony
 Speech synthesizer keeps a per-item loop (its vendored generator is not
 padding-safe; see [Batching & concurrency](batching.md)). Chatterbox is
 autoregressive and runs one request per step, so its capacity comes from
@@ -211,16 +214,20 @@ side.
 Whisper's capacity is deliberately three separate numbers: `max_batch_size: 16`
 is the **admission/queue depth** (two fairness lanes, ≤30 s vs >30 s at 3:1),
 `num_workers` is the number of transcribes that actually **overlap** (M
-CTranslate2 workers on shared weights), and the **window cap** (8) is the memory
-bound on one formed cross-request batch. The per-request pipeline's own
-intra-audio clip batch stays 16. `docs/batching.md` holds the final matrix.
+CTranslate2 workers on shared weights), and `whisper_window_batch_size`
+(default `8`) is the memory bound on one formed cross-request batch. The
+per-request pipeline's own intra-audio clip batch stays 16. `docs/batching.md`
+holds the final matrix.
 
 * On startup, each CUDA-placed Whisper config runs a **max-shape probe**
   (`num_workers` concurrent workers × `window_batch` windows × the longest
-  admitted audio). The device-level `torch.cuda.mem_get_info` delta is recorded
-  as that config's `peak_activation_bytes` and reported per model on `/health`
-  with a "measured probe" annotation (a skipped probe says why it was skipped —
-  it is never replaced by a guess).
+  admitted audio) on that model's **own device**. The probe uses deterministic
+  speech-like audio and explicit ≤30 s `clip_timestamps` (Phase 11-0: the old
+  all-zero audio raised `No clip timestamps found` for any ≥30 s shape, leaving
+  the governor blind). The device-level `torch.cuda.mem_get_info` delta is
+  recorded as that config's `peak_activation_bytes` and reported per model on
+  `/health` with a "measured probe" annotation (a skipped probe says why it was
+  skipped — it is never replaced by a guess).
 * The boot check compares the projected Whisper footprint (checkpoint weights +
   probe peaks) with the measured free device headroom. Set
   `whisper_vram_budget_bytes` to turn an overshoot into a boot error; without it
@@ -241,15 +248,17 @@ intra-audio clip batch stays 16. `docs/batching.md` holds the final matrix.
   activations, not a second model copy. Default `1` reproduces the pre-Phase-10
   behaviour; the shipped initial values are `2` (large-v3-turbo) and `4` (tiny),
   pending benchmark tuning.
-* `batched_inference: true` (opt-in) enables the cross-request window batcher
+* `batched_inference: true` enables the cross-request window batcher
   (Phase 10-2): the step's ≤30 s windows are folded into one CT2 `encode` +
-  one `generate` per formed batch (cap 8 windows), with per-request language
-  prompts and the same segment/timestamp stitching as the sequential path.
-  `max_batch_size` remains the admission width; a batch-level failure falls back
-  to the per-request pipeline, and `/metrics` exposes
-  `hse_whisper_batch_fallbacks_total`. The shipped configs keep it **unset**
-  until the benchmark-host B=1 parity gate passes (dated decision 2026-11-07),
-  so the default remains the proven per-request path.
+  one `generate` per formed batch (`whisper_window_batch_size` windows, default
+  8), with per-request language prompts and the same segment/timestamp
+  stitching as the sequential path. `max_batch_size` remains the admission
+  width; a batch-level failure falls back to the per-request pipeline, and
+  `/metrics` exposes `hse_whisper_batch_fallbacks_total`. **Phase 11-0 shipped
+  it on in both configs** (owner decision 2026-11-08: text, segments, timings and
+  language were identical in the B=1 real-model gate; only
+  `language_probability` moved 0.2-0.8 pp and is informational). Set it `false`
+  to keep the proven per-request path.
 
 ```yaml
 # config.yml (top level, next to request_timeout_s)
@@ -261,12 +270,64 @@ whisper_max_audio_seconds: 300
   model_type: FasterWhisper
   max_batch_size: 16
   num_workers: 2
+  batched_inference: true
+  whisper_window_batch_size: 8
 ```
 
 `hse_vram_headroom_bytes` is now true free device memory (a breaking change: it
 used to be `device total − torch reserved`). `hse_vram_device_used_bytes` is the
 device-level counterpart and includes CTranslate2. See
 [VRAM profiles](benchmarks/vram-profiles.md#phase-10-3--device-level-truth).
+
+##### Multi-device placement
+
+Every model entry's `device_config.device` is honoured as written. A device is
+**resolved to its canonical indexed form** before use
+(`harmonyspeech/common/device.py`):
+
+| Spelling | Resolves to | Meaning |
+|---|---|---|
+| `cuda` | `cuda:<active>` (normally `cuda:0`) | the process's active device — the single-device default |
+| `cuda:1`, `cuda:2` | unchanged | explicit secondary-device placement |
+| `cpu` | `cpu` | host execution |
+
+Consequences:
+
+* **Model, arena, runner and probe follow the same device.** The AR KV-cache
+  pool keeps **one budget per device**: an arena for a `cuda:1` model is
+  allocated on `cuda:1` and validated against `cuda:1`'s remaining
+  `ar_inference.kv_cache_budget_bytes`, so it never consumes `cuda:0`'s
+  headroom. The boot arena table logs the device next to every family, and
+  `/health` reports `ar_cache.devices` with one row per device.
+* **VRAM accounting is device-level for the catalogue's device.** The device
+  used/free series describe the first CUDA model's resolved device (not
+  whichever device a worker initialised last).
+* **CTranslate2 spells placement differently.** The Whisper loader passes
+  `device="cuda"` + `device_index=<resolved index>`, because CT2 rejects
+  `"cuda:1"` as a device string.
+* **Mixed-device configs should spell explicit indices for every secondary
+  device.** An unindexed `cuda` follows the active device, which is only
+  unambiguous in the single-device default.
+
+```yaml
+# two models, two cards
+- name: "chatterbox"
+  model_type: "ChatterboxTTS"
+  max_batch_size: 4
+  device_config: { device: "cuda:0" }
+
+- name: "faster-whisper-tiny"
+  model_type: "FasterWhisper"
+  max_batch_size: 16
+  batched_inference: true
+  device_config: { device: "cuda:1" }
+```
+
+The regression this fixes (Phase 11-0): the AR pool used to be created with
+`torch.device("cuda")` (index `None`) while a loaded model reports `cuda:0`, so
+the runner's equality check disabled AR batching on every CUDA model. With
+resolution, `cuda` and `cuda:0` are the same device while `cuda:0` and `cuda:1`
+stay distinct.
 
 ---
 

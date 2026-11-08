@@ -41,10 +41,19 @@ _VE_DTYPE = torch.float32
 
 
 def _resolve_load_dtype(device: str, dtype: torch.dtype | None) -> torch.dtype:
-    """Resolve the effective T3 dtype for a device (CPU is always float32)."""
+    """Resolve the effective T3 dtype for a device (CPU is always float32).
+
+    Any CUDA spelling keeps the requested dtype (Phase 11-0: ``cuda:0`` and an
+    explicit ``cuda:1`` are CUDA just like the unindexed ``cuda`` — a string
+    equality test here silently demoted a resolved secondary device to float32).
+    """
     if dtype is None:
         return torch.float32
-    if device != "cuda":
+    try:
+        device_type = torch.device(device).type
+    except (TypeError, RuntimeError):  # pragma: no cover - defensive on odd stand-ins
+        device_type = str(device)
+    if device_type != "cuda":
         return torch.float32
     return dtype
 

@@ -395,6 +395,36 @@ def test_eos_drops_one_row_mid_batch(english_model):
     assert runner.has_row("b")
 
 
+@pytest.mark.unit
+def test_finished_row_is_not_resampled_on_later_steps(english_model):
+    """Phase 11-0: a finished row keeps its exact stream when passed again.
+
+    The engine pops finished rows per step, but the seeded parity harness passes
+    its whole row set every step. Re-sampling a finished row drew an extra
+    token and made the batched stream differ from the solo run.
+    """
+    model, hp = english_model
+    runner = _runner(model, "ChatterboxTTS")
+    runner.contract = _ScriptedContract(
+        {"a": [5, int(hp.stop_speech_token)], "b": [6, 7, 8, 9]}
+    )
+    runner.begin("a", seed=1, max_new_tokens=10, **_english_params(_text(hp), _english_conds(hp)))
+    runner.begin("b", seed=2, max_new_tokens=10, **_english_params(_text(hp), _english_conds(hp)))
+
+    runner.step(["a", "b"])
+    second = {outcome.request_id: outcome for outcome in runner.step(["a", "b"])}
+    assert second["a"].finished
+    finished_tokens = runner.raw_tokens("a").clone()
+    finished_steps = runner.row("a").steps
+
+    # Passing the finished row again must not sample, advance or change it.
+    third = {outcome.request_id: outcome for outcome in runner.step(["a", "b"])}
+    assert third["a"].finished and third["a"].error is None
+    assert torch.equal(runner.raw_tokens("a"), finished_tokens)
+    assert runner.row("a").steps == finished_steps
+    assert not third["b"].finished, "the live neighbour still advances"
+
+
 class _PoisonContract(EnglishContract):
     def embed_token(self, t3, row):
         if row.request_id == "poison":

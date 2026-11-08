@@ -97,6 +97,7 @@ from silero_vad import get_speech_timestamps
 
 from harmonyspeech.common.artifacts import AudioArtifact, MelArtifact, SpeakerArtifact, VadArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.common.device import resolve_device
 from harmonyspeech.common.errors import EngineBatchError
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.outputs import (
@@ -142,6 +143,7 @@ from harmonyspeech.task_handler.inputs import (
     prepare_inputs,
 )
 from harmonyspeech.task_handler.whisper_batching import (
+    WHISPER_WINDOW_BATCH_SIZE,
     WhisperRequestAbortedError,
     WhisperWindowBatcher,
     whisper_batched_inference_enabled,
@@ -574,7 +576,11 @@ class ModelRunnerBase:
         self.model_identity: str | None = None
 
         self.device_config = device_config if device_config is not None else DeviceConfig()
-        self.device = self.device_config.device
+        # Canonical indexed device (Phase 11-0): ``cuda`` -> ``cuda:<active>``,
+        # explicit ``cuda:1`` preserved. Every handler's ``.to(self.device)``
+        # then lands on the model's real device instead of whichever device the
+        # process happens to have active.
+        self.device = resolve_device(self.device_config.device)
 
         self.model = None
         self.model_memory_usage = 0
@@ -1896,12 +1902,21 @@ class ModelRunnerBase:
 
         Stateless across steps, so it is simply rebuilt when the loaded model
         changes (model reload / config swap). Kept on the runner so tests can
-        patch ``model_runner_base.WhisperWindowBatcher``.
+        patch ``model_runner_base.WhisperWindowBatcher``. The cap comes from the
+        per-model ``whisper_window_batch_size`` key (Phase 11-0, default 8),
+        falling back to the module constant for configs built before it existed.
         """
         model = getattr(self, "model", None)
         batcher = getattr(self, "_whisper_batcher_obj", None)
-        if batcher is None or batcher.model is not model:
-            batcher = WhisperWindowBatcher(model)
+        window_batch_size = getattr(
+            self.model_config, "whisper_window_batch_size", WHISPER_WINDOW_BATCH_SIZE
+        )
+        if (
+            batcher is None
+            or batcher.model is not model
+            or batcher.window_batch_size != max(1, int(window_batch_size or WHISPER_WINDOW_BATCH_SIZE))
+        ):
+            batcher = WhisperWindowBatcher(model, window_batch_size=window_batch_size)
             self._whisper_batcher_obj = batcher
         return batcher
 
@@ -1970,7 +1985,8 @@ class ModelRunnerBase:
           collects every admitted request's ≤30 s windows, tags each row with
           ``(request, window_index, offset)`` and issues one CT2
           ``encode(batch)`` + one ``generate(encoder_output, prompts, …)`` per
-          formed batch (≤8 windows, owner-approved). CT2 owns the KV cache and
+          formed batch (≤ ``whisper_window_batch_size`` windows, default 8,
+          owner-approved initial). CT2 owns the KV cache and
           beam search; this handler only forms batches and stitches segments
           back per request. Language detection reuses the batch's encoder
           output (no second encoder pass).

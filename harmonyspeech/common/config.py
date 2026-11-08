@@ -77,6 +77,12 @@ class ModelConfig:
             the card can hold (see ``whisper_vram_budget_bytes``). Default ``1``
             reproduces the pre-Phase-10 behaviour exactly (CT2 serialises).
             Inert for every other model type.
+        whisper_window_batch_size: Cross-request Whisper window batch cap for a
+            ``FasterWhisper`` entry (Phase 11-0). It bounds how many ≤30 s
+            windows one formed CTranslate2 ``encode`` + ``generate`` call may
+            carry — a *memory* bound, not the admission width
+            (``max_batch_size``). Default ``8`` (owner-approved initial value);
+            inert for every other model type.
     """
 
     def __init__(
@@ -101,6 +107,7 @@ class ModelConfig:
         batched_inference: bool | None = None,
         batch_token_budget: int | None = None,
         num_workers: int = 1,
+        whisper_window_batch_size: int = 8,
     ) -> None:
         self.name = name
         self.model = model
@@ -141,6 +148,22 @@ class ModelConfig:
         if num_workers < 1:
             raise ValueError(f"num_workers must be a positive int, got {num_workers!r}")
         self.num_workers = num_workers
+
+        # Phase 11-0: cross-request Whisper window batch cap (the memory bound on
+        # one formed CT2 batch). Owner-approved initial value 8; it used to be a
+        # module constant only, so the documented 4-vs-8 sweep needed a
+        # measurement wrapper. Inert for every other model type.
+        if isinstance(whisper_window_batch_size, bool) or not isinstance(whisper_window_batch_size, int):
+            raise ValueError(
+                "whisper_window_batch_size must be a positive int, "
+                f"got {whisper_window_batch_size!r}"
+            )
+        if whisper_window_batch_size < 1:
+            raise ValueError(
+                "whisper_window_batch_size must be a positive int, "
+                f"got {whisper_window_batch_size!r}"
+            )
+        self.whisper_window_batch_size = whisper_window_batch_size
 
         self.dtype = _get_and_verify_dtype(dtype)
 

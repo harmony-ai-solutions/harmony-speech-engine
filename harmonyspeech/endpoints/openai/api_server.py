@@ -191,6 +191,10 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("whisper_vram") is not None:
             # Phase 10-3: boot-time Whisper probe/budget report.
             health_status["whisper_vram"] = result["whisper_vram"]
+        if isinstance(result, dict) and result.get("whisper_admission") is not None:
+            # Phase 11-0: the governor's live admission decision (observable
+            # budget trip).
+            health_status["whisper_admission"] = result["whisper_admission"]
         if isinstance(result, dict) and result.get("embedding_cache") is not None:
             # Phase 7-3: cross-request embedding cache accounting.
             health_status["embedding_cache"] = result["embedding_cache"]

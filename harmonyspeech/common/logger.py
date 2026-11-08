@@ -4,6 +4,7 @@ Internal logging utility.
 
 import logging
 import os
+import sys
 
 from loguru import logger
 from rich.console import Console
@@ -12,6 +13,40 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, TaskProgressC
 
 RICH_CONSOLE = Console()
 LOG_LEVEL = os.getenv("HARMONYSPEECH_LOG_LEVEL", "INFO").upper()
+
+
+def _log_console_width() -> int | None:
+    """Width for the engine-log console (Phase 11-0).
+
+    An interactive terminal keeps rich's automatic (terminal) width. A
+    redirected stream — the benchmark harness's ``--engine-log`` — has no
+    visible width, and rich's 80-column fallback wrapped long DEBUG lines
+    mid-sentence, so a line-oriented parser saw e.g. ``padded\\nsub-batch``.
+    For a redirected stream use ``HARMONYSPEECH_LOG_WIDTH`` (or ``COLUMNS``)
+    when set, else a width no engine line reaches: that disables wrapping
+    without cropping, which rich's ``soft_wrap`` would do.
+    """
+    try:
+        if sys.stdout.isatty():
+            return None
+    except Exception:  # pragma: no cover - exotic stdout replacements
+        pass
+    for name in ("HARMONYSPEECH_LOG_WIDTH", "COLUMNS"):
+        raw = os.getenv(name)
+        if not raw:
+            continue
+        try:
+            width = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if width > 0:
+            return width
+    return 4096
+
+
+#: Dedicated sink console: log lines never wrap when the stream is redirected,
+#: while the progress bars keep ``RICH_CONSOLE``'s normal terminal sizing.
+LOG_CONSOLE = Console(width=_log_console_width())
 
 
 def unwrap(wrapped, default=None):
@@ -105,7 +140,7 @@ def setup_logger():
 
     logger.remove()
 
-    logger.add(RICH_CONSOLE.print, level=LOG_LEVEL, format=_log_formatter, colorize=True)
+    logger.add(LOG_CONSOLE.print, level=LOG_LEVEL, format=_log_formatter, colorize=True)
 
     # Silence noisy HTTP request logs from httpx/httpcore (used by
     # huggingface_hub).  These emit an INFO line for every HEAD/GET request,

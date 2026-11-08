@@ -13,6 +13,7 @@ from loguru import logger
 from silero_vad import load_silero_vad
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
+from harmonyspeech.common.device import resolve_device
 from harmonyspeech.modeling.hf_downloader import (
     initialize_dummy_weights,
     load_or_download_config,
@@ -299,6 +300,12 @@ def _build_chatterbox(model_config: ModelConfig, device: str, weight_registry, w
 
 def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_registry=None, **kwargs):
     model_class = _get_model_cls(model_config)
+    # Canonical indexed device (Phase 11-0): ``cuda`` -> ``cuda:<active>`` and an
+    # explicit ``cuda:1`` stays ``cuda:1``. Native wrappers and the torch device
+    # context below then agree with the runner's resolved device, which is what
+    # makes secondary-device placement real (Phase 9's arena check compared an
+    # unindexed ``cuda`` with ``cuda:0`` and disabled itself).
+    resolved_device = resolve_device(device_config.device)
 
     with _set_default_torch_dtype(model_config.dtype):
         # Get model flavour if applicable
@@ -308,14 +315,18 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
 
         # Create a model instance.
         # The weights will be initialized as empty tensors.
-        with torch.device(device_config.device):
+        with torch.device(resolved_device):
             # Bailout for native models
             if model_class == "native" and hf_config == "native":
                 if model_config.model_type == "FasterWhisper":
                     # Resolve device safely: CTranslate2 calls abort() (native
                     # SIGABRT, uncatchable by Python) if cuDNN is missing when
                     # device='cuda'. Pre-check and fall back to CPU gracefully.
-                    device_str = str(device_config.device)
+                    # CTranslate2 spells placement as ``device`` + ``device_index``
+                    # (it rejects ``"cuda:1"`` outright), so the resolved index
+                    # travels separately.
+                    device_str = resolved_device.type
+                    device_index = 0 if resolved_device.index is None else int(resolved_device.index)
                     compute_type = getattr(model_config, "compute_type", None)
 
                     if device_str == "cuda":
@@ -336,6 +347,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                     model = WhisperModel(
                         model_config.model,
                         device=device_str,
+                        device_index=device_index,
                         compute_type=compute_type,
                         # Phase 10-1: faster-whisper forwards this straight to
                         # CTranslate2 `inter_threads`, so same-device workers
@@ -361,7 +373,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                     model = KittenTTSSynthesizer(model_name_or_path=model_config.model)
                     return model
                 elif model_config.model_type == "ChatterboxTTS":
-                    device = str(device_config.device)
+                    device = str(resolved_device)
                     model = _build_chatterbox(
                         model_config, device, weight_registry, ChatterboxTTSModel
                     )
@@ -369,7 +381,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxTurboTTS":
-                    device = str(device_config.device)
+                    device = str(resolved_device)
                     model = _build_chatterbox(
                         model_config, device, weight_registry, ChatterboxTurboTTSModel
                     )
@@ -377,7 +389,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxMultilingualTTS":
-                    device = str(device_config.device)
+                    device = str(resolved_device)
                     model = _build_chatterbox(
                         model_config, device, weight_registry, ChatterboxMultilingualTTSModel
                     )
@@ -385,13 +397,13 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxVC":
-                    device = str(device_config.device)
+                    device = str(resolved_device)
                     model = _build_chatterbox(model_config, device, weight_registry, ChatterboxVCModel)
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxEmbedding":
-                    device = str(device_config.device)
+                    device = str(resolved_device)
                     model_name = getattr(model_config, "model", "") or ""
                     if "turbo" in model_name.lower():
                         wrapper = ChatterboxTurboTTSModel
@@ -438,7 +450,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
         else:
             # Load the weights from the cached or downloaded files.
             checkpoint = get_model_weights(
-                model_config.model, model_config.model_type, model_config.revision, device_config.device, flavour
+                model_config.model, model_config.model_type, model_config.revision, resolved_device, flavour
             )
             # Run the load weight method of the model
             # Every model needs to implement this seperately, because state dicts can differ
@@ -455,7 +467,7 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
         # loading places the whole tree (parameters, buffers and the STFT convs).
         # On CPU this is a no-op.
         if model_config.model_type in _STFT_FRONTEND_MODEL_TYPES:
-            model = model.to(device_config.device)
+            model = model.to(resolved_device)
 
         # if isinstance(linear_method, BNBLinearMethod):
         #     replace_quant_params(

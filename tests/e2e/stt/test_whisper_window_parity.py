@@ -14,6 +14,12 @@ checks multi-window stitching. The one documented semantic difference —
 language detection on the first window vs on the concatenation of the first
 windows — is reported for the multi-window case rather than asserted, because
 both are defensible readings of the same audio.
+
+Owner decision 2026-11-08 (Phase 11-0): the gate passed substantively (text,
+segments, timings and language identical on all three measured cases), so
+``language_probability`` is bounded at ``1e-2`` and marked informational — the
+batched path reuses the batch encoder output and the number moves 0.2-0.8 pp.
+The shipped configs therefore enable ``batched_inference: true`` for Whisper.
 """
 
 import json
@@ -106,8 +112,19 @@ def test_batched_b1_matches_sequential_for_a_single_window_clip(whisper_model, c
     assert batched["text"] == sequential["text"]
     _assert_timings_match(sequential, batched)
     assert batched["info"]["language"] == sequential["info"]["language"]
-    assert batched["info"]["language_probability"] == pytest.approx(
-        sequential["info"]["language_probability"], abs=1e-3
+    # Informational (owner decision 2026-11-08): the batched path reuses the
+    # batch encoder output for language detection, so `language_probability`
+    # moves 0.2-0.8 pp between the paths (measured 2026-11-08). Text, segments,
+    # timings and language are identical; the probability is a soft signal, so
+    # it is bounded at 1e-2 rather than the original 1e-3.
+    probability_delta = abs(
+        float(batched["info"]["language_probability"])
+        - float(sequential["info"]["language_probability"])
+    )
+    assert probability_delta <= 1e-2, (
+        "language_probability (informational) moved "
+        f"{probability_delta:.4f}: batched={batched['info']['language_probability']} "
+        f"sequential={sequential['info']['language_probability']}"
     )
     assert batched["info"]["duration"] == pytest.approx(sequential["info"]["duration"], abs=1e-3)
     assert batched["info"]["duration_after_vad"] == pytest.approx(

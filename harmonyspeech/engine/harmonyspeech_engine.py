@@ -7,6 +7,7 @@ from loguru import logger
 
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
+from harmonyspeech.common.device import resolve_device
 from harmonyspeech.common.inputs import (
     RequestInput,
     TextToSpeechRequestInput,
@@ -934,6 +935,10 @@ class HarmonySpeechEngine:
             "models": models,
             "vram": vram,
             "whisper_vram": self.get_whisper_vram_report(),
+            # Phase 11-0: the governor's live admission decision, so the
+            # runtime budget trip is observable on /health (it used to be
+            # inferable only from the effect).
+            "whisper_admission": self.get_whisper_admission(),
             "embedding_cache": self.get_embedding_cache_stats(),
             "ar_cache": self.get_ar_cache_stats(),
             # Phase 9-4: per-AR-model decode progress (active rows, slot
@@ -993,19 +998,23 @@ class HarmonySpeechEngine:
             return
         rows = pool.arena_table()
         logger.info(
-            f"AR KV-cache pool: budget {pool.budget_bytes / 2**20:.1f} MiB, device {pool.device}, "
+            f"AR KV-cache pool: budget {pool.budget_bytes / 2**20:.1f} MiB per device, "
+            f"default device {pool.device}, "
             f"default cap {pool.default_cap_tokens} tokens, {len(rows)} arena(s), "
             f"{pool.pool_bytes / 2**20:.1f} MiB resident."
         )
         if not rows:
             logger.info("AR KV-cache arena table: empty (no AR family registered an arena at load).")
             return
-        logger.info(f"{'family':<34} {'slots':>7} {'cap':>7} {'slab MiB':>10} {'arena MiB':>10} {'dtype':>8}")
+        logger.info(
+            f"{'family':<30} {'device':>9} {'slots':>7} {'cap':>7} {'slab MiB':>10} "
+            f"{'arena MiB':>10} {'dtype':>8}"
+        )
         for row in rows:
             logger.info(
-                f"{row['model_key']:<34} {row['slots']:>7} {row['cap_tokens']:>7} "
-                f"{row['slab_bytes'] / 2**20:>10.1f} {row['arena_bytes'] / 2**20:>10.1f} "
-                f"{row['dtype']:>8}"
+                f"{row['model_key']:<30} {row.get('device', '-'):>9} {row['slots']:>7} "
+                f"{row['cap_tokens']:>7} {row['slab_bytes'] / 2**20:>10.1f} "
+                f"{row['arena_bytes'] / 2**20:>10.1f} {row['dtype']:>8}"
             )
 
     def get_ar_cache_stats(self) -> dict:
@@ -1023,6 +1032,7 @@ class HarmonySpeechEngine:
                 "budget_bytes": getattr(self, "ar_cache_budget_bytes", None),
                 "default_cap_tokens": getattr(self, "ar_cache_default_cap_tokens", None),
                 "device": None,
+                "devices": {},
                 "pool_bytes": 0,
                 "allocated_bytes": 0,
                 "slots": 0,
@@ -1049,6 +1059,8 @@ class HarmonySpeechEngine:
         if pool is None:
             return {
                 "enabled": False,
+                "device": None,
+                "devices": {},
                 "slots": 0,
                 "slots_active": 0,
                 "slots_free": 0,
@@ -1116,6 +1128,37 @@ class HarmonySpeechEngine:
     # ------------------------------------------------------------------
     # VRAM accounting (Phase 4-5) and device-level truth (Phase 10-3)
     # ------------------------------------------------------------------
+    def _vram_device_index(self) -> int | None:
+        """CUDA index the device-level VRAM series describe (Phase 11-0).
+
+        Multi-device placement means "the process's active device" is no longer
+        a safe default: a worker for an explicit ``cuda:1`` model sets it, and
+        the last worker to initialise wins. Report the device the catalogue
+        actually uses — the first CUDA runner's resolved device, then the first
+        CUDA config, then the process device. ``None`` on a CPU-only engine.
+        """
+        import torch
+
+        for executor in (getattr(self, "model_executors", None) or {}).values():
+            runner = getattr(getattr(executor, "driver_worker", None), "model_runner", None)
+            raw_device = getattr(runner, "device", None)
+            if not isinstance(raw_device, (str, torch.device)):
+                # Test doubles / shell engines may carry a mock here.
+                continue
+            device = torch.device(raw_device)
+            if device.type == "cuda" and device.index is not None:
+                return int(device.index)
+        for config in getattr(self, "model_configs", None) or []:
+            raw_device = getattr(getattr(config, "device_config", None), "device", None)
+            if not isinstance(raw_device, (str, torch.device)):
+                continue
+            device = resolve_device(raw_device)
+            if device.type == "cuda" and device.index is not None:
+                return int(device.index)
+        if torch.cuda.is_available():
+            return int(torch.cuda.current_device())
+        return None
+
     def get_vram_stats(self) -> dict:
         """Return per-model VRAM accounting plus shared-backbone group totals.
 
@@ -1147,7 +1190,7 @@ class HarmonySpeechEngine:
         free_bytes = device_used_bytes = 0
         device_used_source = None
         device_name = None
-        device_index = torch.cuda.current_device() if torch.cuda.is_available() else None
+        device_index = self._vram_device_index()
         if torch.cuda.is_available():
             try:
                 cuda = True

@@ -204,7 +204,7 @@ model_configs:
 # does not honour. Phase 9-6 moved the English/Turbo Chatterbox roles into
 # `ar_decode` and set their initial admission width from the arena table.
 
-#: The five execution classes and what their `max_batch_size` really means.
+#: The six execution classes and what their `max_batch_size` really means.
 EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
     "padded_batch": {
         "execution": "one padded forward per length-similar sub-batch",
@@ -214,6 +214,15 @@ EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
     "loop": {
         "execution": "per-request sequential",
         "max_batch_size": "must be 1",
+        "knobs": (),
+    },
+    "loop_admission": {
+        # Phase 11-0 (dated decision 2026-11-08): execution is still one request
+        # at a time, but the executor may be handed several per engine step.
+        # `max_batch_size` is that admission depth; it is NOT a batch width and
+        # must not be read as one.
+        "execution": "per-request sequential (serial), admission depth only",
+        "max_batch_size": "admission depth",
         "knobs": (),
     },
     "queue_depth": {
@@ -250,7 +259,10 @@ EXECUTION_MODEL_CLASSES: dict[str, str] = {
     # Chatterbox embedding/VC/multilingual stay loops (9-3's documented skip).
     "HarmonySpeechSynthesizer": "loop",
     "ChatterboxMultilingualTTS": "loop",
-    "ChatterboxEmbedding": "loop",
+    # Phase 11-0: the embedder executes serially (one `prepare_conditionals` at
+    # a time) but is admitted at depth 4 so the clone pipeline can hand four
+    # requests to the TTS AR step in one engine step.
+    "ChatterboxEmbedding": "loop_admission",
     "ChatterboxVC": "loop",
     # Token-level AR decode on the shared KV pool (Phase 9-3/9-6). The number is
     # an admission depth; the pool's slot count is a separate capacity signal.
@@ -283,6 +295,17 @@ def _validate_padded_batch(entry: dict, config_name: str) -> None:
 def _validate_loop(entry: dict, config_name: str) -> None:
     name = entry["name"]
     assert entry["max_batch_size"] == 1, f"{config_name}: {name} admits one request per step"
+    assert entry.get("batched_inference") is not True, f"{config_name}: {name} has no batch path"
+
+
+def _validate_loop_admission(entry: dict, config_name: str) -> None:
+    """Serial execution with a real admission depth (Phase 11-0).
+
+    The handler loops per request, so the entry must not claim a batch path;
+    the number is how many requests one engine step may hand the executor.
+    """
+    name = entry["name"]
+    assert entry["max_batch_size"] >= 1, f"{config_name}: {name} admission depth"
     assert entry.get("batched_inference") is not True, f"{config_name}: {name} has no batch path"
 
 
@@ -336,6 +359,7 @@ def _validate_ar_decode(entry: dict, config_name: str) -> None:
 CLASS_VALIDATORS = {
     "padded_batch": _validate_padded_batch,
     "loop": _validate_loop,
+    "loop_admission": _validate_loop_admission,
     "queue_depth": _validate_queue_depth,
     "lanes_windows": _validate_lanes_windows,
     "ar_decode": _validate_ar_decode,
@@ -350,6 +374,7 @@ def test_execution_model_class_table_is_complete_and_declarative():
     assert set(EXECUTION_CLASS_SEMANTICS) == {
         "padded_batch",
         "loop",
+        "loop_admission",
         "queue_depth",
         "lanes_windows",
         "ar_decode",
@@ -440,10 +465,41 @@ def test_whisper_is_lanes_windows_with_its_real_knobs(config_name):
         assert EXECUTION_MODEL_CLASSES["FasterWhisper"] == "lanes_windows"
         assert entry["max_batch_size"] == 16, f"{config_name}: {entry['name']} admission depth"
         assert entry.get("num_workers", 1) >= 1
-        # The shipped configs keep the window batcher opt-in until the B=1
-        # real-model parity gate runs (10-5 dated decision, 2026-11-07).
-        assert entry.get("batched_inference") is not True, f"{config_name}: {entry['name']} opt-in until parity"
+        # Phase 11-0 (owner decision 2026-11-08): the B=1 real-model parity gate
+        # passed (text/segments/timings identical; language_probability moves
+        # 0.2-0.8 pp), so the window batcher ships ON in both configs.
+        assert entry.get("batched_inference") is True, f"{config_name}: {entry['name']} window batcher on"
+        # The cap is a real per-model knob now, not a module constant only.
+        assert entry.get("whisper_window_batch_size", WHISPER_WINDOW_BATCH_SIZE) == 8
     assert WHISPER_WINDOW_BATCH_SIZE == 8, "owner-approved initial window cap (2026-11-07)"
+
+
+@pytest.mark.unit
+def test_whisper_window_batch_size_default_matches_the_module_constant(cpu_device):
+    """The per-model key's default and the batcher's constant cannot drift."""
+    from harmonyspeech.task_handler.whisper_batching import WHISPER_WINDOW_BATCH_SIZE
+
+    cfg = ModelConfig(
+        name="whisper",
+        model="tiny",
+        model_type="FasterWhisper",
+        max_batch_size=16,
+        device_config=cpu_device,
+        dtype="float32",
+    )
+    assert cfg.whisper_window_batch_size == WHISPER_WINDOW_BATCH_SIZE
+
+    for invalid in (0, -1, True, "8"):
+        with pytest.raises(ValueError, match="whisper_window_batch_size"):
+            ModelConfig(
+                name="whisper",
+                model="tiny",
+                model_type="FasterWhisper",
+                max_batch_size=16,
+                device_config=cpu_device,
+                dtype="float32",
+                whisper_window_batch_size=invalid,
+            )
 
 
 @pytest.mark.unit
