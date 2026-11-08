@@ -178,6 +178,31 @@ FAMILY_SPECS: dict[str, dict] = {
             "input": "The quick brown fox jumps over the lazy dog near the river bank.",
         },
     },
+    # Phase 11-2: clone-flood variants of the two AR families. Same model/path as
+    # the entries above, but every request carries a reference clip in
+    # `voice_cloning` mode, so the clone pipeline (embed step + AR decode +
+    # S3Gen vocode) is what the concurrency sweep measures. Additive: the
+    # existing bundled-voice families and their published tables are unchanged.
+    "chatterbox_clone": {
+        "path": "/v1/audio/speech",
+        "kind": "tts",
+        "model": "chatterbox",
+        "payload": {
+            "mode": "voice_cloning",
+            "input": "The quick brown fox jumps over the lazy dog near the river bank.",
+            "input_audio": "__REFERENCE_AUDIO__",
+        },
+    },
+    "chatterbox_turbo_clone": {
+        "path": "/v1/audio/speech",
+        "kind": "tts",
+        "model": "chatterbox_turbo",
+        "payload": {
+            "mode": "voice_cloning",
+            "input": "The quick brown fox jumps over the lazy dog near the river bank.",
+            "input_audio": "__REFERENCE_AUDIO__",
+        },
+    },
     "chatterbox_vc": {
         # Phase 11-1: VC has no text; both fields take the reference clip. The
         # source is the clip to convert, the target the voice to convert to

@@ -108,6 +108,39 @@ applied to *torch* model weights only:
   selects its precision with `compute_type` (default `float16` on CUDA,
   `int8` on CPU); `dtype` does not affect it.
 
+#### S3Gen autocast (opt-in experiment, `HSE_S3GEN_AUTOCAST`)
+
+The S3Gen weights stay `float32` (above), but the environment gate
+`HSE_S3GEN_AUTOCAST` may additionally run S3Gen's *forwards* under CUDA
+`torch.autocast` — fp32 master weights, per-op casting, norms/softmax/reductions
+still fp32. Values: `off` (**default**, byte-identical behaviour), `bfloat16`,
+`float16`. It is CUDA-only; on CPU it is a no-op.
+
+Measured on the RTX 5060 Ti benchmark host with the seeded
+`dtype:fp32-vs-autocast` axis in `scripts/audio_regression.py`
+([details and all numbers](../benchmarks/throughput.md#phase-11-2--s3gen-autocast)):
+
+* **`bfloat16` is rejected.** Seeded renders move the log-mel spectrum far more
+  than the audibility bound (worst case **3.00 dB²** on real-speech VC, **0.85
+  correlation** on the synthetic-timbre clone case) even though the AR token
+  stream is identical (duration Δ 0 %). bf16's 8-bit mantissa is the wrong
+  trade for an audio vocoder.
+* **`float16` passes the audibility gate** on all seven seeded cases (worst case
+  **0.099 dB²**, correlation ≥ 0.9978, RMS Δ ≤ 0.11 %) and delivers a real win
+  where vocode dominates: **4.10 → 6.19 req/s at c=8** for batched VC (1.51×),
+  the S3Gen vocode hop itself 2.15× faster for eight rows. AR-dominated
+  workloads are unchanged (en/turbo clone floods c=8 within noise).
+* **It is not a shipped knob yet.** Promotion to a `s3gen_precision` config key
+  (plus docs and config-honesty tests) is a follow-up task; the shipped configs
+  do not set the gate. `float16` also does not shrink VRAM: the vocode's
+  activation peak is unchanged (HiFT stays fp32 and dominates) and the
+  device-level footprint grows ~240 MiB from non-torch allocator growth
+  (cuBLAS workspaces).
+
+The gate is read on every call, so an operator can A/B it without reloading
+weights; an unknown value logs one warning and behaves as `off` (a typo must
+never silently change the numerics).
+
 `backbone_group` (optional, any entry) makes configs that point at the same
 checkpoint + revision + dtype **share backbone components** instead of loading a
 copy each. The shipped `config.gpu.yml` puts `chatterbox`,

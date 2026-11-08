@@ -43,6 +43,12 @@ Usage
     # identity self-test (must always pass)
     python scripts/audio_regression.py --families kittentts \
         --axis dtype:float32-vs-float32
+
+    # S3Gen autocast experiment (Phase 11-2): same seeded render with
+    # HSE_S3GEN_AUTOCAST=off vs bfloat16 (--s3gen-autocast float16 for fp16)
+    python scripts/audio_regression.py \
+        --families chatterbox,chatterbox_multilingual,chatterbox_turbo \
+        --axis dtype:fp32-vs-autocast --s3gen-autocast bfloat16 --gpu
 """
 
 from __future__ import annotations
@@ -128,6 +134,33 @@ BATCHING_AXIS_ENABLED = frozenset(
 #: harness gates that) but not sample-for-sample on the audio. The gate still
 #: asserts duration/RMS/LTAS stay inside the stochastic thresholds.
 BATCHING_AXIS_STOCHASTIC = frozenset({"chatterbox", "chatterbox_turbo"})
+
+#: S3Gen autocast axis (Phase 11-2). ``dtype:fp32-vs-autocast`` compares the same
+#: seeded render with ``HSE_S3GEN_AUTOCAST=off`` (side A) and the requested
+#: precision (side B). Autocast changes the arithmetic, not the computation: the
+#: AR token stream is untouched (T3 stays float32 on both sides), the CFM step
+#: count is identical, and only matmul-heavy S3Gen ops drop to bf16/fp16, so the
+#: comparison is sample-wise.
+#:
+#: Thresholds are the harness's existing *audibility* bounds (the deterministic
+#: family set: log-mel MSE < 1.0 dB^2, correlation > 0.98, RMS < 5 %), not the
+#: batching axis's near-exact bounds — padded batching is a pure reshaping and
+#: must be bit-near, while reduced precision is expected to move the arithmetic.
+#: The calibration comes from Phase 4: casting S3Gen's *weights* to fp16 measured
+#: 8.9 and 141.6 dB^2 with correlations 0.76 and 0.05 and was judged audible
+#: (`docs/models.md` §Precision), so 1.0 dB^2 leaves a 9x margin below the known
+#: audible class while still being far tighter than "any change passes". For
+#: reference, a batching-order bound (1e-2 dB^2) would fail *both* precisions
+#: (measured bf16 0.28-3.0, fp16 0.008-0.099 dB^2) — that is too strict for a
+#: precision axis and is recorded in the task file rather than used here.
+#: Duration must not move: a different frame count means the token stream changed,
+#: which is a hard failure for a precision axis.
+AUTOCAST_LOG_MEL_MSE = 1.0
+AUTOCAST_DURATION_PCT = 0.1
+AUTOCAST_RMS_PCT = 5.0
+AUTOCAST_CORR_MIN = 0.98
+#: The two side labels of the autocast axis (side A is the fp32 reference).
+AUTOCAST_AXIS_SIDES = ("fp32", "autocast")
 
 #: Families with ``batching_cases`` already registered (so a later Phase 8 task
 #: only flips the allow-list entry above) and the task that enables them.
@@ -767,6 +800,9 @@ class Axis:
     kind: str  # "dtype" | "sharing" | "baseline" | "batching"
     side_a: str
     side_b: str
+    #: Autocast precision for ``dtype:fp32-vs-autocast`` (``None`` for every
+    #: other axis); the CLI's ``--s3gen-autocast`` overrides the default.
+    precision: str | None = None
 
     @property
     def label(self) -> str:
@@ -775,6 +811,11 @@ class Axis:
     @property
     def identity(self) -> bool:
         return self.side_a == self.side_b
+
+    @property
+    def autocast(self) -> bool:
+        """True for the Phase 11-2 ``dtype:fp32-vs-autocast`` experiment axis."""
+        return self.kind == "dtype" and self.precision is not None
 
 
 def parse_axis(text: str) -> Axis:
@@ -791,6 +832,15 @@ def parse_axis(text: str) -> Axis:
         for side in (a, b):
             if not side.isdigit() or int(side) < 1:
                 raise ValueError(f"batching axis sides must be batch sizes >= 1, got {side!r}")
+    if kind == "dtype" and {a, b} == set(AUTOCAST_AXIS_SIDES):
+        # Phase 11-2 experiment axis. Side A must be the fp32 reference so the
+        # report's "A vs B" reads as "baseline vs experiment".
+        if a != "fp32":
+            raise ValueError(
+                f"the autocast axis is 'dtype:fp32-vs-autocast', got {text!r} "
+                "(fp32 must be side A)"
+            )
+        return Axis(kind=kind, side_a=a, side_b=b, precision="bfloat16")
     return Axis(kind=kind, side_a=a, side_b=b)
 
 
@@ -801,7 +851,21 @@ def side_settings(axis: Axis, side: str) -> dict:
     values ``dedup`` / ``dup`` select whether grouped families get a
     ``backbone_group``; ``batching`` values are the per-model ``max_batch_size``
     of that side (1 = legacy per-item loop, N = padded batch).
+
+    The Phase 11-2 ``dtype:fp32-vs-autocast`` axis keeps ``ModelConfig.dtype``
+    at float32 on **both** sides (so the T3 backbone is identical and the seeded
+    token stream cannot diverge) and instead flips the ``HSE_S3GEN_AUTOCAST``
+    environment gate per worker: ``off`` for side A, the chosen precision for
+    side B. A fixed request seed makes the vocode noise identical on both sides.
     """
+    if axis.autocast:
+        return {
+            "dtype": "float32",
+            "share": True,
+            "watermark": True,
+            "s3gen_autocast": "off" if side == "fp32" else axis.precision,
+            "seed": 1234,
+        }
     if axis.kind == "dtype":
         return {"dtype": side, "share": True, "watermark": True}
     if axis.kind == "sharing":
@@ -1152,6 +1216,7 @@ def run_worker(job_path: str) -> int:
 
     from harmonyspeech.endpoints.openai.protocol import (
         AudioConversionRequest,
+        GenerationOptions,
         TextToSpeechRequest,
         VoiceConversionRequest,
     )
@@ -1214,6 +1279,11 @@ def run_worker(job_path: str) -> int:
         random.seed(1234)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(1234)
+        # Phase 11-2: the autocast axis carries an explicit request seed so the
+        # vocode noise is identical on both sides (the sequential TTS loop still
+        # uses the global seed above; VC/AR paths honour the request seed).
+        request_seed = job["settings"].get("seed")
+        options = GenerationOptions(seed=request_seed) if request_seed is not None else None
         started = time.time()
         try:
             kind = case["kind"]
@@ -1225,6 +1295,7 @@ def run_worker(job_path: str) -> int:
                     input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
                     language=case.get("language"),
                     voice=case.get("voice"),
+                    generation_options=options,
                 )
                 response = asyncio.run(serving_tts.create_text_to_speech(request, _Request()))
             elif kind == "vc":
@@ -1232,6 +1303,7 @@ def run_worker(job_path: str) -> int:
                     model=case["model"],
                     source_audio=reference_wav_b64(case["reference"]),
                     target_audio=reference_wav_b64(case["target"]),
+                    generation_options=options,
                 )
                 response = asyncio.run(serving_vc.convert_voice(request, _Request()))
             elif kind == "restore":
@@ -1385,6 +1457,26 @@ def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tu
             return False, ["not bit-identical (identity axis must not change a sample)"]
         return True, []
 
+    if axis.autocast:
+        # Phase 11-2: mixed precision changes the arithmetic, not the
+        # computation. A duration change means the token stream moved (the AR
+        # backbone is fp32 on both sides), so it fails as hard as a spectral
+        # change does.
+        failures = []
+        if metrics["duration_pct"] > AUTOCAST_DURATION_PCT:
+            failures.append(
+                f"duration changed ({metrics['duration_pct']}%) — autocast altered the token stream"
+            )
+        if metrics["rms_pct"] > AUTOCAST_RMS_PCT:
+            failures.append(f"rms {metrics['rms_pct']:.2f}% > {AUTOCAST_RMS_PCT}%")
+        if metrics["logmel_mse"] > AUTOCAST_LOG_MEL_MSE:
+            failures.append(
+                f"logmel mse {metrics['logmel_mse']} > {AUTOCAST_LOG_MEL_MSE} (audible degradation)"
+            )
+        if metrics["corr"] < AUTOCAST_CORR_MIN:
+            failures.append(f"corr {metrics['corr']} < {AUTOCAST_CORR_MIN}")
+        return (not failures), failures
+
     if axis.kind == "sharing":
         failures = []
         if metrics["duration_pct"] != 0.0:
@@ -1492,6 +1584,9 @@ def _run_side(
 
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", _REPO_ROOT)
+    # Phase 11-2: every worker gets an explicit S3Gen autocast state, so an
+    # operator's shell value can never leak into another axis' comparison.
+    env["HSE_S3GEN_AUTOCAST"] = str(settings.get("s3gen_autocast") or "off")
     started = time.time()
     proc = subprocess.run(
         [sys.executable, os.path.abspath(__file__), "--worker", job_path],
@@ -1565,6 +1660,8 @@ def _markdown_table(report: dict) -> str:
 
 def run_harness(args) -> int:
     axis = parse_axis(args.axis)
+    if axis.autocast:
+        axis.precision = getattr(args, "s3gen_autocast", "bfloat16") or "bfloat16"
     families = [f.strip() for f in args.families.split(",") if f.strip()]
     unknown = [f for f in families if f not in FAMILY_SPECS]
     if unknown:
@@ -1778,6 +1875,12 @@ def main(argv=None) -> int:
     parser.add_argument("--gpu", action="store_true", help="require a CUDA host")
     parser.add_argument("--json-out", default="out/audio-regression/latest.json")
     parser.add_argument("--md-out", default=None, help="append the markdown result table here")
+    parser.add_argument(
+        "--s3gen-autocast",
+        choices=("bfloat16", "float16"),
+        default="bfloat16",
+        help="precision for side B of the dtype:fp32-vs-autocast axis (Phase 11-2)",
+    )
     parser.add_argument("--workdir", default="out/audio-regression")
     parser.add_argument("--worker", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)

@@ -45,6 +45,11 @@ Scope
   per-row upstream call.
 * **B=1 / unseeded fast path** calls upstream ``s3gen.inference`` unchanged, so
   the sequential loop and the single-request case stay bit-identical.
+* **Mixed precision (Phase 11-2)** is an opt-in experiment
+  (``HSE_S3GEN_AUTOCAST``, default off): the padded flow wraps its encoder and
+  CFM decoder forwards in ``torch.autocast`` and casts the results back to the
+  flow dtype, so the ODE updates, masks, unpadding and ``mel2wav`` stay float32.
+  See ``s3gen_precision.py``.
 """
 
 from __future__ import annotations
@@ -56,6 +61,10 @@ from chatterbox.models.s3gen.utils.mask import make_pad_mask
 from torch import Tensor
 
 from harmonyspeech.modeling.models.batch_padding import length_mask, sync_mask
+from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
+    install_inference_autocast,
+    s3gen_autocast,
+)
 
 __all__ = [
     "S3GenBatchError",
@@ -140,8 +149,15 @@ def _flow_dtype(flow) -> torch.dtype:
     return next(flow.parameters()).dtype
 
 
-def _to_flow(value, device, dtype) -> Tensor:
-    """Move one ``ref_dict`` value to the flow's device/dtype (upstream order)."""
+def _to_flow(value, device, dtype) -> Tensor | None:
+    """Move one ``ref_dict`` value to the flow's device/dtype (upstream order).
+
+    ``None`` passes through: real ``embed_ref`` dicts carry ``prompt_feat_len:
+    None`` (upstream reads the prompt length from ``prompt_feat.shape``), and the
+    B=1 unseeded fast path forwards every key to the upstream call.
+    """
+    if value is None:
+        return None
     tensor = value if torch.is_tensor(value) else torch.as_tensor(value)
     if tensor.is_floating_point():
         return tensor.to(device=device, dtype=dtype)
@@ -274,7 +290,17 @@ def _flow_batched(
     token_mask = (~make_pad_mask(total_lens, combined_len)).unsqueeze(-1).to(embedding)
     token_embeds = flow.input_embedding(combined) * token_mask
 
-    hidden, up_mask = _encode_masked(flow.encoder, token_embeds, total_lens)
+    # Phase 11-2: the experiment's surgical wrap. Autocast covers the encoder
+    # and CFM decoder forwards only; the returned tensors are cast back to the
+    # flow dtype so every ODE state update, mask, unpad and `mel2wav` call below
+    # stays float32. With the gate off (`HSE_S3GEN_AUTOCAST` unset) the context
+    # is a no-op and the casts are skipped, so this path is bit-identical.
+    with s3gen_autocast(device) as autocast:
+        hidden, up_mask = _encode_masked(flow.encoder, token_embeds, total_lens)
+        if autocast is not None:
+            hidden = hidden.to(dtype)
+            if up_mask.is_floating_point():
+                up_mask = up_mask.to(dtype)
     hidden_lens = up_mask.sum(dim=-1).squeeze(-1)
     hidden = flow.encoder_proj(hidden)
 
@@ -300,15 +326,18 @@ def _flow_batched(
             (80, valid), generators[i], device=device, dtype=hidden.dtype
         )
 
-    feat, _ = flow.decoder(
-        mu=hidden.transpose(1, 2).contiguous(),
-        mask=mask,
-        spks=embedding,
-        cond=conds.transpose(1, 2),
-        n_timesteps=n_timesteps,
-        noised_mels=noise,
-        meanflow=False,
-    )
+    with s3gen_autocast(device) as autocast:
+        feat, _ = flow.decoder(
+            mu=hidden.transpose(1, 2).contiguous(),
+            mask=mask,
+            spks=embedding,
+            cond=conds.transpose(1, 2),
+            n_timesteps=n_timesteps,
+            noised_mels=noise,
+            meanflow=False,
+        )
+        if autocast is not None:
+            feat = feat.to(dtype)
     mels: list[Tensor] = []
     for i in range(batch):
         start = int(prompt_feats[i].size(0))
@@ -570,6 +599,12 @@ def inference_batched(
         return []
     if not supports_batched_s3gen(s3gen):
         raise S3GenBatchError("S3Gen graph is not audited for padded batching")
+
+    # Phase 11-2: the loader installs the autocast seam at model load; installing
+    # again is idempotent and keeps a hand-built S3Gen (tests, probes) covered.
+    # It matters here only for the B=1 unseeded fast path below, which calls the
+    # upstream `s3gen.inference`; the padded path wraps its own forwards.
+    install_inference_autocast(s3gen)
 
     flow = s3gen.flow
     device = _flow_device(flow)

@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -529,4 +530,100 @@ def test_batching_worker_builds_a_deterministic_tts_request_input():
     assert isinstance(request_input, TextToSpeechRequestInput)
     assert request_input.input_text == TEXTS["batch_1"]
     assert request_input.generation_options.noise_scale == 0.0
+
+
+# ---------------------------------------------------------------------------
+# S3Gen autocast axis (Phase 11-2)
+# ---------------------------------------------------------------------------
+def test_autocast_axis_parses_with_the_fp32_reference_first():
+    axis = ar.parse_axis("dtype:fp32-vs-autocast")
+
+    assert axis.autocast is True
+    assert axis.precision == "bfloat16"
+    assert axis.label == "dtype:fp32-vs-autocast"
+    assert axis.identity is False
+
+    with pytest.raises(ValueError, match="side A"):
+        ar.parse_axis("dtype:autocast-vs-fp32")
+
+
+def test_autocast_axis_keeps_the_t3_dtype_and_flips_the_env_gate():
+    axis = ar.parse_axis("dtype:fp32-vs-autocast")
+
+    reference = ar.side_settings(axis, "fp32")
+    experiment = ar.side_settings(axis, "autocast")
+
+    # T3 (and everything else) stays float32 on both sides: only the S3Gen
+    # runtime gate differs, so a seeded token stream cannot diverge.
+    assert reference["dtype"] == experiment["dtype"] == "float32"
+    assert reference["s3gen_autocast"] == "off"
+    assert experiment["s3gen_autocast"] == "bfloat16"
+    assert reference["seed"] == experiment["seed"] == 1234
+
+
+def test_autocast_axis_precision_is_overridable(monkeypatch, tmp_path):
+    args = SimpleNamespace(
+        axis="dtype:fp32-vs-autocast",
+        families="chatterbox",
+        gpu=False,
+        json_out=None,
+        md_out=None,
+        workdir=str(tmp_path),
+        s3gen_autocast="float16",
+    )
+    captured = {}
+
+    def fake_run_side(family, side, axis, use_gpu, workdir, cases=None):
+        captured[side] = axis.precision
+        return {"cases": {}}
+
+    monkeypatch.setattr(ar, "_run_side", fake_run_side)
+    monkeypatch.setattr(ar, "_cases_for_axis", lambda axis, family: [])
+    monkeypatch.setattr(ar, "partition_optional_cases", lambda cases, available=None: (cases, []))
+    monkeypatch.setattr(ar, "_family_kind", lambda family: "deterministic")
+    monkeypatch.setattr(ar, "_markdown_table", lambda report: "")
+    monkeypatch.setattr(ar, "_gpu_description", lambda: {})
+
+    ar.run_harness(args)
+
+    assert captured == {"fp32": "float16", "autocast": "float16"}
+
+
+def test_autocast_verdict_is_sample_wise_with_a_precision_tolerance():
+    axis = ar.parse_axis("dtype:fp32-vs-autocast")
+    base = {"identical": False, "max_abs_diff": 0.2, "rms_pct": 0.1}
+
+    tight = dict(base, duration_pct=0.0, logmel_mse=1e-4, corr=1.0)
+    assert ar.verdict_for_axis(axis, tight)[0] is True
+
+    # A token-stream change (different frame count) is a hard failure.
+    longer = dict(base, duration_pct=0.5, logmel_mse=1e-4, corr=1.0)
+    passed, failures = ar.verdict_for_axis(axis, longer)
+    assert passed is False and any("duration" in f for f in failures)
+
+    # An audible spectral change fails even with the same duration.
+    audible = dict(base, duration_pct=0.0, logmel_mse=1.5, corr=1.0)
+    passed, failures = ar.verdict_for_axis(axis, audible)
+    assert passed is False and any("logmel" in f for f in failures)
+
+    decorrelated = dict(base, duration_pct=0.0, logmel_mse=1e-5, corr=0.5)
+    assert ar.verdict_for_axis(axis, decorrelated)[0] is False
+
+    loud = dict(base, duration_pct=0.0, logmel_mse=1e-5, corr=1.0, rms_pct=9.0)
+    passed, failures = ar.verdict_for_axis(axis, loud)
+    assert passed is False and any("rms" in f for f in failures)
+
+
+def test_autocast_axis_covers_the_four_families_with_seeded_cases():
+    axis = ar.parse_axis("dtype:fp32-vs-autocast")
+
+    for family in ("chatterbox", "chatterbox_multilingual", "chatterbox_turbo"):
+        cases = ar._cases_for_axis(axis, family)
+        assert cases is ar.FAMILY_SPECS[family]["cases"]
+        assert cases
+
+    # The chatterbox family carries both the English TTS cases and the VC cases
+    # (VC is a model inside the family, exactly as in the batching gate).
+    kinds = {case["kind"] for case in ar._cases_for_axis(axis, "chatterbox")}
+    assert {"tts", "vc"} <= kinds
 

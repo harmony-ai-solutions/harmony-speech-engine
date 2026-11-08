@@ -1107,8 +1107,10 @@ class ModelRunnerBase:
 
     def _vocode_ar_row(self, tokens, conds, seed, *, turbo: bool):
         """Turn one row's token stream into audio through the upstream S3Gen."""
+        from harmonyspeech.modeling.models.chatterbox.s3gen_precision import s3gen_autocast
+
         s3gen = self.model.s3gen
-        with self._seeded_rng(seed):
+        with self._seeded_rng(seed), s3gen_autocast(self.device) as autocast:
             if turbo:
                 from chatterbox.models.s3gen.const import S3GEN_SIL
 
@@ -1121,6 +1123,12 @@ class ModelRunnerBase:
                 )
             else:
                 wav, _ = s3gen.inference(speech_tokens=tokens.to(self.device), ref_dict=conds.gen)
+            # Phase 11-2: blanket autocast around the upstream call (the loader's
+            # seam already wraps `s3gen.inference`; this is the same scope, kept
+            # explicit at the site the experiment names). The waveform must reach
+            # the artifact/watermark path as float32.
+            if autocast is not None:
+                wav = wav.float()
         return self._artifact_from_waveform(wav)
 
     def _artifact_from_waveform(self, wav):

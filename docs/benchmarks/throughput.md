@@ -1498,3 +1498,214 @@ python scripts/bench_throughput.py --families chatterbox_vc \
 python scripts/audio_regression.py --families chatterbox \
     --axis batching:1-vs-4 --gpu --json-out out/bench/gate-11-vc.json
 ```
+
+## Phase 11-2 — S3Gen autocast
+
+A **falsifiable experiment**, not a rollout: can S3Gen (the flow-matching mel
+decoder + HiFT vocoder shared by chatterbox en / multilingual / VC, and turbo's
+own meanflow variant) run under `torch.autocast` without audible degradation,
+and does it buy throughput? Owner decision 2026-11-08: run it; a clean negative
+is a valid outcome.
+
+### What the gate is
+
+`HSE_S3GEN_AUTOCAST` = `off` (default, byte-identical) | `bfloat16` | `float16`,
+CUDA-only. Two wrap shapes:
+
+* **Surgical** — inside our padded flow loop (`s3gen_batch._flow_batched`), the
+  autocast context covers only the encoder and CFM decoder forwards; the ODE
+  state updates, masks, unpadding and `mel2wav` stay float32 (the decoder's
+  output is cast back to the flow dtype). This is the path every batched vocode
+  and every seeded single-row vocode takes.
+* **Blanket** — a loaded `S3Gen`'s `inference` method is decorated once at load
+  (the same instance-level seam the loader already uses for dtype), so every
+  solo path — the sequential English/Turbo loops, multilingual, VC's
+  `generate`, the AR runner's per-row fallback — runs the whole upstream call
+  under autocast. Wrapping `inference` (not `generate`) keeps the AR backbones
+  out of scope: T3 is float32 on both sides, so the seeded token stream cannot
+  diverge.
+
+Correctness gate: `scripts/audio_regression.py --axis dtype:fp32-vs-autocast`.
+Both sides keep `dtype: float32` (identical T3) and a fixed request seed; only
+the env gate differs. The axis asserts the harness's **audibility** bounds —
+log-mel MSE < 1.0 dB², correlation > 0.98, RMS Δ < 5 %, duration Δ < 0.1 % —
+which are the deterministic-family bounds the repo already treats as
+"inaudible for the same model, different arithmetic". They are calibrated by
+Phase 4: casting S3Gen's *weights* to fp16 measured **8.9–141.6 dB²** with
+correlations 0.05–0.76 and was judged audible (`docs/models.md` §Precision), so
+1.0 dB² sits 9× below the known audible class. A batching-order bound (1e-2)
+would fail *both* precisions and is too strict for a precision axis.
+
+### Gate verdicts (seeded, 2026-11-08)
+
+`bfloat16` — **FAIL** (5/7 cases pass):
+
+| Family | Case | duration Δ% | RMS Δ% | log-mel MSE | corr | Verdict |
+|---|---|---|---|---|---|---|
+| chatterbox | tts_bundled_voice | 0.0 | 0.414 | 0.283 | 0.9932 | PASS |
+| chatterbox | tts_clone_voice_a | 0.0 | 0.491 | 0.953 | **0.8475** | **FAIL** (corr) |
+| chatterbox | vc_speech_a_to_b | 0.0 | 0.365 | **3.000** | 0.9976 | **FAIL** (mse) |
+| chatterbox | vc_speech_to_synth_voice | 0.0 | 0.197 | 0.736 | 0.9938 | PASS |
+| chatterbox_multilingual | tts_en | 0.0 | 0.374 | 0.426 | 0.9840 | PASS |
+| chatterbox_multilingual | tts_de_en_accent | 0.0 | 0.128 | 0.374 | 0.9837 | PASS |
+| chatterbox_turbo | tts_bundled_voice | 0.0 | 0.104 | 0.693 | 0.9937 | PASS |
+
+`float16` — **PASS** (7/7):
+
+| Family | Case | duration Δ% | RMS Δ% | log-mel MSE | corr | Verdict |
+|---|---|---|---|---|---|---|
+| chatterbox | tts_bundled_voice | 0.0 | 0.112 | 0.0082 | 0.9998 | PASS |
+| chatterbox | tts_clone_voice_a | 0.0 | 0.010 | 0.0411 | 0.9978 | PASS |
+| chatterbox | vc_speech_a_to_b | 0.0 | 0.098 | 0.0986 | 1.0000 | PASS |
+| chatterbox | vc_speech_to_synth_voice | 0.0 | 0.089 | 0.0157 | 0.9999 | PASS |
+| chatterbox_multilingual | tts_en | 0.0 | 0.099 | 0.0094 | 0.9999 | PASS |
+| chatterbox_multilingual | tts_de_en_accent | 0.0 | 0.087 | 0.0130 | 0.9995 | PASS |
+| chatterbox_turbo | tts_bundled_voice | 0.0 | 0.023 | 0.0203 | 0.9999 | PASS |
+
+Duration Δ is **0.0 % everywhere**: the AR token stream is identical, so the
+differences are pure vocoder arithmetic. bf16 is 5–30× worse than fp16 on every
+case — its 8-bit mantissa, not its range, is the problem. The VC intelligibility
+gate (WER) also passed on both sides (`0.000` on the gated real-speech case).
+
+### Seeded render metrics, surgical vs blanket
+
+The same VC source/target/seed rendered four ways
+(`scripts/bench_s3gen_autocast.py --mode audio`, harness metrics):
+
+| Path | Precision | log-mel MSE | corr | RMS Δ% | max\|Δsample\| |
+|---|---|---|---|---|---|
+| surgical B=1 (flow only, HiFT fp32) | bfloat16 | 0.0767 | 0.9987 | 0.215 | 0.025 |
+| surgical B=1 | float16 | 0.0083 | 1.0000 | 0.023 | 0.002 |
+| surgical B=8 | bfloat16 | 0.0769 | 0.9987 | 0.134 | 0.025 |
+| surgical B=8 | float16 | 0.0079 | 1.0000 | 0.023 | 0.004 |
+| blanket solo (flow + HiFT) | bfloat16 | 2.481 | 0.9971 | 0.283 | 0.035 |
+| blanket solo | float16 | 0.0890 | 0.9999 | 0.031 | 0.004 |
+
+The HiFT vocoder is the error amplifier: keeping it fp32 (the surgical shape)
+cuts bf16's mel error ~32× and fp16's ~11×. Waveform-domain percentiles for the
+seven fp16 harness cases: median |Δsample| 0.9e-4–7.9e-4 (−72…−62 dBFS), 99th
+percentile 3.9e-3–5.3e-2; the worst outliers sit on the two **clipping**
+synthetic-timbre cases (peak 1.000), where any tiny difference at the clip
+boundary is amplified. The mel-domain numbers are the audibility measure.
+
+### Per-hop timings (GPU 1, 3.64 s source, median of 5)
+
+`scripts/bench_s3gen_autocast.py --mode timing`, real ChatterboxVC weights, INFO logging.
+Batched path = surgical (flow autocast, HiFT fp32).
+
+| Batch | Hop | fp32 | bfloat16 | float16 | bf16 speed-up | fp16 speed-up |
+|---|---|---|---|---|---|---|
+| 1 | decode (librosa, per row) | 2.0 | 2.0 | 2.0 | 1.00× | 1.00× |
+| 1 | tokenize | 7.3 | 7.5 | 7.6 | 0.97× | 0.96× |
+| 1 | **flow** | **322.5** | 285.8 | 275.3 | **1.13×** | **1.17×** |
+| 1 | mel2wav (HiFT, fp32) | 18.3 | 17.6 | 17.5 | 1.04× | 1.05× |
+| 1 | perth | 7.1 | 6.2 | 6.8 | 1.15× | 1.04× |
+| 1 | **end-to-end vocode** | **344.6** | 290.6 | 306.2 | **1.19×** | **1.13×** |
+| 1 | solo upstream (blanket) | 352.7 | 320.9 | 324.8 | 1.10× | 1.09× |
+| 8 | tokenize (batched) | 24.3 | 23.8 | 23.7 | 1.02× | 1.03× |
+| 8 | **flow** | **1581.2** | 649.6 | 646.4 | **2.43×** | **2.45×** |
+| 8 | mel2wav (HiFT, fp32) | 165.3 | 165.0 | 165.4 | 1.00× | 1.00× |
+| 8 | perth | 6.1 | 6.8 | 7.3 | 0.90× | 0.84× |
+| 8 | **end-to-end vocode** | **1747.6** | 813.2 | 808.3 | **2.15×** | **2.16×** |
+
+The flow is the only matmul-heavy hop and it scales with batch size (a
+single 3.6 s row leaves the GPU under-filled). The HiFT vocoder is fp32 by
+design in the surgical shape, so it is untouched — and it is 20 % of the
+8-row vocode. Decode/tokenize/perth are CPU or IO hops and do not move.
+
+### Server A/B — batched VC (the vocode-dominated case)
+
+Two runs of the same build and config (`out/bench/config-11-2-vc.yml`,
+`chatterbox_vc` width 8, batched, S3Gen fp32 weights), 16 requests per level,
+GPU 1, INFO logging:
+
+| Concurrency | fp32 req/s | fp16 req/s | Speed-up | fp32 p50 (ms) | fp16 p50 (ms) |
+|---|---|---|---|---|---|
+| 1 | 2.68 | 2.73 | 1.02× | 372.9 | 366.4 |
+| 4 | 3.70 | **4.87** | **1.32×** | 1069.2 | 802.3 |
+| 8 | 4.10 | **6.19** | **1.51×** | 1919.6 | 1273.2 |
+
+A 64-request repeat at c=8 (the VRAM run) reproduces it: **4.18 → 6.33 req/s
+(1.51×)**, p50 1906 → 1254 ms, 0 failures. The c=1 row is flat, as expected: a
+single row's flow is only 1.1× faster and per-request CPU hops dominate. bf16
+was not re-run at the server level — its flow is within 0.5 % of fp16
+(649.6 vs 646.4 ms), so this table is representative of both.
+
+### Server A/B — en + turbo clone floods, c=8
+
+Clone variants added to `scripts/bench_throughput.py` (`chatterbox_clone`,
+`chatterbox_turbo_clone`: `voice_cloning` mode with a reference clip, the shipped
+AR width 4 and the embed step/cache live). 8 requests per level:
+
+| Family | fp32 req/s | fp16 req/s | Delta | fp32 p50 (ms) | fp16 p50 (ms) |
+|---|---|---|---|---|---|
+| chatterbox (en) clone | 0.94 | 0.89 | −5 % | 5353.7 | 5659.3 |
+| chatterbox_turbo clone | 0.70 | 0.73 | +4 % | 8438.9 | 8750.1 |
+
+No win: an AR request spends most of its wall time in T3 decode and the per-row
+CPU hops, and the vocode is a minority share. Both deltas are within run-to-run
+noise. This is the honest bound on the experiment — autocast accelerates the
+vocode hop, and only workloads where vocode dominates feel it.
+
+### VRAM
+
+Per-hop torch activation peaks (`scripts/bench_s3gen_autocast.py --mode timing`) and the server-level
+c=8 flood (`/metrics` gauges, 64 requests):
+
+| Metric | fp32 | bfloat16 | float16 |
+|---|---|---|---|
+| flow phase peak, B=1 | 84.5 MiB | 146.7 | 146.7 |
+| flow phase peak, B=8 | 343.5 MiB | 303.8 | 303.8 |
+| mel2wav phase peak, B=8 | 406.1 MiB | 406.1 | 406.1 |
+| end-to-end vocode peak, B=8 | 406.5 MiB | 406.5 | 406.5 |
+| server idle → peak allocated (c=8) | 1,096,009,728 → 1,496,352,256 B (**+381.8 MiB**) | — | 1,096,009,728 → 1,498,531,328 B (**+383.9 MiB**) |
+| device used after the flood (`mem_get_info`) | 2,948.6 MiB | — | 3,188.6 MiB (+240 MiB) |
+| model weights | 1,056,173,100 B | — | 1,056,173,100 B |
+
+The expectation that "autocast intermediates shrink the 8-row peak" is **not**
+borne out: the flow phase shrinks 40 MiB (11.6 %), but HiFT — fp32 by design in
+the surgical shape, and the largest single phase — dominates the vocode peak, so
+the end-to-end peak is unchanged. At B=1 the flow phase *grows* 62 MiB because
+autocast caches half-precision copies of the fp32 weights. The device-level
+footprint grows ~240 MiB (non-torch allocator/cuBLAS workspace), so there is no
+VRAM argument for the experiment. The absolute peak matches the Phase 11-1
+measurement exactly (1,496,352,256 B), which cross-checks the instrumentation.
+
+### Decision (2026-11-08)
+
+* **`bfloat16`: rejected.** Fails the seeded audibility gate on real-speech VC
+  (3.00 dB²) and the synthetic clone case (corr 0.85), and its surgical variant
+  is still ~10× worse than fp16. Documented next to the Phase 4 fp16-weights
+  result in `docs/models.md` §Precision.
+* **`float16`: gate passes and the win is measurable** (1.51× VC throughput at
+  c=8; 2.15× on the vocode hop at eight rows; AR families unchanged). A
+  **follow-up task** promotes it to a `s3gen_precision` config knob (docs +
+  config-honesty tests + a listening pass) — not implemented here, and no
+  shipped config sets the gate.
+* **No VRAM benefit**, so the promotion (if it happens) is a throughput/latency
+  knob only.
+
+### Reproduce
+
+```bash
+# gate (per family; bf16 then fp16)
+CUDA_VISIBLE_DEVICES=1 python scripts/audio_regression.py \
+    --families chatterbox,chatterbox_multilingual,chatterbox_turbo \
+    --axis dtype:fp32-vs-autocast --s3gen-autocast bfloat16 --gpu \
+    --json-out out/bench/gate-11-2-bf16.json
+
+# per-hop timings + activation peaks (off / bfloat16 / float16)
+CUDA_VISIBLE_DEVICES=1 python scripts/bench_s3gen_autocast.py --mode timing --batch 1,8
+
+# server A/B — VC (restart the server with HSE_S3GEN_AUTOCAST=off vs float16)
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=INFO \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path out/bench/config-11-2-vc.yml --port 2242
+python scripts/bench_throughput.py --families chatterbox_vc \
+    --concurrency 1,4,8 --requests 16 --reference repo_voice_a --label vc-fp16
+
+# server A/B — en + turbo clone floods
+python scripts/bench_throughput.py --families chatterbox_clone,chatterbox_turbo_clone \
+    --concurrency 8 --requests 8 --reference repo_voice_a --label en-fp16
+```
+

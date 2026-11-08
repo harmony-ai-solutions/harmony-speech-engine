@@ -36,6 +36,10 @@ _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
 # This keeps the ~1 GiB/role T3 saving without touching the quality-critical
 # vocoder. CPU loading also forces float32 (the CPU executor rewrites fp16 to
 # bf16, and bf16 sampling in T3 is neither tested nor faster here).
+#
+# Phase 11-2 layers an *experiment* on top of that policy: the S3Gen weights
+# stay float32, but `HSE_S3GEN_AUTOCAST` (off by default) may run its forwards
+# under CUDA `torch.autocast`. See `s3gen_precision.py` and docs/models.md.
 _S3GEN_DTYPE = torch.float32
 _VE_DTYPE = torch.float32
 
@@ -102,6 +106,16 @@ def apply_model_dtype(model, dtype: torch.dtype | None) -> None:
     perth_net = getattr(watermarker, "perth_net", None)
     if isinstance(perth_net, torch.nn.Module):
         watermarker.perth_net = perth_net.float()
+    # Phase 11-2: install the S3Gen autocast seam (idempotent, env-gated and a
+    # no-op while `HSE_S3GEN_AUTOCAST` is unset). Wrapping `s3gen.inference`
+    # here — rather than each caller — covers every solo vocode path including
+    # upstream `generate()` methods, while keeping the AR backbones out of scope.
+    if s3gen is not None:
+        from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
+            install_inference_autocast,
+        )
+
+        install_inference_autocast(s3gen)
     logger.info(
         "Chatterbox effective submodule dtypes "
         f"(requested={getattr(dtype, '__str__', lambda: dtype)()}): {_submodule_dtypes(model)}"

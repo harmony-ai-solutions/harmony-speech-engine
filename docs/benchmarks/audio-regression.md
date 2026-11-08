@@ -80,6 +80,7 @@ conditional when that user-provided clip exists; otherwise it is skipped.
 | deterministic | < 1.0 | < 1 % | < 5 % | > 0.98 | — |
 | stochastic | — | < 12 % | < 15 % | — | < 4 dB |
 | `sharing` axis (all) | < 1e-2 | = 0 % | — | — | max\|Δ\| < 1e-3 (−60 dBFS) |
+| `dtype:fp32-vs-autocast` | < 1.0 | < 0.1 % | < 5 % | > 0.98 | — |
 
 The `sharing` axis additionally requires **identical length**: a changed token
 stream is a wiring bug, not noise. Exact (bit-identical) equality is asserted
@@ -88,6 +89,19 @@ in-process by
 across two processes this host's CUDA kernel selection (cuBLAS/cuDNN workspace
 heuristics) introduces last-bit noise in the autoregressive path, measured at
 `max|Δsample| ≈ 1.5e-4`.
+
+The **`dtype:fp32-vs-autocast`** axis (Phase 11-2) is the S3Gen mixed-precision
+experiment. Both sides keep `ModelConfig.dtype: float32` (so the T3 backbone is
+identical and the seeded token stream cannot diverge) and carry a fixed request
+seed; only `HSE_S3GEN_AUTOCAST` differs (`off` vs `bfloat16`/`float16`,
+`--s3gen-autocast`). Its bounds are the deterministic family's audibility
+bounds rather than the batching axis's near-exact ones: reduced precision is
+expected to move the arithmetic, while padded batching must not. A duration
+change is still a hard failure (it means the token stream moved). Phase 4's
+audible S3Gen fp16-*weights* result measured 8.9–141.6 dB² / correlation
+0.05–0.76, which is what the 1.0 dB² bound is calibrated against. See
+[throughput.md](throughput.md#phase-11-2--s3gen-autocast) for the measured
+verdicts (`bfloat16` fails, `float16` passes).
 
 ### Listening pack
 
