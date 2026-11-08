@@ -18,6 +18,7 @@ When `split_text: true` (or `chunk_size` set): split → synthesize chunks → s
 - **Seeding:** a request seed derives per-chunk seeds deterministically (`seed + chunk_index`) so chunked output is reproducible and the 9-3 AR runner rows stay comparable; assert re-run stability.
 - **Speed/normalization ordering:** native-speed models keep their native handling; non-native families get `time_stretch` after stitching (whole-output, not per-chunk); `norm_loudness`/peak normalization after stitching. `sentence_pause_ms`/`crossfade_ms` during stitch.
 - **Degenerate cases:** short text (0 or 1 chunks) must be **byte-identical** to today's path (no stitcher in the pipeline) — this is the regression gate.
+- **Phase 14 seam (from the 2026-11-08 streaming research):** build the stitcher so a streaming consumer can reuse it with the **hold-back-the-crossfade-tail pattern** — each chunk's last `fade_samples` are withheld and emitted crossfaded into the next chunk's head (the upstream `carry` pattern, `server.py:1009-1067`). Concretely: expose a chunk-by-chunk stitch API (feed one chunk → get emittable audio + carried tail), with the whole-buffer stitch a thin fold over it. Do not hard-code whole-buffer-only internals.
 
 ## Implementation steps
 
