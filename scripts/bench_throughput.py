@@ -1008,8 +1008,15 @@ def chatterbox_flood_scenario(count: int = CHATTERBOX_FLOOD_REQUESTS) -> list[di
 
 
 def build_chatterbox_payload(spec: dict, model: str, reference_audio_b64: str | None = None) -> dict:
-    """One Chatterbox TTS payload from a flood row (reference audio optional)."""
-    payload = {"model": model, "mode": "single_speaker_tts", "input": spec["text"]}
+    """One Chatterbox TTS payload from a flood row (reference audio optional).
+
+    A reference clip is only valid in ``voice_cloning`` mode; the engine rejects
+    ``single_speaker_tts`` + ``input_audio`` with HTTP 400, which made every
+    distinct-voice flood row fail before it reached the AR pool (fixed
+    2026-11-08 while filling the 9-6 exhaustion table).
+    """
+    mode = "voice_cloning" if reference_audio_b64 else "single_speaker_tts"
+    payload = {"model": model, "mode": mode, "input": spec["text"]}
     if reference_audio_b64:
         payload["input_audio"] = reference_audio_b64
     return payload

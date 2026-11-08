@@ -141,16 +141,37 @@ device-free headroom) on the benchmark host:
 
 | Metric | Phase 4 run (torch-scoped) | Phase 10-3 device-level | Notes |
 |---|---:|---:|---|
-| device used (total − free) | _tbd_ | _tbd_ | includes CT2 + CUDA contexts |
-| free device memory (headroom) | 7.30 GiB (torch reserved) | _tbd_ | the Phase 9 pool-sizing input |
-| non-torch delta (device used − torch reserved) | 0.21 GiB (8.83 − 8.62, nvidia-smi vs reserved) | _tbd_ | CT2 weights/activations + context |
-| Whisper turbo probe peak | — | _tbd_ | filled when the benchmark host runs the probe |
-| Whisper tiny probe peak | — | _tbd_ | same |
+| device used (total − free) | — | **11.89 GiB** | includes CT2 + CUDA contexts |
+| free device memory (headroom) | 7.30 GiB (torch reserved) | **4.04 GiB** | the Phase 9 pool-sizing input |
+| non-torch delta (device used − torch reserved) | 0.21 GiB (8.83 − 8.62, nvidia-smi vs reserved) | **3.23 GiB** (11.89 − 8.66) | CT2 weights/activations + context |
+| Whisper turbo probe peak | — | **3380 MiB** (external) | 480 s max shape; the startup probe fails |
+| Whisper tiny probe peak | — | **308 MiB** (external) | 480 s max shape; the startup probe fails |
 
-The 0.21 GiB delta in the Phase 4 run is too small to include a resident
-large-v3-turbo (≈1.6 GiB in fp16), so it represents the CUDA-context floor
-rather than a Whisper-inclusive number. A benchmark-host run with the Whisper
-configs resident must fill the `_tbd_` cells.
+Measured with `scripts/measure_vram.py --config config.gpu.yml --no-warmup`
+(full 28-model catalogue, `HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1`, idle GPU 1).
+torch allocated 8.53 GiB / reserved 8.66 GiB; the 3.23 GiB non-torch delta is
+almost entirely the resident `large-v3-turbo` (1546 MiB of CT2 weights) + tiny
+(75 MiB) + the CUDA context, which the old torch-scoped series could not see.
+That is why the Phase 4 "7.30 GiB free" was too optimistic: the real free figure
+with Whisper resident is **4.04 GiB**. (The script's `nvidia-smi` row printed
+0.81 GiB because it queries physical GPU 0 by default while
+`CUDA_VISIBLE_DEVICES=1` maps `cuda:0` to physical GPU 1; use the
+`mem_get_info` figures above.)
+
+**Whisper probe defect (engine, frozen for this task).** The startup max-shape
+probe fails on its own synthetic audio:
+
+```
+RuntimeError: No clip timestamps found. Set 'vad_filter' to True or provide 'clip_timestamps'.
+```
+
+so `probe_measured` is false, `peak_activation_bytes` and `per_window_bytes`
+stay 0, and the two "probe peak" cells above had to be measured **externally**
+(load the model, read the device baseline, transcribe a 480 s tiled clip while
+sampling `nvidia-smi -i 1`). Per-window cost, had the engine measured it, would
+be 308/16 ≈ 19 MiB (tiny) and 3380/16 ≈ 211 MiB (turbo) for the 16-window
+pipeline batch. The probe failure also disables the runtime governor — see the
+budget-trip table below.
 
 ### Phase 9 pool-sizing input
 
@@ -185,10 +206,19 @@ remaining budget, so that model takes the sequential fallback (never an error).
 | Metric | Value | Notes |
 |---|---|---|
 | Pool budget | 1073741824 B (1 GiB) | `ar_inference.kv_cache_budget_bytes` |
-| Pool resident (`hse_ar_cache_pool_bytes`) | _tbd_ | measured after boot |
-| Peak `hse_vram_device_used_bytes` with the pool | _tbd_ | must stay inside the 10-3 device headroom |
-| Device free headroom during the AR flood | _tbd_ | 10-3 `mem_get_info` free |
-| AR activation peak (`hse_model_peak_activation_bytes`) | _tbd_ | per-model probe |
+| Pool resident (`hse_ar_cache_pool_bytes`) | **1056964608 B (1008 MiB)** | matches the arena table exactly |
+| Peak `hse_vram_device_used_bytes` with the pool | **7036 MiB** | c=8, English + Turbo flood |
+| Device free headroom during the AR flood | **8.25 GiB** (8650752000 B) | 10-3 `mem_get_info` free, post-level |
+| AR activation peak (`hse_model_peak_activation_bytes`) | **0 (not probed)** | the AR probe is not implemented; activation peak unmeasured |
+
+The arena table is exact: 8 × 90 MiB + 4 × 72 MiB = 1008 MiB, and
+`hse_ar_cache_pool_bytes` reports 1056964608 B. Two caveats: the engine's pool is
+constructed on `torch.device("cuda")` (no index) while the model is `cuda:0`, so
+in the shipped build the runner is disabled and **nothing is resident** — these
+figures were measured with a measurement wrapper that indexes the pool device.
+And `hse_model_peak_activation_bytes` is 0 for AR models (no probe), so the
+activation component is not separately accounted; the 7036 MiB peak is the
+end-to-end device figure that matters for headroom.
 
 Boot with `ar_inference.enabled: false` (or `--no-ar-cache`) to measure the same
 catalogue without the pool; the difference is the pool's real device footprint
@@ -217,11 +247,19 @@ crashed.
 
 | Metric | Unbudgeted run | Budget trip | Notes |
 |---|---|---|---|
-| `whisper_vram_budget_bytes` | unset | _tbd_ | `/health` `whisper_vram` must report it |
-| Max `hse_vram_device_used_bytes` | _tbd_ | _tbd_ | includes torch + CT2 + contexts |
-| `allowed_windows` under load | cap (16) | _tbd_ | shrinks as used approaches the bound |
-| Requests answered / loss | 100 / 0 | _tbd_ / **0** | |
-| p50 / p95 | _tbd_ | _tbd_ | graceful degradation, no OOM |
+| `whisper_vram_budget_bytes` | unset | **6442450944 B (6 GiB)**, `/health` verified | and a second boot at 1 GiB |
+| Max `hse_vram_device_used_bytes` | 2299068416 B | **1627979776 B** (6 GiB trip) / **2097741824 B** (1 GiB trip) | includes torch + CT2 + contexts |
+| `allowed_windows` under load | cap (16) | **never shrinks** | governor inert — see below |
+| Requests answered / loss | 100 / 0 | **100 / 0** | |
+| p50 / p95 | 8044.8 / 15737.8 ms | **8032.5 / 15675.3 ms** | no OOM, no crash |
+
+The 6 GiB trip passes trivially because the workload (1.5–2.1 GiB) is below the
+bound. The **1 GiB trip** is the real test and it **fails the requirement**: max
+device used 1.95 GiB, 95 % over budget, with p50 unchanged. The governor cannot
+throttle because the startup probe fails and leaves `per_window_bytes = 0`;
+`allowed_windows()` deliberately returns the cap rather than throttle on a zero
+cost. Until the probe is fixed, `whisper_vram_budget_bytes` is a boot-time
+projection check, **not** a runtime ceiling.
 
 The hermetic proof (mocked `torch.cuda.mem_get_info`, real scheduler and
 `get_whisper_admission`) lives in
