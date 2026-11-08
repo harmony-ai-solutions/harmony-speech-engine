@@ -1110,7 +1110,8 @@ class ModelRunnerBase:
         from harmonyspeech.modeling.models.chatterbox.s3gen_precision import s3gen_autocast
 
         s3gen = self.model.s3gen
-        with self._seeded_rng(seed), s3gen_autocast(self.device) as autocast:
+        precision = getattr(s3gen, "_hse_s3gen_precision", "fp32")
+        with self._seeded_rng(seed), s3gen_autocast(self.device, precision=precision) as autocast:
             if turbo:
                 from chatterbox.models.s3gen.const import S3GEN_SIL
 

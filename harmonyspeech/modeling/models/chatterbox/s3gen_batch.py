@@ -62,6 +62,7 @@ from torch import Tensor
 
 from harmonyspeech.modeling.models.batch_padding import length_mask, sync_mask
 from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
+    S3GEN_PRECISION_FP32,
     install_inference_autocast,
     s3gen_autocast,
 )
@@ -220,6 +221,7 @@ def _flow_batched(
     generators: list[torch.Generator | None],
     *,
     n_timesteps: int,
+    precision=None,
 ) -> list[Tensor]:
     """Tokens + per-row prompts → per-row generated mels ``[1, 80, 2·T_i]``."""
     device = _flow_device(flow)
@@ -290,12 +292,13 @@ def _flow_batched(
     token_mask = (~make_pad_mask(total_lens, combined_len)).unsqueeze(-1).to(embedding)
     token_embeds = flow.input_embedding(combined) * token_mask
 
-    # Phase 11-2: the experiment's surgical wrap. Autocast covers the encoder
-    # and CFM decoder forwards only; the returned tensors are cast back to the
-    # flow dtype so every ODE state update, mask, unpad and `mel2wav` call below
-    # stays float32. With the gate off (`HSE_S3GEN_AUTOCAST` unset) the context
-    # is a no-op and the casts are skipped, so this path is bit-identical.
-    with s3gen_autocast(device) as autocast:
+    # Phase 11-2/11-3: the surgical wrap. Autocast covers the encoder and CFM
+    # decoder forwards only; the returned tensors are cast back to the flow
+    # dtype so every ODE state update, mask, unpad and `mel2wav` call below
+    # stays float32. With the effective precision fp32 (config default and/or
+    # `HSE_S3GEN_AUTOCAST` unset) the context is a no-op and the casts are
+    # skipped, so this path is bit-identical.
+    with s3gen_autocast(device, precision=precision) as autocast:
         hidden, up_mask = _encode_masked(flow.encoder, token_embeds, total_lens)
         if autocast is not None:
             hidden = hidden.to(dtype)
@@ -326,7 +329,7 @@ def _flow_batched(
             (80, valid), generators[i], device=device, dtype=hidden.dtype
         )
 
-    with s3gen_autocast(device) as autocast:
+    with s3gen_autocast(device, precision=precision) as autocast:
         feat, _ = flow.decoder(
             mu=hidden.transpose(1, 2).contiguous(),
             mask=mask,
@@ -600,11 +603,13 @@ def inference_batched(
     if not supports_batched_s3gen(s3gen):
         raise S3GenBatchError("S3Gen graph is not audited for padded batching")
 
-    # Phase 11-2: the loader installs the autocast seam at model load; installing
-    # again is idempotent and keeps a hand-built S3Gen (tests, probes) covered.
-    # It matters here only for the B=1 unseeded fast path below, which calls the
-    # upstream `s3gen.inference`; the padded path wraps its own forwards.
+    # Phase 11-2/11-3: the loader installs the autocast seam at model load;
+    # installing again is idempotent and keeps a hand-built S3Gen (tests,
+    # probes) covered. It matters here only for the B=1 unseeded fast path
+    # below, which calls the upstream `s3gen.inference`; the padded path wraps
+    # its own forwards with the same per-model precision.
     install_inference_autocast(s3gen)
+    precision = getattr(s3gen, "_hse_s3gen_precision", S3GEN_PRECISION_FP32)
 
     flow = s3gen.flow
     device = _flow_device(flow)
@@ -624,7 +629,7 @@ def inference_batched(
         return [wav[0].detach()]
 
     generators = _generators(rows, device)
-    mels = _flow_batched(flow, rows, generators, n_timesteps=timesteps)
+    mels = _flow_batched(flow, rows, generators, n_timesteps=timesteps, precision=precision)
     waveforms = _hift_batched(s3gen.mel2wav, mels, generators)
 
     trim_fade = getattr(s3gen, "trim_fade", None)

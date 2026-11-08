@@ -25,3 +25,60 @@ def test_probe_refuses_to_run_without_cuda(monkeypatch):
         probe.main(["--mode", "timing"])
 
     assert "CUDA" in str(excinfo.value)
+
+
+def test_listening_covers_the_seven_required_pairs():
+    """Phase 11-3 names seven cases across the four S3Gen-vocode families."""
+    names = {
+        case["name"]
+        for _group, _gate, cases in probe._LISTENING_GROUPS
+        for case in cases
+    }
+    assert names == {
+        "chatterbox_bundled",
+        "chatterbox_clone",
+        "vc_speech_to_b",
+        "vc_speech_to_synth",
+        "multilingual_en",
+        "multilingual_de_accent",
+        "turbo_bundled",
+    }
+    assert probe._LISTENING_SEED
+
+
+def test_listening_readme_lists_files_metrics_and_gate(tmp_path):
+    report = {
+        "seed": 20261108,
+        "device": "test-gpu",
+        "torch": "2.x",
+        "groups": [
+            {
+                "group": "chatterbox",
+                "gate_note": "11-2 fp16 PASS, worst 0.099 dB²",
+                "cases": [
+                    {
+                        "case": "chatterbox_bundled",
+                        "label": "bundled voice",
+                        "files": {
+                            "fp32": str(tmp_path / "chatterbox_bundled_fp32.wav"),
+                            "fp16": str(tmp_path / "chatterbox_bundled_fp16.wav"),
+                        },
+                        "seconds": {"fp32": 3.8, "fp16": 3.8},
+                        "metrics": {
+                            "logmel_mse": 0.0123,
+                            "corr": 0.9991,
+                            "rms_pct": 0.08,
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    path = probe._write_listening_readme(str(tmp_path), report)
+    text = (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert path.endswith("README.md")
+    assert "chatterbox_bundled_fp32.wav" in text
+    assert "chatterbox_bundled_fp16.wav" in text
+    assert "0.012300" in text
+    assert "11-2 fp16 PASS" in text
+    assert "bf16 rejected" in text

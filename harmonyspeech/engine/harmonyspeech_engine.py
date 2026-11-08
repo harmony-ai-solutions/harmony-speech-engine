@@ -45,6 +45,18 @@ from harmonyspeech.processing.scheduler import (
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
 
+#: Chatterbox families whose vocode hop is S3Gen, so ``s3gen_precision`` is a
+#: meaningful, observable per-model value (Phase 11-3). ``ChatterboxEmbedding``
+#: has no vocode and is deliberately absent.
+_S3GEN_PRECISION_MODEL_TYPES = frozenset(
+    {
+        "ChatterboxTTS",
+        "ChatterboxTurboTTS",
+        "ChatterboxMultilingualTTS",
+        "ChatterboxVC",
+    }
+)
+
 
 class HarmonySpeechEngine:
     """
@@ -916,6 +928,25 @@ class HarmonySpeechEngine:
                 "healthy": True,
                 "vram_bytes": vram_detail.get("vram_bytes", 0),
             }
+            # Phase 11-3: prove which S3Gen vocode precision this model's
+            # Chatterbox family actually runs. Only the families whose vocode
+            # uses S3Gen carry the field; the env gate is applied so an operator
+            # sees the effective value (config default fp32).
+            if getattr(model_config, "model_type", None) in _S3GEN_PRECISION_MODEL_TYPES:
+                from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
+                    effective_s3gen_precision,
+                )
+
+                configured = getattr(model_config, "s3gen_precision", "fp32")
+                # Prefer the loaded S3Gen's own seam value: a shared backbone
+                # group has one S3Gen instance, so this reports what the vocode
+                # actually runs even if two entries asked for different values.
+                runner = getattr(
+                    getattr(model_executor, "driver_worker", None), "model_runner", None
+                )
+                s3gen = getattr(getattr(runner, "model", None), "s3gen", None)
+                configured = getattr(s3gen, "_hse_s3gen_precision", configured)
+                detail["s3gen_precision"] = effective_s3gen_precision(configured)
             # Phase 10-3: carry the measured (or explicitly skipped) Whisper
             # probe so /health never implies an attribution it does not have.
             if "peak_activation_bytes" in vram_detail:

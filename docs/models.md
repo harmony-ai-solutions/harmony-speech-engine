@@ -86,7 +86,10 @@ SoXR at the API boundary. See the [Audio I/O contract](audio-io-contract.md).
 ### Precision (`dtype`) and shared backbones
 
 `dtype` is per config entry (`auto`, `float16`, `bfloat16`, `float32`) and is
-applied to *torch* model weights only:
+applied to *torch* model weights only. It is distinct from the per-model
+[`s3gen_precision`](#s3gen-precision-s3gen_precision-phase-11-3) key, which
+selects S3Gen's vocode *forward* precision (autocast) while its weights stay
+float32.
 
 * **Chatterbox** (`ChatterboxTTS/TurboTTS/MultilingualTTS/VC/Embedding`):
   `float16` casts the **T3 backbone** (the large autoregressive model). S3Gen —
@@ -108,38 +111,56 @@ applied to *torch* model weights only:
   selects its precision with `compute_type` (default `float16` on CUDA,
   `int8` on CPU); `dtype` does not affect it.
 
-#### S3Gen autocast (opt-in experiment, `HSE_S3GEN_AUTOCAST`)
+#### S3Gen precision (`s3gen_precision`, Phase 11-3)
 
-The S3Gen weights stay `float32` (above), but the environment gate
-`HSE_S3GEN_AUTOCAST` may additionally run S3Gen's *forwards* under CUDA
+The S3Gen weights stay `float32` (above), but the per-model `s3gen_precision`
+key selects whether S3Gen's *forwards* additionally run under CUDA
 `torch.autocast` — fp32 master weights, per-op casting, norms/softmax/reductions
-still fp32. Values: `off` (**default**, byte-identical behaviour), `bfloat16`,
-`float16`. It is CUDA-only; on CPU it is a no-op.
+still fp32. It is CUDA-only; on CPU it is a no-op.
+
+| `s3gen_precision` | Behaviour |
+|---|---|
+| `"fp32"` (default) | No autocast. Byte-identical to the pre-Phase-11 build. |
+| `"fp16"` | S3Gen autocast to `float16` (Phase 11-2 verdict: **approved**). |
+
+It applies per config entry to the Chatterbox families whose vocode uses S3Gen
+(`ChatterboxTTS`, `ChatterboxMultilingualTTS`, `ChatterboxVC`,
+`ChatterboxTurboTTS`), so a mixed deployment stays honest: one model can run
+fp16 vocode while another stays fp32. `ChatterboxEmbedding` has no vocode and
+ignores the key. The effective value is surfaced per model on `/health`
+(`models.<name>.s3gen_precision`).
+
+**Environment override.** `HSE_S3GEN_AUTOCAST` (`off` | `bfloat16` |
+`float16`) **overrides** the config value when set — an explicit `off` forces
+fp32 even if the config says `fp16`. This is the bench/testing escape hatch the
+11-2 probe and the audio-regression harness drive; production deployments
+should use the config key.
 
 Measured on the RTX 5060 Ti benchmark host with the seeded
 `dtype:fp32-vs-autocast` axis in `scripts/audio_regression.py`
 ([details and all numbers](../benchmarks/throughput.md#phase-11-2--s3gen-autocast)):
 
-* **`bfloat16` is rejected.** Seeded renders move the log-mel spectrum far more
-  than the audibility bound (worst case **3.00 dB²** on real-speech VC, **0.85
-  correlation** on the synthetic-timbre clone case) even though the AR token
-  stream is identical (duration Δ 0 %). bf16's 8-bit mantissa is the wrong
-  trade for an audio vocoder.
-* **`float16` passes the audibility gate** on all seven seeded cases (worst case
-  **0.099 dB²**, correlation ≥ 0.9978, RMS Δ ≤ 0.11 %) and delivers a real win
-  where vocode dominates: **4.10 → 6.19 req/s at c=8** for batched VC (1.51×),
-  the S3Gen vocode hop itself 2.15× faster for eight rows. AR-dominated
-  workloads are unchanged (en/turbo clone floods c=8 within noise).
-* **It is not a shipped knob yet.** Promotion to a `s3gen_precision` config key
-  (plus docs and config-honesty tests) is a follow-up task; the shipped configs
-  do not set the gate. `float16` also does not shrink VRAM: the vocode's
-  activation peak is unchanged (HiFT stays fp32 and dominates) and the
-  device-level footprint grows ~240 MiB from non-torch allocator growth
-  (cuBLAS workspaces).
+* **`fp16` is approved.** It passes the audibility gate on all seven seeded
+  cases (worst case **0.099 dB²**, correlation ≥ 0.9978, RMS Δ ≤ 0.11 %) and
+  delivers a real win where vocode dominates: **4.10 → 6.19 req/s at c=8** for
+  batched VC (1.51×), the S3Gen vocode hop itself 2.45× faster at B=8.
+  AR-dominated workloads are unchanged (en/turbo clone floods c=8 within noise).
+* **`bfloat16` remains rejected.** Seeded renders move the log-mel spectrum far
+  more than the audibility bound (worst case **3.00 dB²** on real-speech VC,
+  **0.85 correlation** on the synthetic-timbre clone case) even though the AR
+  token stream is identical. bf16's 8-bit mantissa is the wrong trade for an
+  audio vocoder. It stays available only through the env gate for experiments.
+* **No VRAM case.** The vocode's activation peak is unchanged (HiFT stays fp32
+  and dominates) and the device-level footprint grows ~240 MiB from non-torch
+  allocator growth (cuBLAS workspaces).
 
-The gate is read on every call, so an operator can A/B it without reloading
-weights; an unknown value logs one warning and behaves as `off` (a typo must
-never silently change the numerics).
+The knob is read on every call, so an operator can A/B it without reloading
+weights; an unknown env value logs one warning and behaves as `off` (a typo must
+never silently change the numerics). The shipped configs do **not** set it yet:
+the `config.gpu.yml` flip is the owner's follow-up commit after the listening
+pass, whose seeded fp32/fp16 pairs live under `out/bench/listening-11-3/`
+(untracked; regenerate with `python scripts/bench_s3gen_autocast.py --mode
+listening`).
 
 `backbone_group` (optional, any entry) makes configs that point at the same
 checkpoint + revision + dtype **share backbone components** instead of loading a
@@ -347,6 +368,7 @@ Consequences:
 - name: "chatterbox"
   model_type: "ChatterboxTTS"
   max_batch_size: 4
+  s3gen_precision: "fp32"   # "fp16" opts into the 11-3 S3Gen autocast vocode
   device_config: { device: "cuda:0" }
 
 - name: "faster-whisper-tiny"

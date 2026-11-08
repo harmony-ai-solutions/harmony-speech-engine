@@ -100,6 +100,28 @@ def test_check_health_includes_vram_detail():
     assert payload["vram"]["resident_models"] == 1
 
 
+def test_check_health_surfaces_effective_s3gen_precision(monkeypatch):
+    """Phase 11-3: /health proves which S3Gen precision the vocode runs."""
+    monkeypatch.delenv("HSE_S3GEN_AUTOCAST", raising=False)
+    engine = _engine_shell()
+    executor = _fake_executor("chatterbox")
+    executor.model_config.s3gen_precision = "fp16"
+    engine.model_executors = {"chatterbox": executor}
+
+    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "fp16"
+
+    # The env escape hatch overrides the config value in the observable field.
+    monkeypatch.setenv("HSE_S3GEN_AUTOCAST", "off")
+    assert engine.check_health()["models"]["chatterbox"]["s3gen_precision"] == "fp32"
+
+    # A family whose vocode does not use S3Gen carries no such field.
+    monkeypatch.delenv("HSE_S3GEN_AUTOCAST", raising=False)
+    engine.model_executors = {
+        "embedding": _fake_executor("embedding", model_type="ChatterboxEmbedding")
+    }
+    assert "s3gen_precision" not in engine.check_health()["models"]["embedding"]
+
+
 def test_check_health_marks_failure_but_keeps_vram():
     engine = _engine_shell()
     executor = _fake_executor("chatterbox")

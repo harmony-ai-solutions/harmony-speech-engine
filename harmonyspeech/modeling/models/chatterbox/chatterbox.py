@@ -75,7 +75,7 @@ def _submodule_dtypes(model) -> dict[str, str]:
     return result
 
 
-def apply_model_dtype(model, dtype: torch.dtype | None) -> None:
+def apply_model_dtype(model, dtype: torch.dtype | None, s3gen_precision: str = "fp32") -> None:
     """Apply the project dtype policy to a freshly loaded Chatterbox model.
 
     Casts the T3 backbone to ``dtype`` (on CUDA only) and leaves S3Gen / the
@@ -84,6 +84,10 @@ def apply_model_dtype(model, dtype: torch.dtype | None) -> None:
     float16 request would otherwise leave it with half-precision conv weights
     that reject the float32 mel input. Logs the effective per-submodule dtypes
     so an operator can see what actually got loaded.
+
+    ``s3gen_precision`` (Phase 11-3) is the model's configured S3Gen vocode
+    precision; it is stored on the S3Gen seam so the solo, batched and AR
+    vocode paths all resolve the same per-model value.
     """
     device = str(getattr(model, "device", "cpu"))
     effective = _resolve_load_dtype(device, dtype)
@@ -115,10 +119,11 @@ def apply_model_dtype(model, dtype: torch.dtype | None) -> None:
             install_inference_autocast,
         )
 
-        install_inference_autocast(s3gen)
+        install_inference_autocast(s3gen, precision=s3gen_precision)
     logger.info(
         "Chatterbox effective submodule dtypes "
-        f"(requested={getattr(dtype, '__str__', lambda: dtype)()}): {_submodule_dtypes(model)}"
+        f"(requested={getattr(dtype, '__str__', lambda: dtype)()}, "
+        f"s3gen_precision={s3gen_precision}): {_submodule_dtypes(model)}"
     )
 
 # ---------------------------------------------------------------------------
@@ -189,6 +194,7 @@ class ChatterboxTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
+        s3gen_precision: str = "fp32",
         **kwargs,
     ) -> "ChatterboxTTS":
         """Load ChatterboxTTS model from pretrained weights.
@@ -198,6 +204,8 @@ class ChatterboxTTSModel:
             dtype: Requested precision for the T3 backbone (Phase 4-1). S3Gen
                 and the VoiceEncoder always stay float32 — see the module
                 docstring for the measured rationale.
+            s3gen_precision: S3Gen vocode precision (Phase 11-3): ``"fp32"``
+                (default) or ``"fp16"`` (CUDA autocast forwards).
             **kwargs: Additional arguments passed to ChatterboxTTS.from_pretrained.
 
         Returns:
@@ -209,7 +217,7 @@ class ChatterboxTTSModel:
             device = str(device)
 
         model = ChatterboxTTS.from_pretrained(device=device, **kwargs)
-        apply_model_dtype(model, dtype)
+        apply_model_dtype(model, dtype, s3gen_precision)
         return model
 
 
@@ -226,6 +234,7 @@ class ChatterboxTurboTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
+        s3gen_precision: str = "fp32",
         **kwargs,
     ) -> "_ChatterboxTurboTTS":
         """Load ChatterboxTurboTTS model from pretrained weights.
@@ -243,6 +252,7 @@ class ChatterboxTurboTTSModel:
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
             dtype: Requested precision for the T3 backbone (Phase 4-1).
+            s3gen_precision: S3Gen vocode precision (Phase 11-3).
             **kwargs: Additional keyword arguments (unused; kept for API compatibility).
 
         Returns:
@@ -304,7 +314,7 @@ class ChatterboxTurboTTSModel:
 
         model.ve.forward = _ve_forward_float32
 
-        apply_model_dtype(model, dtype)
+        apply_model_dtype(model, dtype, s3gen_precision)
         return model
 
 
@@ -323,6 +333,7 @@ class ChatterboxMultilingualTTSModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
+        s3gen_precision: str = "fp32",
         **kwargs,
     ) -> "ChatterboxMultilingualTTS":
         """Load ChatterboxMultilingualTTS model from pretrained weights.
@@ -330,6 +341,7 @@ class ChatterboxMultilingualTTSModel:
         Args:
             device: Device to load the model on (e.g., "cpu", "cuda").
             dtype: Requested precision for the T3 backbone (Phase 4-1).
+            s3gen_precision: S3Gen vocode precision (Phase 11-3).
             **kwargs: Additional arguments passed to ChatterboxMultilingualTTS.from_pretrained.
 
         Returns:
@@ -352,7 +364,7 @@ class ChatterboxMultilingualTTSModel:
         if hasattr(model, "t3") and hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
             model.t3.tfmr.config._attn_implementation = "eager"
 
-        apply_model_dtype(model, dtype)
+        apply_model_dtype(model, dtype, s3gen_precision)
         return model
 
 
@@ -368,6 +380,7 @@ class ChatterboxVCModel:
         cls,
         device: str | torch.device | None = None,
         dtype: torch.dtype | None = None,
+        s3gen_precision: str = "fp32",
         **kwargs,
     ) -> "ChatterboxVC":
         """Load ChatterboxVC model from pretrained weights.
@@ -377,6 +390,7 @@ class ChatterboxVCModel:
             dtype: Requested precision. VC has no T3 backbone, so this is
                 accepted for API symmetry and only S3Gen's float32 policy
                 applies (Phase 4-1).
+            s3gen_precision: S3Gen vocode precision (Phase 11-3).
             **kwargs: Additional arguments passed to ChatterboxVC.from_pretrained.
 
         Returns:
@@ -388,7 +402,7 @@ class ChatterboxVCModel:
             device = str(device)
 
         model = ChatterboxVC.from_pretrained(device=device, **kwargs)
-        apply_model_dtype(model, dtype)
+        apply_model_dtype(model, dtype, s3gen_precision)
         return model
 
 

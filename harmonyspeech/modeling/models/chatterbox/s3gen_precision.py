@@ -1,30 +1,36 @@
-"""S3Gen mixed-precision experiment seam (Phase 11-2).
+"""S3Gen mixed-precision seam (Phase 11-2 experiment, Phase 11-3 config knob).
 
-``HSE_S3GEN_AUTOCAST`` selects whether the S3Gen vocoder hop (flow-matching
-mel decoder + HiFT waveform decoder) runs under CUDA ``torch.autocast``:
+Two inputs select whether the S3Gen vocoder hop (flow-matching mel decoder +
+HiFT waveform decoder) runs under CUDA ``torch.autocast``:
 
-* ``off`` (default) — no autocast, byte-identical to the pre-experiment build.
-* ``bfloat16`` — autocast to ``torch.bfloat16``.
-* ``float16`` — autocast to ``torch.float16``.
+* the per-model ``ModelConfig.s3gen_precision`` key — ``"fp32"`` (default,
+  byte-identical to the pre-experiment build) or ``"fp16"`` (Phase 11-3: the
+  approved promotion of the 11-2 experiment); and
+* the ``HSE_S3GEN_AUTOCAST`` environment variable — ``off`` | ``bfloat16`` |
+  ``float16``. **The environment variable overrides the config value** when it
+  is set (an explicit ``off`` forces fp32); it is kept as the bench/testing
+  escape hatch the 11-2 probe and the audio harness drive.
 
 Why this is not the Phase 4 fp16-weights policy
 -----------------------------------------------
 Phase 4 cast S3Gen's **weights** to float16 and measured audible degradation
 (``docs/models.md`` §Precision): the flow/vocoder noise flipped sampled tokens
-after the AR stage. This experiment is a different shape — fp32 master weights,
-per-op casting, with norms/softmax/reductions staying fp32 — and it is
-**falsifiable**: ``scripts/audio_regression.py``'s ``dtype:fp32-vs-autocast``
-axis compares seeded A/B renders per family, and a clean negative closes the
-question.
+after the AR stage. This is a different shape — fp32 master weights, per-op
+casting, with norms/softmax/reductions staying fp32 — and it is **falsifiable**:
+``scripts/audio_regression.py``'s ``dtype:fp32-vs-autocast`` axis compares
+seeded A/B renders per family. The 11-2 verdict (fp16 PASS, bf16 rejected) is
+what made ``"fp16"`` an approved config value.
 
 Where it is applied
 -------------------
 * **Solo upstream paths** — :func:`install_inference_autocast` decorates one
   loaded ``S3Gen`` instance's ``inference`` method (the seam the loader already
-  uses for dtype hygiene). Every upstream vocode call goes through it: the
-  sequential English/Turbo loops, multilingual, VC's ``generate``, and the AR
-  runner's per-row fallback. Wrapping ``inference`` (not ``generate``) keeps the
-  AR backbones (T3) out of the autocast scope — only S3Gen is the experiment.
+  uses for dtype hygiene) and stores that model's configured precision on the
+  instance (``_hse_s3gen_precision``). Every upstream vocode call goes through
+  it: the sequential English/Turbo loops, multilingual, VC's ``generate``, and
+  the AR runner's per-row fallback. Wrapping ``inference`` (not ``generate``)
+  keeps the AR backbones (T3) out of the autocast scope — only S3Gen is the
+  experiment.
 * **Batched flow** — :func:`s3gen_autocast` is entered surgically inside
   :func:`~harmonyspeech.modeling.models.chatterbox.s3gen_batch._flow_batched`,
   around the encoder and CFM decoder forwards only; ODE state updates, masking,
@@ -32,10 +38,10 @@ Where it is applied
 
 Device policy
 -------------
-Autocast is a **CUDA-only** experiment (the T3 dtype policy is CUDA-only for the
+Autocast is a **CUDA-only** feature (the T3 dtype policy is CUDA-only for the
 same reason: CPU half precision is neither measured nor faster here). On any
 non-CUDA device the context manager is a no-op, so CPU unit tests keep fp32 and
-the default-off path cannot change behaviour.
+the default-fp32 path cannot change behaviour.
 """
 
 from __future__ import annotations
@@ -48,16 +54,25 @@ from loguru import logger
 
 __all__ = [
     "S3GEN_AUTOCAST_ENV",
+    "S3GEN_PRECISION_FP16",
+    "S3GEN_PRECISION_FP32",
+    "VALID_S3GEN_PRECISIONS",
     "autocast_enabled",
+    "effective_s3gen_precision",
     "install_inference_autocast",
     "s3gen_autocast",
     "s3gen_autocast_dtype",
 ]
 
-#: Environment variable selecting the experiment's precision.
+#: Environment variable selecting the experiment's precision (overrides config).
 S3GEN_AUTOCAST_ENV = "HSE_S3GEN_AUTOCAST"
 
-#: Accepted spellings, normalised to the torch dtype.
+#: Config spellings (``ModelConfig.s3gen_precision``).
+S3GEN_PRECISION_FP32 = "fp32"
+S3GEN_PRECISION_FP16 = "fp16"
+VALID_S3GEN_PRECISIONS = (S3GEN_PRECISION_FP32, S3GEN_PRECISION_FP16)
+
+#: Accepted env spellings, normalised to the torch dtype.
 _AUTOCAST_DTYPES = {
     "bfloat16": torch.bfloat16,
     "bf16": torch.bfloat16,
@@ -73,27 +88,69 @@ _DISABLED = {"", "off", "none", "false", "0", "disabled"}
 _WARNED: set[str] = set()
 
 
-def s3gen_autocast_dtype(environ=None) -> torch.dtype | None:
-    """Resolve ``HSE_S3GEN_AUTOCAST`` to a torch dtype, or ``None`` for off.
+def _configured_dtype(configured) -> torch.dtype | None:
+    """Map a config ``s3gen_precision`` value to a torch dtype (or ``None``).
+
+    ``ModelConfig`` only admits ``fp32``/``fp16``; the aliases here keep a
+    hand-built config or a probe honest without widening the shipped surface.
+    An unknown value is treated as fp32 (a typo must never change numerics).
+    """
+    if configured is None:
+        return None
+    raw = str(configured).strip().lower()
+    if raw in ("", S3GEN_PRECISION_FP32, "float32", "none", "off"):
+        return None
+    if raw in (S3GEN_PRECISION_FP16, "float16", "half"):
+        return torch.float16
+    if raw in ("bfloat16", "bf16"):
+        return torch.bfloat16
+    return None
+
+
+def s3gen_autocast_dtype(environ=None, configured=None) -> torch.dtype | None:
+    """Resolve the effective S3Gen autocast dtype, or ``None`` for off/fp32.
+
+    Precedence: **``HSE_S3GEN_AUTOCAST`` overrides ``configured``** when the
+    variable is present (including an explicit ``off``, which forces fp32 even
+    if the config says ``fp16`` — the bench/testing escape hatch). When the
+    variable is absent, ``configured`` (the model's ``s3gen_precision``)
+    decides: ``fp16`` → ``torch.float16``, ``fp32``/``None`` → ``None``.
 
     Read on every call (not cached at import) so an operator — or a test — can
-    flip the gate without reloading the model. An unknown value logs one warning
-    and behaves as ``off``: a typo must never silently change the numerics.
+    flip either input without reloading the model. An unknown env value logs
+    one warning and behaves as ``off``.
     """
     source = os.environ if environ is None else environ
-    raw = str(source.get(S3GEN_AUTOCAST_ENV, "")).strip().lower()
-    if raw in _DISABLED:
-        return None
-    dtype = _AUTOCAST_DTYPES.get(raw)
+    if S3GEN_AUTOCAST_ENV in source:
+        raw = str(source.get(S3GEN_AUTOCAST_ENV, "")).strip().lower()
+        if raw in _DISABLED:
+            return None
+        dtype = _AUTOCAST_DTYPES.get(raw)
+        if dtype is None:
+            if raw not in _WARNED:
+                _WARNED.add(raw)
+                logger.warning(
+                    f"Unknown {S3GEN_AUTOCAST_ENV}={raw!r}; expected off|bfloat16|float16 "
+                    "— S3Gen stays float32"
+                )
+            return None
+        return dtype
+    return _configured_dtype(configured)
+
+
+def effective_s3gen_precision(configured=S3GEN_PRECISION_FP32, environ=None) -> str:
+    """Return the effective precision name for observability (``/health``).
+
+    The config knob only names ``fp32``/``fp16``; an env override may name
+    ``bfloat16`` (the rejected experiment) or ``off``. This reports exactly
+    what the seam will do, not merely what the config asked for.
+    """
+    dtype = s3gen_autocast_dtype(environ=environ, configured=configured)
     if dtype is None:
-        if raw not in _WARNED:
-            _WARNED.add(raw)
-            logger.warning(
-                f"Unknown {S3GEN_AUTOCAST_ENV}={raw!r}; expected off|bfloat16|float16 "
-                "— S3Gen stays float32"
-            )
-        return None
-    return dtype
+        return S3GEN_PRECISION_FP32
+    if dtype == torch.bfloat16:
+        return "bfloat16"
+    return S3GEN_PRECISION_FP16
 
 
 def _autocast_device_type(device) -> str | None:
@@ -110,20 +167,22 @@ def _autocast_device_type(device) -> str | None:
     return "cuda" if kind == "cuda" else None
 
 
-def autocast_enabled(device) -> bool:
+def autocast_enabled(device, precision=None) -> bool:
     """Whether S3Gen autocast would actually engage on ``device`` right now."""
-    return s3gen_autocast_dtype() is not None and _autocast_device_type(device) is not None
+    return s3gen_autocast_dtype(configured=precision) is not None and _autocast_device_type(device) is not None
 
 
 @contextlib.contextmanager
-def s3gen_autocast(device, dtype: torch.dtype | None = None):
+def s3gen_autocast(device, dtype: torch.dtype | None = None, *, precision=None):
     """Enter S3Gen autocast for ``device``; yields the active dtype (or ``None``).
 
-    ``None`` is yielded both when the gate is off and when the device is not
-    CUDA, so callers can cast tensors back to the model dtype only when a cast
-    actually happened (that keeps the default path bit-identical).
+    ``precision`` is the model's configured ``s3gen_precision``; the env gate
+    still overrides it. ``None`` is yielded both when the effective precision is
+    fp32/off and when the device is not CUDA, so callers can cast tensors back
+    to the model dtype only when a cast actually happened (that keeps the
+    default path bit-identical).
     """
-    resolved = s3gen_autocast_dtype() if dtype is None else dtype
+    resolved = s3gen_autocast_dtype(configured=precision) if dtype is None else dtype
     if resolved is None:
         yield None
         return
@@ -153,24 +212,34 @@ def _restore_float32(value):
     return value
 
 
-def install_inference_autocast(s3gen):
+def install_inference_autocast(s3gen, precision=None):
     """Wrap one loaded S3Gen's ``inference`` with the autocast seam (idempotent).
 
-    The wrapper checks the env gate on every call, so installing it is safe even
-    when the experiment is off (one extra Python call, identical numerics). It
-    covers every solo vocode path — including upstream ``generate`` methods that
-    call ``s3gen.inference`` internally — without touching the installed package
-    (the same instance-level seam discipline the loader already uses for dtype).
+    ``precision`` is the model's configured ``s3gen_precision`` (Phase 11-3),
+    stored on the instance as ``_hse_s3gen_precision`` so the batched flow and
+    the AR runner can resolve the same per-model value. The wrapper checks the
+    env gate first (which overrides the config) on every call, so installing it
+    is safe even when precision is fp32 (one extra Python call, identical
+    numerics). It covers every solo vocode path — including upstream
+    ``generate`` methods that call ``s3gen.inference`` internally — without
+    touching the installed package (the same instance-level seam discipline the
+    loader already uses for dtype).
     """
     if s3gen is None or not hasattr(s3gen, "inference"):
         return s3gen
+    if precision is not None:
+        raw = str(precision).strip().lower()
+        s3gen._hse_s3gen_precision = (
+            raw if raw in VALID_S3GEN_PRECISIONS else S3GEN_PRECISION_FP32
+        )
     if getattr(s3gen, "_hse_autocast_seam", False):
         return s3gen
 
     original = s3gen.inference
 
     def inference(*args, **kwargs):
-        dtype = s3gen_autocast_dtype()
+        configured = getattr(s3gen, "_hse_s3gen_precision", S3GEN_PRECISION_FP32)
+        dtype = s3gen_autocast_dtype(configured=configured)
         if dtype is None:
             return original(*args, **kwargs)
         with s3gen_autocast(getattr(s3gen, "device", None), dtype=dtype) as active:

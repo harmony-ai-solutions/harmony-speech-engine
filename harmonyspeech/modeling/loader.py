@@ -295,7 +295,11 @@ def _build_chatterbox(model_config: ModelConfig, device: str, weight_registry, w
         shared_model = build_role_model(model_config, device, weight_registry)
         if shared_model is not None:
             return shared_model
-    return wrapper.from_pretrained(device=device, dtype=model_config.dtype)
+    return wrapper.from_pretrained(
+        device=device,
+        dtype=model_config.dtype,
+        s3gen_precision=getattr(model_config, "s3gen_precision", "fp32"),
+    )
 
 
 def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_registry=None, **kwargs):

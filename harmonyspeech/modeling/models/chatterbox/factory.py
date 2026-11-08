@@ -476,7 +476,14 @@ def build_backbone(
 # ---------------------------------------------------------------------------
 # Role assembly
 # ---------------------------------------------------------------------------
-def assemble_role(role: str, backbone: ChatterboxBackbone, *, repo: str, revision: str | None) -> object:
+def assemble_role(
+    role: str,
+    backbone: ChatterboxBackbone,
+    *,
+    repo: str,
+    revision: str | None,
+    s3gen_precision: str = "fp32",
+) -> object:
     """Construct a role wrapper around the shared backbone references.
 
     The returned object is a *distinct* upstream model instance per role, so
@@ -493,14 +500,14 @@ def assemble_role(role: str, backbone: ChatterboxBackbone, *, repo: str, revisio
             device=device,
             conds=_load_conditionals(repo, revision, device, role=ROLE_TTS),
         )
-        apply_model_dtype(model, backbone.dtype)
+        apply_model_dtype(model, backbone.dtype, s3gen_precision)
         return model
 
     if role == ROLE_VC:
         conds_path = f"{_ckpt_dir(repo, revision)}/{_FILES[ROLE_VC]['conds']}"
         ref_dict = torch.load(conds_path, map_location=_map_location(device), weights_only=True)["gen"]
         model = ChatterboxVC(s3gen=backbone.s3gen, device=device, ref_dict=ref_dict)
-        apply_model_dtype(model, backbone.dtype)
+        apply_model_dtype(model, backbone.dtype, s3gen_precision)
         return model
 
     if role == ROLE_MULTILINGUAL:
@@ -514,7 +521,7 @@ def assemble_role(role: str, backbone: ChatterboxBackbone, *, repo: str, revisio
         )
         if hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
             model.t3.tfmr.config._attn_implementation = "eager"
-        apply_model_dtype(model, backbone.dtype)
+        apply_model_dtype(model, backbone.dtype, s3gen_precision)
         return model
 
     if role == ROLE_TURBO:
@@ -574,7 +581,13 @@ def build_role_model(model_config, device, registry: WeightRegistry | None):
     device = str(device)
 
     backbone = build_backbone(repo, revision, device, dtype, registry, role=role)
-    model = assemble_role(role, backbone, repo=repo, revision=revision)
+    model = assemble_role(
+        role,
+        backbone,
+        repo=repo,
+        revision=revision,
+        s3gen_precision=getattr(model_config, "s3gen_precision", "fp32"),
+    )
     logger.info(
         f"Assembled Chatterbox role '{role}' from backbone group "
         f"'{model_config.backbone_group}' (shared s3gen/ve"

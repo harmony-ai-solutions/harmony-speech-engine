@@ -1678,12 +1678,13 @@ measurement exactly (1,496,352,256 B), which cross-checks the instrumentation.
   is still ~10× worse than fp16. Documented next to the Phase 4 fp16-weights
   result in `docs/models.md` §Precision.
 * **`float16`: gate passes and the win is measurable** (1.51× VC throughput at
-  c=8; 2.15× on the vocode hop at eight rows; AR families unchanged). A
-  **follow-up task** promotes it to a `s3gen_precision` config knob (docs +
-  config-honesty tests + a listening pass) — not implemented here, and no
-  shipped config sets the gate.
-* **No VRAM benefit**, so the promotion (if it happens) is a throughput/latency
-  knob only.
+  c=8; 2.15× on the vocode hop at eight rows; AR families unchanged). **Phase
+  11-3 promoted it to the per-model `s3gen_precision` config knob** (default
+  `fp32`, `HSE_S3GEN_AUTOCAST` still overrides for bench/testing) with docs,
+  config-honesty tests and a seeded fp32/fp16 listening pass
+  (`scripts/bench_s3gen_autocast.py --mode listening`). No shipped config sets
+  `fp16` yet; that flip is the owner's follow-up commit after listening.
+* **No VRAM benefit**, so the knob is a throughput/latency trade only.
 
 ### Reproduce
 

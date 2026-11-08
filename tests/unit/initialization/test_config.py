@@ -503,6 +503,65 @@ def test_whisper_window_batch_size_default_matches_the_module_constant(cpu_devic
             )
 
 
+# ── Phase 11-3: s3gen_precision knob ─────────────────────────────────────────
+
+
+@pytest.mark.unit
+def test_s3gen_precision_defaults_to_fp32(cpu_device):
+    """The knob's default must be the pre-experiment behaviour."""
+    cfg = ModelConfig(
+        name="chatterbox",
+        model="resemble-ai/chatterbox",
+        model_type="ChatterboxTTS",
+        max_batch_size=4,
+        device_config=cpu_device,
+        dtype="float32",
+    )
+    assert cfg.s3gen_precision == "fp32"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["fp16", "FP16", " fp16 "])
+def test_s3gen_precision_accepts_fp16(cpu_device, value):
+    cfg = ModelConfig(
+        name="chatterbox",
+        model="resemble-ai/chatterbox",
+        model_type="ChatterboxTTS",
+        max_batch_size=4,
+        device_config=cpu_device,
+        dtype="float32",
+        s3gen_precision=value,
+    )
+    assert cfg.s3gen_precision == "fp16"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("invalid", ["bf16", "float16", "half", "", "fpxx", None, 16, True])
+def test_s3gen_precision_rejects_unknown_values(cpu_device, invalid):
+    with pytest.raises(ValueError, match="s3gen_precision"):
+        ModelConfig(
+            name="chatterbox",
+            model="resemble-ai/chatterbox",
+            model_type="ChatterboxTTS",
+            max_batch_size=4,
+            device_config=cpu_device,
+            dtype="float32",
+            s3gen_precision=invalid,
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
+def test_shipped_configs_do_not_flip_s3gen_precision(config_name):
+    """Phase 11-3 ships the knob but no config sets it: the flip is the owner's
+    follow-up commit after the listening pass."""
+    entries = _shipped_config(config_name)["model_configs"]
+    for entry in entries:
+        assert entry.get("s3gen_precision", "fp32") == "fp32", (
+            f"{config_name}: {entry['name']} must not set s3gen_precision yet"
+        )
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("config_name", ["config.gpu.yml", "config.yml"])
 def test_shipped_config_loads_with_batched_inference_flags(config_name):

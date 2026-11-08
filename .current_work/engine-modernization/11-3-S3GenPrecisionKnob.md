@@ -26,8 +26,61 @@ Promote fp16 S3Gen autocast from the 11-2 env gate (`HSE_S3GEN_AUTOCAST`) to a f
 
 ## Checklist
 
-- [ ] `s3gen_precision` knob validated + plumbed to the seam (env override documented)
-- [ ] Effective value observable at runtime
-- [ ] Honesty/config tests; default fp32 byte-identical
-- [ ] Listening-pass render pairs + index under `out/bench/listening-11-3/`
-- [ ] Docs (models.md, config docs, CHANGELOG); suites green; `summary.md` updated
+- [x] `s3gen_precision` knob validated + plumbed to the seam (env override documented)
+- [x] Effective value observable at runtime
+- [x] Honesty/config tests; default fp32 byte-identical
+- [x] Listening-pass render pairs + index under `out/bench/listening-11-3/`
+- [x] Docs (models.md, config docs, CHANGELOG); suites green; `summary.md` updated
+
+## Result (2026-11-08)
+
+**Knob shipped, no config flipped.** `ModelConfig.s3gen_precision` is
+`"fp32"` (default, byte-identical) | `"fp16"`, validated strictly (case/space
+tolerant, no dtype aliases). It is stored on the loaded S3Gen seam
+(`_hse_s3gen_precision`) by `apply_model_dtype` → `install_inference_autocast`,
+so the solo (`s3gen.inference`), batched (`_flow_batched`) and AR per-row
+(`_vocode_ar_row`) vocode paths all resolve the same per-model value. The
+`HSE_S3GEN_AUTOCAST` env var **overrides** the config when present (including an
+explicit `off`); absent env falls back to the config.
+
+**Observability:** `/health` `models.<name>.s3gen_precision` reports the
+effective value for the four S3Gen-vocode families (TTS, Turbo, multilingual,
+VC), preferring the loaded S3Gen's seam value so a shared-backbone group reports
+what actually runs. `ChatterboxEmbedding` has no field.
+
+**Listening pass:** seven seeded pairs in `out/bench/listening-11-3/`
+(`<case>_fp32.wav` / `<case>_fp16.wav`, 3.0–4.4 s each) + `README.md` index +
+`report.json`. Live log-mel MSE 0.012–0.127 dB², corr ≥ 0.9914, RMS Δ ≤ 0.09 %
+— inside the 1.0 dB² / 0.98 / 5 % audibility bounds. Rendered on GPU 1
+(RTX 5060 Ti) with the fp16 side driven by `HSE_S3GEN_AUTOCAST=float16` (no
+config flip).
+
+**Tests:** unit 1182 passed; integration 84 passed + 2 opt-in skips;
+wire-contract e2e 50 passed + 3 model-gated skips. New tests: knob
+default/validation + shipped-config no-flip; config-vs-env precedence;
+config-driven seam engagement on CPU; batched precision threading; `/health`
+field; listening case set + README renderer.
+
+## Deviations (2026-11-08)
+
+1. **Per-model precision lives on the S3Gen instance, not a process global.**
+   `install_inference_autocast(s3gen, precision=...)` stores
+   `_hse_s3gen_precision`; `_flow_batched`/`_vocode_ar_row` read it. A
+   shared-backbone group has one S3Gen, so the last `apply_model_dtype` wins —
+   `/health` prefers the seam value for that reason. Mixed *ungrouped*
+   deployments are fully per-model as specified.
+2. **The health field prefers the loaded S3Gen's seam value** (falling back to
+   the config value when no runner/model is reachable, as in the shell-engine
+   tests), so it cannot claim a precision the vocode is not running.
+3. **The listening mode is a new `--mode listening` on
+   `scripts/bench_s3gen_autocast.py`** rather than a sibling script; it reuses
+   the same harness metrics. The fp16 side uses the env override so no shipped
+   config changes in this task (the `config.gpu.yml` flip remains the owner's
+   follow-up).
+4. **`docs/models.md` §Precision was rewritten** from "opt-in experiment" to
+   the approved `s3gen_precision` table (bf16 still documented-rejected), and
+   the mixed-device example config shows the default explicitly. No shipped
+   `config.yml`/`config.gpu.yml` change.
+5. **No commits/pushes** (task constraint). `out/bench/` (including the
+   listening pairs and `report.json`) is untracked.
+

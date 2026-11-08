@@ -25,6 +25,11 @@ class DeviceConfig:
         self.device = torch.device(self.device_type)
 
 
+#: Accepted ``s3gen_precision`` values (Phase 11-3). Deliberately strict: the
+#: knob mirrors the docs/models.md precision table, not every torch dtype alias.
+_VALID_S3GEN_PRECISIONS = ("fp32", "fp16")
+
+
 class ModelConfig:
     """
     Configuration for a model
@@ -83,6 +88,15 @@ class ModelConfig:
             carry — a *memory* bound, not the admission width
             (``max_batch_size``). Default ``8`` (owner-approved initial value);
             inert for every other model type.
+        s3gen_precision: Precision for the S3Gen vocoder hop of a Chatterbox
+            entry (Phase 11-3). ``"fp32"`` (default) keeps the pre-experiment
+            behaviour byte-identical; ``"fp16"`` runs S3Gen's *forwards* under
+            CUDA ``torch.autocast`` while its master weights stay float32 (the
+            Phase 11-2 experiment: seeded audibility gate 7/7 PASS, batched VC
+            c=8 1.51×). It is per-model, so a mixed deployment stays honest.
+            CUDA-only (a no-op on CPU), and inert for every non-Chatterbox
+            model type. The ``HSE_S3GEN_AUTOCAST`` environment variable
+            **overrides** this value when set (bench/testing escape hatch).
     """
 
     def __init__(
@@ -108,6 +122,7 @@ class ModelConfig:
         batch_token_budget: int | None = None,
         num_workers: int = 1,
         whisper_window_batch_size: int = 8,
+        s3gen_precision: str = "fp32",
     ) -> None:
         self.name = name
         self.model = model
@@ -164,6 +179,23 @@ class ModelConfig:
                 f"got {whisper_window_batch_size!r}"
             )
         self.whisper_window_batch_size = whisper_window_batch_size
+
+        # Phase 11-3: S3Gen vocode precision knob. Default "fp32" is the
+        # pre-experiment behaviour; "fp16" promotes the Phase 11-2 autocast
+        # experiment to an honest, per-model config value. Kept strict (no
+        # dtype aliases) so the shipped surface matches docs/models.md.
+        if not isinstance(s3gen_precision, str):
+            raise ValueError(
+                "s3gen_precision must be 'fp32' or 'fp16', "
+                f"got {s3gen_precision!r}"
+            )
+        normalized_precision = s3gen_precision.strip().lower()
+        if normalized_precision not in _VALID_S3GEN_PRECISIONS:
+            raise ValueError(
+                "s3gen_precision must be 'fp32' or 'fp16', "
+                f"got {s3gen_precision!r}"
+            )
+        self.s3gen_precision = normalized_precision
 
         self.dtype = _get_and_verify_dtype(dtype)
 

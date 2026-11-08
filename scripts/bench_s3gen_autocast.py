@@ -14,12 +14,21 @@ through the HSE loader (so the seam under test is the shipped one):
     padded path (flow autocast, HiFT fp32) and the **blanket** solo path (the
     loader seam: flow + HiFT autocast).
 
-Results feed ``docs/benchmarks/throughput.md`` §Phase 11-2. This is a
-measurement tool, not a test: it needs the cached Chatterbox weights and a CUDA
-device, and takes a couple of minutes.
+``--mode listening`` (Phase 11-3)
+    Writes the owner's listening-pass pairs: seeded ``<case>_fp32.wav`` /
+    ``<case>_fp16.wav`` for each Chatterbox family whose vocode uses S3Gen
+    (bundled voice, clone voice, VC speech→B, VC speech→synth, multilingual
+    en + de-accent, turbo bundled) plus a one-screen ``README.md`` index. The
+    fp16 side is driven by ``HSE_S3GEN_AUTOCAST=float16`` (the documented env
+    override of the fp32 config default) so no shipped config is flipped.
+
+Results feed ``docs/benchmarks/throughput.md`` §Phase 11-2 and the 11-3
+listening pass. This is a measurement tool, not a test: it needs the cached
+Chatterbox weights and a CUDA device, and takes a couple of minutes.
 
     CUDA_VISIBLE_DEVICES=1 python scripts/bench_s3gen_autocast.py --batch 1,8
     CUDA_VISIBLE_DEVICES=1 python scripts/bench_s3gen_autocast.py --mode audio
+    CUDA_VISIBLE_DEVICES=1 python scripts/bench_s3gen_autocast.py --mode listening
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import statistics
 import sys
 import time
@@ -52,6 +62,67 @@ from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (  # noqa: 
 
 MODES = ("off", "bfloat16", "float16")
 _S3GEN_SR = 24000
+
+#: Phase 11-3 listening pass: one seeded pair per row, grouped by the wrapper
+#: that renders it. Each case names its text (tests/audio_fixtures.TEXTS) and,
+#: for clone/VC cases, the fixture clips. The 11-2 gate column is the published
+#: seeded verdict for that family (docs/benchmarks/throughput.md §Phase 11-2).
+_LISTENING_GROUPS = (
+    (
+        "chatterbox",
+        "chatterbox (en TTS): 11-2 fp16 PASS, worst 0.099 dB², corr ≥ 0.9978, RMS ≤ 0.11 %",
+        (
+            {"name": "chatterbox_bundled", "text": "en_short", "label": "bundled voice, plain text"},
+            {
+                "name": "chatterbox_clone",
+                "text": "en_numbers",
+                "reference": "voice_a",
+                "label": "synthetic reference: timbre porting",
+            },
+        ),
+    ),
+    (
+        "chatterbox_vc",
+        "chatterbox VC: 11-2 fp16 PASS; batched c=8 1.51× (flow 2.45× at B=8)",
+        (
+            {
+                "name": "vc_speech_to_b",
+                "source": "repo_voice_a",
+                "target": "repo_voice_b",
+                "label": "real speech -> real speech timbre",
+            },
+            {
+                "name": "vc_speech_to_synth",
+                "source": "repo_voice_a",
+                "target": "voice_b",
+                "label": "real speech -> synthetic vowel timbre",
+            },
+        ),
+    ),
+    (
+        "chatterbox_multilingual",
+        "chatterbox_multilingual: 11-2 fp16 PASS, 0.009–0.013 dB²",
+        (
+            {"name": "multilingual_en", "text": "en_short", "language": "en", "label": "English text"},
+            {
+                "name": "multilingual_de_accent",
+                "text": "de_short",
+                "language": "de",
+                "label": "German text + bundled English conditionals (accent transfer)",
+            },
+        ),
+    ),
+    (
+        "chatterbox_turbo",
+        "chatterbox_turbo (meanflow): 11-2 fp16 PASS, 0.020 dB²",
+        (
+            {"name": "turbo_bundled", "text": "en_short", "label": "bundled voice, plain text"},
+        ),
+    ),
+)
+
+#: Seed used for both sides of every listening pair (same tokens + noise draw).
+_LISTENING_SEED = 20261108
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +267,177 @@ def _harness():
     return audio_regression
 
 
+# ---------------------------------------------------------------------------
+# Listening mode (Phase 11-3)
+# ---------------------------------------------------------------------------
+def _seed_everything(seed: int) -> None:
+    """Seed every RNG the TTS/VC paths read, so both sides draw identically."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _render_wav(model, group: str, case: dict, device: str):
+    """Render one case with the loaded wrapper and return (samples, rate)."""
+    from tests.audio_fixtures import REFERENCE_CLIPS, TEXTS
+
+    if group == "chatterbox":
+        kwargs = {}
+        if case.get("reference"):
+            kwargs["audio_prompt_path"] = REFERENCE_CLIPS[case["reference"]]
+        wav = model.generate(TEXTS[case["text"]], **kwargs)
+    elif group == "chatterbox_multilingual":
+        wav = model.generate(TEXTS[case["text"]], language_id=case["language"])
+    elif group == "chatterbox_turbo":
+        wav = model.generate(TEXTS[case["text"]])
+    elif group == "chatterbox_vc":
+        model.set_target_voice(REFERENCE_CLIPS[case["target"]])
+        wav = model.generate(audio=REFERENCE_CLIPS[case["source"]])
+    else:  # pragma: no cover - guarded by the group table
+        raise ValueError(f"unknown listening group {group!r}")
+
+    samples = wav.detach().cpu().numpy().reshape(-1).astype(np.float32)
+    return samples, int(model.sr)
+
+
+def _load_listening_model(group: str, device: str):
+    from harmonyspeech.modeling.models.chatterbox.chatterbox import (
+        ChatterboxMultilingualTTSModel,
+        ChatterboxTTSModel,
+        ChatterboxTurboTTSModel,
+        ChatterboxVCModel,
+    )
+
+    wrappers = {
+        "chatterbox": ChatterboxTTSModel,
+        "chatterbox_vc": ChatterboxVCModel,
+        "chatterbox_multilingual": ChatterboxMultilingualTTSModel,
+        "chatterbox_turbo": ChatterboxTurboTTSModel,
+    }
+    return wrappers[group].from_pretrained(device=device, dtype=torch.float32)
+
+
+def run_listening(out_dir: str, device: str) -> dict:
+    """Write seeded fp32/fp16 pairs per family + a one-screen README index."""
+    import gc
+
+    import soundfile as sf
+
+    ar = _harness()
+    os.makedirs(out_dir, exist_ok=True)
+    report: dict = {
+        "seed": _LISTENING_SEED,
+        "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+        "torch": torch.__version__,
+        "out_dir": out_dir,
+        "groups": [],
+    }
+
+    for group, gate_note, cases in _LISTENING_GROUPS:
+        print(f"[listening] loading {group}…", flush=True)
+        model = _load_listening_model(group, device)
+        rendered = []
+        try:
+            for case in cases:
+                paths = {}
+                seconds = {}
+                for side, env_value in (("fp32", "off"), ("fp16", "float16")):
+                    os.environ[S3GEN_AUTOCAST_ENV] = env_value
+                    _seed_everything(_LISTENING_SEED)
+                    with torch.inference_mode():
+                        samples, rate = _render_wav(model, group, case, device)
+                    path = os.path.join(out_dir, f"{case['name']}_{side}.wav")
+                    sf.write(path, samples, rate, subtype="PCM_16")
+                    paths[side] = path
+                    seconds[side] = round(float(samples.size) / rate, 3)
+                    print(
+                        f"[listening] {case['name']:22s} {side} {seconds[side]:.2f}s "
+                        f"-> {path}",
+                        flush=True,
+                    )
+                metrics = ar.compute_metrics(paths["fp32"], paths["fp16"], "stochastic")
+                rendered.append(
+                    {
+                        "case": case["name"],
+                        "label": case["label"],
+                        "files": {"fp32": paths["fp32"], "fp16": paths["fp16"]},
+                        "seconds": seconds,
+                        "metrics": metrics,
+                    }
+                )
+                print(
+                    f"[listening] {case['name']:22s} logmel_mse {metrics['logmel_mse']:.6f}  "
+                    f"corr {metrics['corr']:.4f}  rms {metrics['rms_pct']:.3f}%",
+                    flush=True,
+                )
+        finally:
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        report["groups"].append({"group": group, "gate_note": gate_note, "cases": rendered})
+
+    os.environ[S3GEN_AUTOCAST_ENV] = "off"
+    _write_listening_readme(out_dir, report)
+    return report
+
+
+def _write_listening_readme(out_dir: str, report: dict) -> str:
+    """Render the one-screen listening index (case → files → 11-2 gate)."""
+    lines = [
+        "# S3Gen fp32 vs fp16 listening pass (Phase 11-3)",
+        "",
+        f"Host: {report['device']} · torch {report['torch']} · seed {report['seed']} · "
+        f"generated 2026-11-08",
+        "",
+        "Each case is one seeded request rendered twice: `*_fp32.wav` (config "
+        "default, no autocast) and `*_fp16.wav` (`HSE_S3GEN_AUTOCAST=float16`, the "
+        "documented env override). The AR token stream is identical by "
+        "construction (autocast wraps S3Gen only); listen for vocode texture, "
+        "not wording. `logmel MSE` / `corr` / `RMS` are the live 4-2 harness "
+        "metrics for this pair, beside the published 11-2 seeded gate for the "
+        "family.",
+        "",
+        "| case | family | fp32 | fp16 | sec | logmel MSE (dB²) | corr | RMS Δ | 11-2 gate |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for group in report["groups"]:
+        for case in group["cases"]:
+            m = case["metrics"]
+            lines.append(
+                "| {case} | {group} | [{a}]({a}) | [{b}]({b}) | {sec} | {mse:.6f} | "
+                "{corr:.4f} | {rms:.3f} % | {gate} |".format(
+                    case=case["case"],
+                    group=group["group"],
+                    a=os.path.basename(case["files"]["fp32"]),
+                    b=os.path.basename(case["files"]["fp16"]),
+                    sec=case["seconds"]["fp32"],
+                    mse=m["logmel_mse"],
+                    corr=m["corr"],
+                    rms=m["rms_pct"],
+                    gate=group["gate_note"],
+                )
+            )
+    lines += [
+        "",
+        "The 11-2 verdict: **fp16 PASS on all 7 seeded cases; bf16 rejected.** "
+        "Throughput win is vocode-bound: batched VC c=8 1.51× (flow 2.45× at B=8); "
+        "AR-dominated en/turbo floods within noise. See "
+        "[`docs/models.md` §Precision](../../../docs/models.md#precision-dtype-and-shared-backbones) "
+        "and [`docs/benchmarks/throughput.md` §Phase 11-2](../../../docs/benchmarks/throughput.md#phase-11-2--s3gen-autocast).",
+        "",
+        "This folder is untracked measurement scaffolding (`out/bench/`); never commit it.",
+        "",
+    ]
+    path = os.path.join(out_dir, "README.md")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+    print(f"[listening] wrote {path}", flush=True)
+    return path
+
+
 def run_audio(model, ref_dict: dict, source_path: str, out_dir: str) -> dict:
     """Seeded renders scored against the fp32 reference (surgical vs blanket)."""
     import soundfile as sf
@@ -247,12 +489,19 @@ def run_audio(model, ref_dict: dict, source_path: str, out_dir: str) -> dict:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="S3Gen autocast experiment probe (Phase 11-2)")
-    parser.add_argument("--mode", choices=("timing", "audio", "both"), default="both")
+    parser = argparse.ArgumentParser(description="S3Gen autocast experiment probe (Phase 11-2/11-3)")
+    parser.add_argument(
+        "--mode", choices=("timing", "audio", "listening", "both"), default="both"
+    )
     parser.add_argument("--batch", default="1,8", help="comma-separated batch sizes (timing mode)")
     parser.add_argument("--repeat", type=int, default=5, help="median-of-N per measurement")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--out-dir", default="out/bench/autocast-audio")
+    parser.add_argument(
+        "--listening-out-dir",
+        default="out/bench/listening-11-3",
+        help="output folder for the Phase 11-3 fp32/fp16 listening pairs",
+    )
     parser.add_argument("--json-out", default="out/bench/s3gen-autocast-probe.json")
     args = parser.parse_args(argv)
 
@@ -260,13 +509,16 @@ def main(argv=None) -> int:
         raise SystemExit("this probe needs a CUDA device (autocast is a CUDA-only experiment)")
     print(f"[probe] device={torch.cuda.get_device_name(0)} torch={torch.__version__}", flush=True)
 
-    model, ref_dict, source_path = _load_model(args.device)
     report: dict = {"modes": args.mode}
-    if args.mode in ("timing", "both"):
-        batches = [int(value) for value in args.batch.split(",") if value.strip()]
-        report["timing"] = run_timing(model, ref_dict, source_path, batches, args.repeat)
-    if args.mode in ("audio", "both"):
-        report["audio"] = run_audio(model, ref_dict, source_path, args.out_dir)
+    if args.mode == "listening":
+        report["listening"] = run_listening(args.listening_out_dir, args.device)
+    else:
+        model, ref_dict, source_path = _load_model(args.device)
+        if args.mode in ("timing", "both"):
+            batches = [int(value) for value in args.batch.split(",") if value.strip()]
+            report["timing"] = run_timing(model, ref_dict, source_path, batches, args.repeat)
+        if args.mode in ("audio", "both"):
+            report["audio"] = run_audio(model, ref_dict, source_path, args.out_dir)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
     with open(args.json_out, "w", encoding="utf-8") as handle:
