@@ -178,6 +178,18 @@ FAMILY_SPECS: dict[str, dict] = {
             "input": "The quick brown fox jumps over the lazy dog near the river bank.",
         },
     },
+    "chatterbox_vc": {
+        # Phase 11-1: VC has no text; both fields take the reference clip. The
+        # source is the clip to convert, the target the voice to convert to
+        # (the same clip here — the throughput shape, not a quality test).
+        "path": "/v1/voice/convert",
+        "kind": "vc",
+        "model": "chatterbox_vc",
+        "payload": {
+            "source_audio": "__REFERENCE_AUDIO__",
+            "target_audio": "__REFERENCE_AUDIO__",
+        },
+    },
     "whisper": {
         "path": "/v1/audio/transcriptions",
         "kind": "stt",

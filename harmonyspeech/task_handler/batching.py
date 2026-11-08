@@ -84,6 +84,9 @@ BATCHED_INFERENCE_FAMILIES = frozenset(
         "HarmonySpeechVocoder",
         "VoiceFixerRestorer",
         "VoiceFixerVocoder",
+        # Phase 11-1: VC — one batched source-tokenizer pass (mel-frame axis)
+        # plus the Phase 9-5 padded S3Gen vocode (speech-token axis).
+        "ChatterboxVC",
     }
 )
 

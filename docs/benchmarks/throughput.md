@@ -1400,3 +1400,101 @@ otherwise GPU request; if long-form (30 s+) synthesis ever dominates the mix, th
 cheap fix is to move `perth_net` to the model's device (one line in the loader's
 dtype/device alignment) rather than to batch it. Recorded as an observation, not
 a phase task.
+
+## Phase 11-1 — Chatterbox VC batching
+
+The VC step now tokenizes the step's source clips in one batched pass and vocodes
+them through the Phase 9-5 padded S3Gen hop, instead of one source-tokenizer
+forward per request. This block is the pre/post throughput evidence and the
+measured peak, on the same host and reference clip.
+
+### Method
+
+* **Host:** NVIDIA GeForce RTX 5060 Ti 16 GiB, driver 610.88,
+  `CUDA_VISIBLE_DEVICES=1` (idle card), torch 2.9.1+cu130, Python 3.12.12.
+* **Fixture:** a one-model config (`chatterbox_vc`, float16 request → S3Gen stays
+  float32 by the Phase 4-1 policy). `pre` = `max_batch_size: 1` +
+  `batched_inference: false` (the 9-5 loop); `post` = the shipped
+  `max_batch_size: 8` + `batched_inference: true`.
+* **Load:** `scripts/bench_throughput.py --families chatterbox_vc`, 16 requests
+  per level, concurrency {1, 2, 4, 8}, the same 3.64 s real-speech source and
+  target per request (`--reference repo_voice_a`), embedding cache on.
+* **Verdict:** `batching:1-vs-4` on `scripts/audio_regression.py` (below) is the
+  correctness gate; this block is throughput.
+
+### Before / after
+
+| Concurrency | pre (loop) req/s | post (batched) req/s | Speed-up | pre p50 (ms) | post p50 (ms) |
+|---|---|---|---|---|---|
+| 1 | 2.64 | 2.59 | 0.98× | 376.7 | 385.1 |
+| 2 | 2.75 | 2.65 | 0.96× | 724.4 | 746.8 |
+| 4 | 2.71 | **3.58** | **1.32×** | 1450.5 | 1096.4 |
+| 8 | 2.56 | **4.03** | **1.57×** | 3010.4 | 1963.1 |
+
+The batched path is live (the engine log carries **zero** fallback warnings
+during the run) and the win grows with concurrency: at c=8 the loop's p50 is
+3.0 s while the batched step's is 2.0 s, and throughput rises from 2.56 to
+4.03 req/s (1.57×). The c=1/2 rows are flat within noise, as expected — a single
+request is the fast path on both sides. The win is bounded below the ideal
+because each request still pays a serial per-row `librosa` decode (deliberately
+kept; see the task's decode-hygiene fence), the per-request Perth watermark and
+WAV encode, and the vocode's length-similar sub-batch grouping.
+
+### Peak VRAM during the c=8 flood
+
+| Metric | Value |
+|---|---|
+| `hse_vram_device_used_bytes` peak (c=8, batched) | **3,091,791,872 B (2948.6 MiB)** — constant through the flood; the activations stay inside the torch reservation |
+| torch allocated, idle → peak | 1,125,776,384 B (1073.6 MiB) → **1,496,352,256 B (1427.0 MiB)** |
+| **VC activation peak (8 same-length rows)** | **370,586,112 B (353.4 MiB)** |
+| torch reserved (constant) | 1,847,590,912 B (1762.0 MiB) |
+| `nvidia-smi` GPU 1 peak | 1924 MiB (Windows WDDM reports less than `mem_get_info`; see the 10-3 caveat) |
+| Model weights (`chatterbox_vc`) | 1,056,173,100 B (1007.2 MiB), shared with `chatterbox-base` |
+| S3Gen/VE shared backbone | 1007.2 MiB + 5.4 MiB |
+
+Measured with `out/bench/sample_vram.py` (0.25 s `/metrics` + `nvidia-smi`
+sampling) during a 64-request c=8 run (3.91 req/s, p50 2048 ms, 0 failures); see
+[vram-profiles.md](vram-profiles.md#phase-11-1--chatterbox-vc-peak) for the row.
+
+### Padded-batch equivalence gate — the VC hop (2026-11-08)
+
+`scripts/audio_regression.py --families chatterbox --axis batching:1-vs-4 --gpu`
+runs the four TTS AR cases **and** four VC cases (`kind: vc`, mixed-length real
+and synthetic sources against two shared targets) through the shipped build.
+Result: **overall PASS**, all 8 cases, `0.0 %` duration/RMS delta, log-mel MSE
+≤ 1.48e-4, LTAS RMSE ≤ 0.0008 dB, correlation 1.0, **zero fallback warnings**
+(the batched path really ran):
+
+| VC case | Source → target | log-mel MSE | duration Δ | RMS Δ |
+|---|---|---|---|---|
+| `vc_batch_a` | 3.6 s real → 4.4 s real | 9e-6 | 0.0 % | 0.0 % |
+| `vc_batch_b` | 4.4 s real → 3.6 s real | 1.3e-5 | 0.0 % | 0.0 % |
+| `vc_batch_c` | 8 s synthetic → real | 6.9e-5 | 0.0 % | 0.0 % |
+| `vc_batch_d` | 8 s synthetic → other real | 1.48e-4 | 0.0 % | 0.0 % |
+
+The gate is distributional (`BATCHING_AXIS_STOCHASTIC`); the exact seeded
+equality (tokens bit-identical; audio ≤ 1e-6) is pinned by
+`tests/unit/inference_flow/test_chatterbox_vc_batch.py` and
+`tests/integration/test_chatterbox_vc_batching.py`. Note the first host run of
+this gate was **loop-vs-loop**: the 9-5 `prompt_feat == 2 × prompt_token_len`
+validation rejected the real `embed_ref` shape (181 frames / 90 tokens), so
+every VC row fell back. That is fixed (the prompt now only has to leave a
+generated span) and the run above exercises the real batched path.
+
+### Reproduce
+
+```bash
+# terminal 1 — pre (loop)
+CUDA_VISIBLE_DEVICES=1 python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path out/bench/config-vc-pre.yml --port 2243
+# terminal 2
+python scripts/bench_throughput.py --families chatterbox_vc \
+    --concurrency 1,2,4,8 --requests 16 --label vc-pre \
+    --base-url http://127.0.0.1:2243 --json-out out/bench/vc-pre.json
+
+# repeat with out/bench/config-vc-post.yml and --label vc-post
+
+# correctness gate (both families, one step vs four)
+python scripts/audio_regression.py --families chatterbox \
+    --axis batching:1-vs-4 --gpu --json-out out/bench/gate-11-vc.json
+```

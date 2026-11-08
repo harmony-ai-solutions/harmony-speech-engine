@@ -256,14 +256,15 @@ AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
 EXECUTION_MODEL_CLASSES: dict[str, str] = {
     **dict.fromkeys(BATCHED_INFERENCE_FAMILIES, "padded_batch"),
     # Per-request loops. hs1-synthesizer is a measured padding skip (8-4);
-    # Chatterbox embedding/VC/multilingual stay loops (9-3's documented skip).
+    # Chatterbox multilingual stays a loop (9-3's documented skip). VC is a
+    # `padded_batch` member since Phase 11-1 (batched source tokenize + S3Gen
+    # vocode), so it is derived from the handler's own set above.
     "HarmonySpeechSynthesizer": "loop",
     "ChatterboxMultilingualTTS": "loop",
     # Phase 11-0: the embedder executes serially (one `prepare_conditionals` at
     # a time) but is admitted at depth 4 so the clone pipeline can hand four
     # requests to the TTS AR step in one engine step.
     "ChatterboxEmbedding": "loop_admission",
-    "ChatterboxVC": "loop",
     # Token-level AR decode on the shared KV pool (Phase 9-3/9-6). The number is
     # an admission depth; the pool's slot count is a separate capacity signal.
     "ChatterboxTTS": "ar_decode",

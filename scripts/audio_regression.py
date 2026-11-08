@@ -117,6 +117,9 @@ BATCHING_CORR_MIN = 0.999
 BATCHING_AXIS_ENABLED = frozenset(
     {"openvoice_v1", "openvoice_v2", "melotts", "harmonyspeech", "voicefixer", "chatterbox", "chatterbox_turbo"}
 )
+#: Phase 11-1 extends the `chatterbox` gate with VC cases (`kind: vc` on
+#: `chatterbox_vc`): the allow-list is family-keyed and VC is a model inside the
+#: `chatterbox` family, so no new name is needed.
 
 #: AR-decode families whose ``batching:1-vs-N`` gate is **distributional**, not
 #: sample-wise: the sequential loop samples vocode noise from the global RNG while
@@ -295,6 +298,44 @@ FAMILY_SPECS: dict[str, dict] = {
                 "model": "chatterbox",
                 "text": "batch_4",
                 "label": "shortest text",
+            },
+            # Phase 11-1: the VC hop (one batched source-tokenize pass + the
+            # 9-5 padded S3Gen vocode) rides this same family entry — the
+            # allow-list is family-keyed and `chatterbox_vc` is a model inside
+            # `chatterbox`. Four mixed-length sources (3.6 s / 4.4 s real speech,
+            # two 8 s synthetic) against two shared targets, so the batched step
+            # also composes with the target-voice cache.
+            {
+                "name": "vc_batch_a",
+                "kind": "vc",
+                "model": "chatterbox_vc",
+                "reference": "repo_voice_a",
+                "target": "repo_voice_b",
+                "label": "3.6 s real speech -> 4.4 s real target",
+            },
+            {
+                "name": "vc_batch_b",
+                "kind": "vc",
+                "model": "chatterbox_vc",
+                "reference": "repo_voice_b",
+                "target": "repo_voice_a",
+                "label": "4.4 s real speech -> 3.6 s real target",
+            },
+            {
+                "name": "vc_batch_c",
+                "kind": "vc",
+                "model": "chatterbox_vc",
+                "reference": "voice_a",
+                "target": "repo_voice_b",
+                "label": "8 s synthetic source -> real target",
+            },
+            {
+                "name": "vc_batch_d",
+                "kind": "vc",
+                "model": "chatterbox_vc",
+                "reference": "voice_b",
+                "target": "repo_voice_a",
+                "label": "8 s synthetic source -> other real target",
             },
         ],
         # AR decode spans one engine step per token; the generic 20-step cap in
@@ -1001,10 +1042,15 @@ def _build_batching_request_input(case: dict, request_id: str, text_table: dict,
         )
         return TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
     if kind == "vc":
+        # Phase 11-1: a seed makes the vocode noise identical on both sides
+        # (the batched path draws it from a per-row generator seeded from the
+        # request; the loop seeds the global RNG the same way).
+        options = GenerationOptions(seed=0) if deterministic else None
         request = VoiceConversionRequest(
             model=case["model"],
             source_audio=reference_wav_b64(case["reference"]),
             target_audio=reference_wav_b64(case["target"]),
+            generation_options=options,
         )
         return VoiceConversionRequestInput.from_openai(request_id=request_id, request=request)
     if kind == "restore":

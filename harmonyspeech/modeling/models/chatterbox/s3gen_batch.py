@@ -62,6 +62,8 @@ __all__ = [
     "S3GenRow",
     "inference_batched",
     "supports_batched_s3gen",
+    "supports_batched_tokenizer",
+    "tokenize_batched",
 ]
 
 _PI = 3.141592653589793
@@ -71,6 +73,10 @@ _PI = 3.141592653589793
 #: poisoning them. Kept module-level so the test can override them.
 PAD_TOKEN_ID = 0
 PAD_VALUE = 0.0
+#: Padding value for the padded mel batch fed to the source tokenizer. The
+#: tokenizer's encoder masks every padded frame before its first conv, so the
+#: value is never read; the poison gate proves it.
+PAD_MEL_VALUE = 0.0
 
 
 class S3GenBatchError(RuntimeError):
@@ -117,6 +123,13 @@ def supports_batched_s3gen(s3gen) -> bool:
     if bool(getattr(s3gen, "meanflow", False)):
         return False
     return hasattr(s3gen, "flow") and hasattr(s3gen, "mel2wav")
+
+
+def supports_batched_tokenizer(tokenizer) -> bool:
+    """True when this source tokenizer exposes the audited mel + quantize split."""
+    return tokenizer is not None and hasattr(tokenizer, "log_mel_spectrogram") and hasattr(
+        tokenizer, "quantize"
+    )
 
 
 def _flow_device(flow) -> torch.device:
@@ -204,7 +217,7 @@ def _flow_batched(
     prompt_lens: list[int] = []
     prompt_feats: list[Tensor] = []
     embeddings: list[Tensor] = []
-    for row in rows:
+    for index, row in enumerate(rows):
         ref = row.ref_dict or {}
         prompt_token = _to_flow(ref["prompt_token"], device, dtype).reshape(-1).long()
         prompt_token_len = ref.get("prompt_token_len")
@@ -223,11 +236,20 @@ def _flow_batched(
             prompt_feat = prompt_feat[0]
         if prompt_feat.dim() != 2 or prompt_feat.size(-1) != 80:
             raise S3GenBatchError(f"prompt_feat must be [frames, 80], got {tuple(prompt_feat.shape)}")
-        # Upstream assumes mel_len = 2 · token_len for the prompt; a mismatch
-        # means the reference was not embedded the way the flow expects.
-        if prompt_feat.size(0) != 2 * p_len:
+        # Upstream ``CausalMaskedDiffWithXvec.inference`` takes the prompt mel
+        # length from ``prompt_feat.shape[1]`` itself (not from the token count)
+        # and derives the generated span as ``h.shape[1] - mel_len1``. The prompt
+        # is therefore only required to leave at least one generated frame in the
+        # row's combined encoded length (2 frames per token). It is **not**
+        # exactly ``2 * prompt_token_len``: upstream ``S3Gen.embed_ref`` trims the
+        # tokens to ``mel_frames // 2`` and logs a warning, so a real reference
+        # measures e.g. 181 frames for 90 tokens. The old strict 2× check made
+        # every real VC target fall back to the loop (Phase 11-1 finding).
+        combined_frames = 2 * (p_len + token_lens[index])
+        if prompt_feat.size(0) >= combined_frames:
             raise S3GenBatchError(
-                f"prompt_feat has {prompt_feat.size(0)} frames for {p_len} prompt tokens (expected 2×)"
+                f"prompt_feat has {prompt_feat.size(0)} frames; the row's "
+                f"{combined_frames} encoded frames leave no generated span"
             )
         prompt_tokens.append(prompt_token[:p_len])
         prompt_lens.append(p_len)
@@ -445,6 +467,81 @@ def _hift_batched(mel2wav, mels: list[Tensor], generators) -> list[Tensor]:
         piece = torch.clamp(piece[0, : sample_lens[row]], -mel2wav.audio_limit, mel2wav.audio_limit)
         waveforms.append(piece)
     return waveforms
+
+
+# ---------------------------------------------------------------------------
+# Source tokenizer: per-row mel (STFT is padding-hostile) + one quantize
+# ---------------------------------------------------------------------------
+def _as_clip(clip, index: int) -> Tensor:
+    """Normalise one source clip to a 1-D float tensor (no device move yet)."""
+    tensor = clip if torch.is_tensor(clip) else torch.as_tensor(clip)
+    if tensor.dim() == 2 and tensor.size(0) == 1:
+        tensor = tensor[0]
+    if tensor.dim() != 1:
+        raise S3GenBatchError(
+            f"source clip {index} must be 1-D, got {tuple(tensor.shape)}"
+        )
+    if not tensor.is_floating_point():
+        tensor = tensor.float()
+    return tensor
+
+
+@torch.inference_mode()
+def tokenize_batched(tokenizer, clips) -> list[Tensor]:
+    """Tokenize a batch of 16 kHz source clips in one encoder/quantizer forward.
+
+    The padding audit (``11-1-ChatterboxVCBatching.md``) measured, on a tiny
+    seeded instance of the real classes:
+
+    * **STFT / log-mel — padding-hostile.** ``torch.stft`` reflects at the
+      signal end, so a padded row's last valid mel frame reads zeros instead of
+      the row's own reflection (measured **0.21–0.51** max |Δmel| at that one
+      frame). The STFT is therefore run **per row**, exactly like upstream's own
+      per-row ``log_mel_spectrogram`` call.
+    * **``AudioEncoderV2`` + ``FSQVectorQuantization`` — safe by construction.**
+      The encoder masks each row's padding before ``conv1`` and again before
+      ``conv2``; the FSMN block zeroes padded inputs/outputs and the attention
+      masks padded keys. With the per-row mels padded on the frame axis, the
+      valid hidden states were bit-identical (0.0) and every token matched its
+      solo run (0 mismatches); poisoned mel padding (``1e3``) changes nothing.
+
+    ``clips`` is a list of 1-D float tensors (or numpy arrays) at
+    ``S3_SR`` (16 kHz). Returns one 1-D long token tensor per clip, sliced with
+    the tokenizer's **own** per-row token length (never a padded-shape
+    assumption). With one clip this is bit-identical to upstream
+    ``tokenizer(clip[None])`` — the sequential fast path.
+
+    Raises :class:`S3GenBatchError` before any forward when the tokenizer lacks
+    the audited split, so the caller can fall back to the per-row call.
+    """
+    if not clips:
+        return []
+    if not supports_batched_tokenizer(tokenizer):
+        raise S3GenBatchError("source tokenizer has no audited mel/quantize split")
+
+    device = tokenizer.device
+    mels: list[Tensor] = []
+    for index, clip in enumerate(clips):
+        waveform = _as_clip(clip, index)
+        mel = tokenizer.log_mel_spectrogram(waveform[None, :].to(device))
+        mels.append(mel.squeeze(0))
+
+    channels = int(mels[0].size(0))
+    frame_lens = [int(mel.size(-1)) for mel in mels]
+    width = max(frame_lens)
+    padded = torch.full(
+        (len(mels), channels, width), PAD_MEL_VALUE, device=device, dtype=mels[0].dtype
+    )
+    for row, mel in enumerate(mels):
+        if int(mel.size(0)) != channels:
+            raise S3GenBatchError(
+                f"source clip {row} produced {mel.size(0)} mel bins, expected {channels}"
+            )
+        padded[row, :, : frame_lens[row]] = mel.to(device)
+
+    mel_lens = torch.tensor(frame_lens, dtype=torch.long, device=device)
+    tokens, token_lens = tokenizer.quantize(padded, mel_lens)
+    return [tokens[row, : int(token_lens[row])].clone() for row in range(len(mels))]
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ What is pinned:
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from chatterbox.models.s3gen.configs import CFM_PARAMS
@@ -30,12 +31,16 @@ from chatterbox.models.s3gen.flow_matching import CausalConditionalCFM
 from chatterbox.models.s3gen.hifigan import HiFTGenerator
 from chatterbox.models.s3gen.s3gen import S3Token2Wav
 from chatterbox.models.s3gen.transformer.upsample_encoder import UpsampleConformerEncoder
+from chatterbox.models.s3tokenizer import S3_SR, S3Tokenizer
+from s3tokenizer.model_v2 import ModelConfig, S3TokenizerV2
 
 from harmonyspeech.modeling.models.chatterbox.s3gen_batch import (
     S3GenBatchError,
     S3GenRow,
     inference_batched,
     supports_batched_s3gen,
+    supports_batched_tokenizer,
+    tokenize_batched,
 )
 
 _S3GEN_SR = 24000
@@ -258,14 +263,162 @@ def test_graph_without_mel2wav_is_refused():
     assert supports_batched_s3gen(s3gen) is False
 
 
-def test_inconsistent_prompt_length_is_refused_before_any_forward():
+def test_prompt_feat_one_frame_longer_than_2x_tokens_is_accepted():
+    """Real ``embed_ref`` shape: a prompt mel can be ``2·tokens + 1`` frames.
+
+    Upstream trims the reference tokens to ``mel_frames // 2`` and warns, so the
+    real VC target measured 181 frames for 90 tokens. The batched hop must accept
+    it (the strict 2× check made every real VC target fall back to the loop).
+    """
     s3gen = tiny_s3gen()
     generator = torch.Generator().manual_seed(7)
     row = make_row(torch.randint(0, 100, (4,), generator=generator), 3, 1, generator)
-    row.ref_dict["prompt_feat"] = row.ref_dict["prompt_feat"][:, :4]  # not 2 × 3
+    row.ref_dict["prompt_feat"] = torch.randn(1, 2 * 3 + 1, 80, generator=generator)
+    produced = inference_batched(s3gen, [row])[0]
+    torch.manual_seed(row.seed)
+    upstream, _ = s3gen.inference(
+        speech_tokens=row.tokens.view(1, -1), ref_dict=dict(row.ref_dict)
+    )
+    assert produced.shape == upstream[0].shape
+    assert torch.equal(produced, upstream[0])
+
+
+def test_prompt_longer_than_the_encoded_row_is_refused_before_any_forward():
+    s3gen = tiny_s3gen()
+    generator = torch.Generator().manual_seed(7)
+    row = make_row(torch.randint(0, 100, (4,), generator=generator), 3, 1, generator)
+    # 3 prompt + 4 speech tokens = 7 tokens -> 14 encoded frames; a 14-frame
+    # prompt leaves no generated span.
+    row.ref_dict["prompt_feat"] = torch.randn(1, 2 * (3 + 4), 80, generator=generator)
     try:
         inference_batched(s3gen, [row])
     except S3GenBatchError:
         pass
     else:  # pragma: no cover
-        raise AssertionError("a mismatched prompt length must be refused")
+        raise AssertionError("a prompt that leaves no generated span must be refused")
+
+
+# ---------------------------------------------------------------------------
+# Source tokenizer padding audit (Phase 11-1)
+# ---------------------------------------------------------------------------
+class TinyS3Tokenizer(S3Tokenizer):
+    """A real ``S3Tokenizer`` with small geometry (rotary dim ⇒ state/head = 64)."""
+
+    def __init__(self, config: ModelConfig):
+        # Mirror S3Tokenizer.__init__ but pass the config through (upstream drops
+        # it for the encoder geometry).
+        S3TokenizerV2.__init__(self, "speech_tokenizer_v2_25hz", config)
+        self.n_fft = 400
+        import librosa
+
+        mel_filters = librosa.filters.mel(sr=S3_SR, n_fft=self.n_fft, n_mels=config.n_mels)
+        self.register_buffer("_mel_filters", torch.FloatTensor(mel_filters))
+        self.register_buffer("window", torch.hann_window(self.n_fft))
+
+
+def tiny_tokenizer(seed: int = 20261108) -> TinyS3Tokenizer:
+    torch.manual_seed(seed)
+    config = ModelConfig(n_mels=128, n_audio_state=128, n_audio_head=2, n_audio_layer=2)
+    model = TinyS3Tokenizer(config).eval()
+    model.requires_grad_(False)
+    return model
+
+
+def _clip(samples: int, seed: int) -> torch.Tensor:
+    """Speech-like 16 kHz clip: harmonics plus a seeded noise floor."""
+    generator = torch.Generator().manual_seed(seed)
+    t = torch.arange(samples, dtype=torch.float32)
+    signal = 0.3 * torch.sin(2 * torch.pi * 220.0 * t / S3_SR)
+    signal += 0.15 * torch.sin(2 * torch.pi * 440.0 * t / S3_SR)
+    signal += 0.05 * torch.randn(samples, generator=generator)
+    return signal
+
+
+def _solo_tokens(tokenizer, clip: torch.Tensor) -> torch.Tensor:
+    with torch.no_grad():
+        tokens, _ = tokenizer(clip[None, :])
+    return tokens[0]
+
+
+def test_tokenize_batched_b1_is_bit_identical_to_upstream():
+    tokenizer = tiny_tokenizer()
+    for samples, seed in ((16000, 1), (32000, 2), (9600, 3)):
+        clip = _clip(samples, seed)
+        upstream = _solo_tokens(tokenizer, clip)
+        produced = tokenize_batched(tokenizer, [clip])[0]
+        assert torch.equal(produced, upstream), (samples, seed)
+
+
+def test_tokenize_batched_mixed_lengths_match_their_solo_runs():
+    tokenizer = tiny_tokenizer()
+    specs = ((16000, 1), (32000, 2), (9600, 3))
+    clips = [_clip(samples, seed) for samples, seed in specs]
+    batched = tokenize_batched(tokenizer, clips)
+    assert [token.numel() for token in batched] == [25, 50, 15]
+    for clip, produced in zip(clips, batched, strict=True):
+        assert torch.equal(produced, _solo_tokens(tokenizer, clip))
+
+
+def test_tokenize_batched_long_audio_mixed_path_matches_solo():
+    """A >30 s row and a short row share one quantize (the mixed path)."""
+    tokenizer = tiny_tokenizer()
+    clips = [_clip(16000, 1), _clip(S3_SR * 31, 7)]
+    batched = tokenize_batched(tokenizer, clips)
+    assert batched[1].numel() == 775
+    for clip, produced in zip(clips, batched, strict=True):
+        assert torch.equal(produced, _solo_tokens(tokenizer, clip))
+
+
+def test_poisoned_mel_padding_never_reaches_the_tokens(monkeypatch):
+    import harmonyspeech.modeling.models.chatterbox.s3gen_batch as module
+
+    tokenizer = tiny_tokenizer()
+    clips = [_clip(16000, 1), _clip(32000, 2), _clip(9600, 3)]
+    clean = tokenize_batched(tokenizer, clips)
+    monkeypatch.setattr(module, "PAD_MEL_VALUE", 1e3)
+    dirty = tokenize_batched(tokenizer, clips)
+    for left, right in zip(clean, dirty, strict=True):
+        assert torch.equal(left, right)
+
+
+def test_batched_stft_leaks_at_the_row_boundary_so_the_stft_is_per_row():
+    """The audit's 0.21+ mel leak: a padded batch's last valid frame drifts.
+
+    This is why ``tokenize_batched`` runs the STFT per row and only batches the
+    encoder/quantizer.
+    """
+    tokenizer = tiny_tokenizer()
+    clips = [_clip(16000, 1), _clip(32000, 2)]
+    solo_mels = []
+    with torch.no_grad():
+        for clip in clips:
+            solo_mels.append(tokenizer.log_mel_spectrogram(clip[None, :]).squeeze(0))
+
+    width = max(int(clip.numel()) for clip in clips)
+    padded = torch.zeros(len(clips), width)
+    for row, clip in enumerate(clips):
+        padded[row, : clip.numel()] = clip
+    with torch.no_grad():
+        stft = torch.stft(
+            padded, tokenizer.n_fft, 160, window=tokenizer.window, return_complex=True
+        )
+        magnitudes = stft[..., :-1].abs() ** 2
+        mel_spec = tokenizer._mel_filters @ magnitudes
+        log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+        log_spec = torch.maximum(log_spec, log_spec.max(dim=-1, keepdim=True).values - 8.0)
+        log_spec = (log_spec + 4.0) / 4.0
+
+    valid = 16000 // 160
+    leak = (log_spec[0, :, :valid] - solo_mels[0][:, :valid]).abs().max().item()
+    assert leak > 0.1  # measured 0.2133 on this instance; the long row is exact
+
+
+def test_supports_batched_tokenizer_rejects_a_plain_callable():
+    assert supports_batched_tokenizer(None) is False
+    assert supports_batched_tokenizer(lambda audio: None) is False
+    assert supports_batched_tokenizer(tiny_tokenizer()) is True
+
+
+def test_tokenizer_without_the_audited_split_is_refused():
+    with pytest.raises(S3GenBatchError):
+        tokenize_batched(lambda audio: None, [_clip(1600, 1)])

@@ -18,6 +18,38 @@ Make a multi-request VC step execute with **zero serial model forwards**: batche
 - **Multilingual is NOT this phase** (owner direction 2026-11-08: VC only; the multilingual `AlignmentStreamAnalyzer` decomposition audit is deferred until volume justifies it).
 - Seeding: TTS requests carry seeds into per-row generators; VC requests may carry a seed — where present it must seed the row's vocode noise (`S3GenRow(seed=…)`, currently `None` at `:3046`) so batched-vs-sequential equality is well-defined for the gate.
 
+## Audit (recorded 2026-11-08)
+
+Verify-first padding audit of the installed `chatterbox.models.s3tokenizer.S3Tokenizer`
+(`s3tokenizer==0.1.x`, `S3TokenizerV2` + `FSQVectorQuantization`), run on a tiny
+seeded instance of the **real upstream classes** (small geometry: 128 state,
+2 heads, 2 layers, 128 mels; 503,816 params; random weights — the 9-1/9-5
+precedent, no checkpoint download). Probe: `out/bench/vc_tokenizer_audit.py`
+(untracked).
+
+| Stage | Padding verdict | Measured leak |
+|---|---|---|
+| `torch.stft` / `log_mel_spectrogram` | **not bit-safe** — `torch.stft` reflects at the row's own end, so a padded row's last valid mel frame reads zeros instead of its reflection. Run the STFT **per row**. | max \|Δmel\| **0.2133** (16,000-sample row) / **0.1682** (9,600-sample row) at the last valid frame; the longest row is exact; a 12-seed sweep worst **0.5111** |
+| `AudioEncoderV2` (conv1/conv2 + FSMN conformer) | **safe by construction** — masks padding before `conv1` and `conv2`, zeroes padded FSMN inputs/outputs and masks padded attention keys | hidden-state delta **0.0** at every valid position |
+| `FSQVectorQuantization` | **safe** — per-position `Linear`; padded positions are sliced off with the tokenizer's own token length | **0/36** rows with a token flip over 12 seeds; mixed-length tokens identical (0/3) |
+| Long-audio path (`mel_len > 3000`, >30 s) | **safe** — same padded encoder with true segment lengths | 775-token >30 s row identical to solo |
+| Poisoned mel padding (`1e3`) | never read | bit-identical tokens |
+
+The tokenizer returns `(tokens, token_lens)`; the second value is the per-row
+**token length** (`int64 [B]`), not a hidden state, and it is what
+`tokenize_batched` slices with. `B=1` through `tokenize_batched` is
+**bit-identical** to upstream `tokenizer(clip[None])`.
+
+**Critical finding during the host gate (fixed 2026-11-08).** The 9-5 validation
+in `_flow_batched` required `prompt_feat.frames == 2 × prompt_token_len`. The
+real VC `ref_dict` (from upstream `S3Gen.embed_ref`) is **not** exact: it trims
+the reference tokens to `mel_frames // 2` and logs a warning, so the real target
+measured **181 frames for 90 tokens**. The strict check therefore made every
+real VC target silently fall back to the loop — the first host `batching:1-vs-4`
+run was loop-vs-loop. The check now enforces the actual upstream constraint
+(the prompt must leave at least one generated frame in the row's
+`2 × (prompt + speech)` encoded span), pinned by a unit gate.
+
 ## Implementation steps
 
 1. **Verify-first audit** of `s3gen.tokenizer` on a tiny seeded instance (no checkpoint download; small-geometry real classes, the 9-1/9-5 test precedent): mixed-length rows vs solo runs, stage-by-stage padding verdicts with measured leak numbers, recorded in this file + the `docs/batching.md` audit table. The tokenizer returns `(tokens, extra)` — confirm what `extra` is per-row and whether any stage needs `run_masked` (expect: mask after embed / around any causal stage, like the sibling encoder).
@@ -44,13 +76,52 @@ Make a multi-request VC step execute with **zero serial model forwards**: batche
 
 - Unit: tokenizer audit gates (B=1 bit-identity, mixed-length within measured bounds, poisoned padding); `tokenize_batched` unpad correctness; seeded-row audio equality.
 - Handler/integration: loop-vs-batch equality; poisoned row alone; cache-miss inside a batched step; 4-request engine run pairing; fallback on tokenizer failure.
-- Full `tests/unit` + `tests/integration` green; host gate + benchmark cells `_tbd_` until the benchmark session.
+- Full `tests/unit` (1132) + `tests/integration` (84, +2 opt-in skips) + `tests/e2e/wire_contract` (50, +3 model-gated skips) green.
+- Host gate run 2026-11-08: `audio_regression.py --families chatterbox --axis batching:1-vs-4 --gpu` → **PASS**, all 8 cases (4 VC), zero fallbacks; VC throughput c=8 **2.56 → 4.03 req/s (1.57×)**, c=4 1.32×; VC peak **+353.4 MiB** activation for 8 rows. Cells filled in `docs/benchmarks/{throughput,vram-profiles}.md`.
 
 ## Checklist
 
-- [ ] Tokenizer padding audit recorded here + `docs/batching.md` (leak numbers)
-- [ ] `tokenize_batched` landed; B=1 bit-identity + mixed-length gates green
-- [ ] Handler wired (batched tokenize + seeded rows); fallbacks proven
-- [ ] Width 8 + class flip; honesty/docs-matrix tests in sync
-- [ ] Exhaustion/pairing integration test green
-- [ ] Host gate + benchmark cells landed `_tbd_`; knowledge updated; `summary.md` ticked
+- [x] Tokenizer padding audit recorded here + `docs/batching.md` (leak numbers)
+- [x] `tokenize_batched` landed; B=1 bit-identity + mixed-length gates green
+- [x] Handler wired (batched tokenize + seeded rows); fallbacks proven
+- [x] Width 8 + class flip; honesty/docs-matrix tests in sync
+- [x] Exhaustion/pairing integration test green
+- [x] Host gate + benchmark cells landed (measured); knowledge updated; `summary.md` ticked
+
+## Deviations (2026-11-08)
+
+1. **The real `ref_dict` prompt mel is not `2 × prompt_token_len`.** Upstream
+   `S3Gen.embed_ref` trims the reference tokens to `mel_frames // 2` and logs a
+   warning, so a real target measured **181 frames / 90 tokens**. The 9-5 strict
+   equality check therefore made every real VC row fall back to the loop; the
+   first host `batching:1-vs-4` run was loop-vs-loop. Relaxed to the actual
+   upstream constraint (the prompt must leave at least one generated frame in
+   the row's `2 × (prompt + speech)` encoded span); a unit gate pins both the
+   accepted `2n+1` shape and the refusal of a prompt that leaves no span.
+2. **The VC batching gate rides the existing `chatterbox` family entry.**
+   `scripts/audio_regression.py`'s allow-list is family-keyed and
+   `chatterbox_vc` is a model *inside* the `chatterbox` family, so four
+   `kind: vc` cases were added to that family's `batching_cases` rather than a
+   new allow-list name. The VC cases pass `GenerationOptions(seed=0)` in the
+   deterministic gate mode, so the vocode noise is identical on both sides.
+3. **Throughput scenario is the generic runner, not a new `--scenario`.**
+   A `chatterbox_vc` family was added to `scripts/bench_throughput.py`
+   (`/v1/voice/convert`), and the pre/post recipe uses two one-model configs in
+   `out/bench/` (`config-vc-pre.yml` / `config-vc-post.yml`). No dedicated
+   `--scenario` was added; the generic concurrency sweep is the measurement.
+4. **Decode hygiene stays out of scope as specified.** `_chatterbox_vc_clip`
+   keeps the per-row `librosa` decode; only the mel/quantizer forward is batched
+   (the STFT is padding-hostile, so it stays per row inside `tokenize_batched`).
+5. **`tokenize_batched` computes the mel per row.** The audit measured a
+   0.21–0.51 mel leak at a padded row's last valid STFT frame; the batched entry
+   point therefore does the per-row STFT (bit-identical to upstream) and batches
+   only the encoder/quantizer. This is the spec's "padded source-clip batch"
+   realized on the frame axis.
+6. **The VC peak row uses the torch-scoped activation delta.** On this Windows
+   WDDM host `mem_get_info`-derived `device_used` sits above `nvidia-smi` and
+   does not move during the flood (the activations fit inside the torch
+   reservation); the honest VC peak is the allocated delta (**+353.4 MiB for
+   eight same-length rows**), with the device figure reported alongside.
+7. **No commits/pushes** (task constraint). The benchmark probe scripts
+   (`out/bench/vc_tokenizer_audit.py`, `sample_vram.py`, configs, logs) are
+   untracked measurement scaffolding.

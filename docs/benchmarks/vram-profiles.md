@@ -298,6 +298,33 @@ The hermetic proof (mocked `torch.cuda.mem_get_info`, real scheduler and
 falling 6 → 2 → 1 (0 with the hard stop) and a flood completing under the
 draining floor.
 
+## Phase 11-1 — Chatterbox VC peak
+
+The VC role adds no weights of its own on a grouped deployment (it shares
+`chatterbox-base`'s S3Gen/VE). Its batched step's activation peak was measured
+during a 64-request c=8 flood (`out/bench/config-vc-post.yml`, `float16` request
+→ S3Gen float32):
+
+| Metric | Value |
+|---|---|
+| Model weights (`chatterbox_vc`) | **1,056,173,100 B (1007.2 MiB)** — shared with `chatterbox-base` |
+| `hse_model_vram_bytes{chatterbox_vc}` | 1,095,905,792 B (1045.1 MiB) |
+| torch allocated, idle → peak | 1,125,776,384 B (1073.6 MiB) → **1,496,352,256 B (1427.0 MiB)** |
+| **VC activation peak (8 same-length rows)** | **370,586,112 B (353.4 MiB)** |
+| torch reserved (constant) | 1,847,590,912 B (1762.0 MiB) |
+| `hse_vram_device_used_bytes` peak | **3,091,791,872 B (2948.6 MiB)** |
+| `nvidia-smi` GPU 1 peak | 1924 MiB |
+| `hse_model_peak_activation_bytes{chatterbox_vc}` | 0 (no startup max-shape probe for VC) |
+
+The `mem_get_info`-derived device figure (2948.6 MiB) is the Phase 10-3
+device-level truth used everywhere else on this host; `nvidia-smi` reports
+lower under Windows WDDM, and the gap is the already-documented non-torch /
+reservation accounting difference. The flood's activations stay inside the
+torch reservation, so `device_used` does not move from its idle value — the
+torch-scoped allocated delta (**+353.4 MiB for eight rows**) is the honest
+activation figure. Measured with `out/bench/sample_vram.py`; the throughput
+curve is in [throughput.md](throughput.md#phase-11-1--chatterbox-vc-batching).
+
 ## Reproducing
 
 ```bash

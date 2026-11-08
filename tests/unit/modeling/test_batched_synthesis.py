@@ -437,6 +437,8 @@ def _config(model_type: str, **kwargs) -> ModelConfig:
         "HarmonySpeechVocoder",
         "VoiceFixerRestorer",
         "VoiceFixerVocoder",
+        # Phase 11-1: VC — batched source tokenize + S3Gen vocode
+        "ChatterboxVC",
     ],
 )
 def test_batched_inference_defaults_on_for_the_batched_families(model_type):
@@ -454,7 +456,6 @@ def test_batched_inference_defaults_on_for_the_batched_families(model_type):
         # padded batch on evidence (8-4 audit), the rest run per-item by design.
         "HarmonySpeechSynthesizer",
         "ChatterboxTTS",
-        "ChatterboxVC",
         "FasterWhisper",
         "SileroVAD",
         "KittenTTSSynthesizer",

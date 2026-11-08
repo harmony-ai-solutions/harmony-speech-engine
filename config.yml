@@ -317,7 +317,8 @@ model_configs:
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxVC"
     watermark: true
-    max_batch_size: 1
+    max_batch_size: 8        # padded batch: source tokenize + S3Gen vocode (Phase 11-1)
+    batched_inference: true
     dtype: "float32"
     device_config:
       device: "cpu"

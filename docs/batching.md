@@ -23,8 +23,8 @@ that class's semantics (owner decision 2026-11-07; the authoritative table is in
 
 | Class | Execution semantics | `max_batch_size` means | Additional knobs | Members (post-11-0) |
 |---|---|---|---|---|
-| `padded_batch` | one padded forward per length-similar sub-batch | sub-batch width | `batched_inference`, `batch_token_budget` | OpenVoice V1/V2 synthesizers and tone converters, their encoders, HarmonySpeech encoder/vocoder, VoiceFixer restorer/vocoder |
-| `loop` | per-request sequential | must be 1 | — | HarmonySpeech synthesizer, Chatterbox multilingual/VC (multilingual is the documented AR skip) |
+| `padded_batch` | one padded forward per length-similar sub-batch | sub-batch width | `batched_inference`, `batch_token_budget` | OpenVoice V1/V2 synthesizers and tone converters, their encoders, HarmonySpeech encoder/vocoder, VoiceFixer restorer/vocoder, Chatterbox VC (source tokenize + S3Gen vocode, Phase 11-1) |
+| `loop` | per-request sequential | must be 1 | — | HarmonySpeech synthesizer, Chatterbox multilingual (the documented AR skip) |
 | `loop_admission` | per-request sequential (serial) but several requests per engine step | admission depth | — | Chatterbox embedding (4; Phase 11-0 dated decision 2026-11-08) |
 | `queue_depth` | admission/backpressure only | queue depth | — | Silero VAD (16) |
 | `lanes_windows` | M parallel lanes × cross-request window batches | admission/lane depth | `num_workers`, `whisper_window_batch_size` | Faster-Whisper (M workers, B=8 windows shipped on); KittenTTS (lanes only, 4) |
@@ -72,7 +72,7 @@ against the same policy (the six execution-model classes above).
 | `ChatterboxTurboTTS` | `chatterbox_turbo` | `4` | **AR decode** — token-level T3 decode on the shared KV pool (one row, Turbo sampler); finished rows vocode per row (meanflow hop skip); the per-request loop is the fallback | one speech token per row per engine step | sequential loop (`len == 1`, `batched_inference: false`, pool refusal, per-row error) | Phase 9-6: `4` is the initial admission depth (4 Turbo rows × 72 MiB); Turbo AR decode is committed scope, the meanflow vocode hop is the documented Phase 9-5 skip; pending the host gate |
 | `ChatterboxMultilingualTTS` | `chatterbox_multilingual` | `1` | **loop** — no batch path | — (autoregressive token loop) | the loop is the only path | Same product decision |
 | `ChatterboxEmbedding` | `chatterbox_embedding` | `4` | **loop with admission depth** — one `prepare_conditionals` at a time, up to 4 requests handed to the executor per engine step | — (serial execution; the depth is admission, not a batch axis) | the loop is the only path | Phase 11-0 (dated decision 2026-11-08): the embed step executes serially, but a depth of 1 serialised the clone flood at embed admission so the TTS AR step never saw more than one request. `4` is an admission depth, not a batch width |
-| `ChatterboxVC` | `chatterbox_vc` | `1` | **loop** — no batch path at the shipped width; the vocode hop batches only when more than one request is admitted (dormant at `max_batch_size: 1`) | speech tokens | the loop is the only path | Same product decision; the Phase 9-5 batched S3Gen hop is ready for a 9-6 capacity change |
+| `ChatterboxVC` | `chatterbox_vc` | `8` | **padded batch** — one `tokenize_batched` pass over the step's 16 kHz source clips (per-row STFT, one encoder/quantizer forward) + the Phase 9-5 padded S3Gen vocode; the per-request loop is the fallback | mel frames (tokenize); speech tokens (vocode) | per-item loop (`len == 1`, `batched_inference: false`, audit-hostile/failure); a poisoned request errors alone | Phase 11-1: `8` is the initial width; the target voice comes from the Phase 7-2 cache, and the Perth watermark stays a per-request post-step (serial, measured in `docs/benchmarks/throughput.md`) |
 
 An entry that declares a value its handler cannot honour is a bug: it makes
 `/metrics`, dashboards and capacity plans lie.
@@ -499,7 +499,8 @@ neighbours (8-3 Deviation 6 discipline).
 **Multilingual is a documented skip.** `ChatterboxMultilingualTTS` stays the
 per-request loop with `max_batch_size: 1`: its `AlignmentStreamAnalyzer` keeps
 per-request attention-hook state and needs `output_attentions=True` on the
-shared Llama, both hostile to a shared batch. VC stays a loop too (non-AR);
+shared Llama, both hostile to a shared batch. VC is non-AR and moved to the
+`padded_batch` class in Phase 11-1 (batched source tokenize + S3Gen vocode);
 the embedder is the `loop_admission` member (Phase 11-0): it executes serially
 but is admitted at depth 4 so a clone flood reaches the TTS AR step as a real
 batch of requests.
@@ -537,13 +538,21 @@ zero after every stage, runs the STFT/ISTFT per row (they reflect/overlap at the
 row's own end) and trims in the sample domain. A row's audio is identical alone
 or in a batch; `B=1` with the same seed is bit-identical to upstream.
 
+One 9-5 validation was too strict for VC and was relaxed in 11-1: upstream
+`S3Gen.embed_ref` trims reference tokens to `mel_frames // 2` and warns, so a
+real target's prompt mel is **not** exactly `2 × prompt_token_len` (measured
+181 frames for 90 tokens). The flow itself takes the prompt length from
+`prompt_feat.shape[1]`, so the hop now only requires the prompt to leave at
+least one generated frame; the old strict check had made every real VC target
+fall back to the loop.
+
 Handler wiring: finished rows are grouped with `plan_batches` on the
 **speech-token** axis (`batch_token_budget` reused) and one forward runs per
 sub-batch. `len == 1`, `batched_inference: false`, an unsupported graph, or any
 batch failure falls back to the per-row upstream call (seeded, so the fallback is
 audio-identical); a poisoned row errors alone. The VC vocode step is the same
-graph, so a multi-request VC step batches it too — dormant at the shipped
-`max_batch_size: 1` (the family stays `loop`-class until 9-6).
+graph; Phase 11-1 wires it into the multi-request VC path and adds the batched
+source tokenizer (see [Chatterbox VC batching](#chatterbox-vc-batching-phase-11-1)).
 
 **Turbo (meanflow) is the documented hop skip.** Its solver is a different graph
 with two batch-1 assumptions (`flow_inference` hard-codes `torch.randn(1, 80, …)`
@@ -559,6 +568,56 @@ sequential loop rather than queueing forever. Measured on one RTX 5060 Ti,
 Chatterbox throughput was flat at ~0.6 requests/s from concurrency 1 to 8 under
 the pre-Phase-9 per-request loop (`docs/benchmarks/throughput.md`); the AR-runner
 curve is the Phase 9 benchmark block.
+
+## Chatterbox VC batching (Phase 11-1)
+
+Voice conversion is source audio → S3 speech tokens → the same S3Gen vocode the
+TTS path uses. Before 11-1 a multi-request VC step still ran the **source
+tokenizer** one forward per request (`_chatterbox_vc_tokens`), so even a wide
+admission had serial model forwards. Phase 11-1 adds the audited batched source
+tokenizer and flips the family to `padded_batch` with an initial width of `8`.
+
+The padding audit (`11-1-ChatterboxVCBatching.md`) measured, on a tiny seeded
+instance of the real upstream classes:
+
+| Stage | Padding verdict | Measured leak (unmasked) |
+|---|---|---|
+| `torch.stft` / `log_mel_spectrogram` | not bit-safe: `torch.stft` reflects at the row's own end, so a padded row's last valid mel frame reads zeros instead of its reflection → run **per row** | **0.21–0.51** max \|Δmel\| at that one frame (longest row exact) |
+| `AudioEncoderV2` (conv1/conv2 + FSMN conformer) | safe by construction: masks each row's padding before `conv1` and `conv2`, zeroes padded FSMN inputs/outputs and masks padded attention keys | **0.0** hidden-state delta at valid positions |
+| `FSQVectorQuantization` | safe: a per-position `Linear`, no cross-position mixing; padded positions are sliced off by the tokenizer's own token length | **0/36** rows with a token flip over 12 seeds |
+| Long-audio path (`mel_len > 3000`, 30 s) | safe: same padded encoder, true segment lengths; short rows are padded to the window and masked | identical (775-token >30 s row) |
+| Poisoned mel padding (`1e3`) | never read | bit-identical tokens |
+
+The tokenizer returns `(tokens, token_lens)`: the second value is the per-row
+**token length** (not a hidden state), and it is what `tokenize_batched` slices
+with — never a padded-shape assumption.
+
+The HSE-side `tokenize_batched` (`modeling/models/chatterbox/s3gen_batch.py`)
+therefore runs the STFT/log-mel **per row** (exactly upstream's own call),
+pads the mels on the frame axis, and runs **one** encoder/quantizer forward for
+the whole step. `B=1` is bit-identical to upstream `tokenizer(clip[None])`;
+mixed-length rows produce their solo token streams. The per-row `librosa`
+decode is deliberately kept (decode hygiene is fenced out of scope: `librosa`'s
+resampler differs numerically from `torchaudio`'s, so changing it must first
+prove token-level equivalence).
+
+Handler wiring (`_try_batched_chatterbox_vc`): the target voice is resolved from
+precomputed conditionals / the Phase 7-2 cache / `set_target_voice`; every
+source clip is decoded per row and tokenized in one pass; rows are vocoded in
+length-similar sub-batches through the Phase 9-5 `inference_batched` hop. The
+request seed is threaded into each `S3GenRow` (and the loop fallback seeds the
+global RNG the same way), so a seeded request's audio is identical alone or in
+a batch, and a batch failure is a performance fallback, not an audio change.
+`len == 1`, `batched_inference: false`, an audit-hostile tokenizer graph or any
+batch failure uses the per-item loop; a poisoned request errors alone.
+
+**Watermark stays serial.** Perth runs once per output audio in the handler
+(`_artifact_from_waveform`), after the batched hop; it is not part of the batch.
+**Perth verdict (owner decision 2026-11-08):** no batch audit — it is a
+per-request post-step and its measured cost is ~1.5 % of request service time
+([`benchmarks/throughput.md`](benchmarks/throughput.md#perth-watermark-cost-owner-request-2026-11-08)).
+Multilingual stays the documented AR skip; the meanflow Turbo vocode hop stays
+the Phase 9-5 documented skip.
 
 ## What concurrency to expect
 

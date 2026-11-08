@@ -2942,11 +2942,11 @@ class ModelRunnerBase:
 
         slots = self._resolve_cache_slots(cache, requests_to_batch, _lookup)
 
-        # Phase 9-5: the VC vocode step is the same audited S3Gen graph, so a
-        # multi-request step can batch it. The shipped `max_batch_size: 1` keeps
-        # this dormant (the family is `loop`-class until 9-6); an explicit
-        # `batched_inference: false` keeps the per-item loop.
-        if len(inputs) > 1 and getattr(self.model_config, "batched_inference", None) is not False:
+        # Phase 9-5 batched the VC vocode hop; Phase 11-1 adds the batched source
+        # tokenizer, so a multi-request step has zero serial model forwards. The
+        # shipped width is 8; an explicit `batched_inference: false` keeps the
+        # per-item loop.
+        if len(inputs) > 1 and batched_inference_enabled(self.model_config):
             batched = self._try_batched_chatterbox_vc(inputs, requests_to_batch, slots)
             if batched is not None:
                 return batched
@@ -2973,7 +2973,14 @@ class ModelRunnerBase:
             else:
                 raise ValueError("voice conversion requires target_audio or target_embedding")
 
-            wav = self.model.generate(audio=_wav_buffer(_bind_to_device(source_artifact, "cpu")))
+            # Phase 11-1: a seeded VC request seeds the vocode noise exactly like
+            # the batched path's per-row generator, so a batch failure is a
+            # performance fallback, not an audio change.
+            seed = self._request_seed(initial_request)
+            with self._seeded_rng(seed):
+                wav = self.model.generate(
+                    audio=_wav_buffer(_bind_to_device(source_artifact, "cpu"))
+                )
 
             return _audio_artifact_from_tensor(wav, self.model.sr)
 
@@ -2991,36 +2998,55 @@ class ModelRunnerBase:
             outputs.append(result)
         return outputs
 
-    def _chatterbox_vc_tokens(self, source_artifact):
-        """Tokenize a VC source clip exactly as upstream ``ChatterboxVC.generate``."""
+    @staticmethod
+    def _request_seed(request) -> int | None:
+        """The request's optional seed (``generation_options.seed``)."""
+        options = getattr(request.request_data, "generation_options", None)
+        if options is None:
+            return None
+        return getattr(options, "seed", None)
+
+    def _chatterbox_vc_clip(self, source_artifact):
+        """Decode a VC source clip to 16 kHz mono, exactly as upstream.
+
+        The per-row ``librosa`` decode is deliberately kept (Phase 11-1 fences
+        decode hygiene out of scope: ``librosa``'s resampler differs numerically
+        from ``torchaudio``'s, so changing it would break token-level
+        bit-identity with the sequential fallback).
+        """
         import librosa
         from chatterbox.models.s3tokenizer import S3_SR
 
-        audio_16, _ = librosa.load(_wav_buffer(_bind_to_device(source_artifact, "cpu")), sr=S3_SR)
-        audio_16 = torch.from_numpy(audio_16).float().to(self.device)[None]
-        tokens, _ = self.model.s3gen.tokenizer(audio_16)
-        return tokens[0]
+        audio_16, _ = librosa.load(
+            _wav_buffer(_bind_to_device(source_artifact, "cpu")), sr=S3_SR
+        )
+        return torch.from_numpy(audio_16).float()
 
     def _try_batched_chatterbox_vc(self, inputs, requests_to_batch, slots):
-        """Batch a multi-request VC step's vocode hop; ``None`` = use the loop.
+        """Batch a multi-request VC step; ``None`` = use the loop.
 
         Resolves each request's target ``ref_dict`` (precomputed / cache /
-        ``set_target_voice``), tokenizes its source clip and vocodes the rows in
-        length-similar sub-batches. Any preparation or batch failure returns
-        ``None`` so the caller falls back to the per-item loop, where a poisoned
-        request errors alone.
+        ``set_target_voice``), decodes each source clip (per-row ``librosa``
+        decode kept), tokenizes every clip in **one** :func:`tokenize_batched`
+        pass and vocodes the rows in length-similar sub-batches. Any
+        preparation or batch failure returns ``None`` so the caller falls back
+        to the per-item loop, where a poisoned request errors alone.
         """
         from harmonyspeech.modeling.models.chatterbox.s3gen_batch import (
             S3GenRow,
             inference_batched,
             supports_batched_s3gen,
+            supports_batched_tokenizer,
+            tokenize_batched,
         )
 
         s3gen = getattr(self.model, "s3gen", None)
-        if not supports_batched_s3gen(s3gen) or not hasattr(s3gen, "tokenizer"):
+        tokenizer = getattr(s3gen, "tokenizer", None)
+        if not supports_batched_s3gen(s3gen) or not supports_batched_tokenizer(tokenizer):
             return None
 
-        prepared: list[tuple] = []
+        prepared: list[tuple[int, dict, int | None]] = []
+        clips: list[torch.Tensor] = []
         try:
             for index, (source_artifact, target_speaker, target_audio_artifact) in enumerate(inputs):
                 key, cached = slots[index]
@@ -3040,7 +3066,12 @@ class ModelRunnerBase:
                     )
                 else:
                     raise ValueError("voice conversion requires target_audio or target_embedding")
-                prepared.append((index, self._chatterbox_vc_tokens(source_artifact), ref_dict))
+                prepared.append(
+                    (index, ref_dict, self._request_seed(requests_to_batch[index]))
+                )
+                clips.append(self._chatterbox_vc_clip(source_artifact))
+            # One batched source-tokenizer pass for the whole step (Phase 11-1).
+            tokens = tokenize_batched(tokenizer, clips)
         except Exception as error:  # noqa: BLE001 - degrade the whole step to the loop
             logger.warning(f"Chatterbox VC batch preparation failed ({error}); using the per-item loop")
             return None
@@ -3049,25 +3080,29 @@ class ModelRunnerBase:
             # own references, and the loop below re-resolves per request.
             self._restore_chatterbox_state()
 
-        lengths = [int(tokens.numel()) for _index, tokens, _ref in prepared]
+        lengths = [int(token.numel()) for token in tokens]
         batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
         budget = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
             lengths, batch_size
         )
         results: list = [None] * len(inputs)
         for group in plan_batches(lengths, batch_size, budget):
-            group_rows = [prepared[position] for position in group]
             try:
                 rows = [
-                    S3GenRow(tokens=tokens, ref_dict=ref_dict, seed=None)
-                    for _index, tokens, ref_dict in group_rows
+                    S3GenRow(
+                        tokens=tokens[position],
+                        ref_dict=prepared[position][1],
+                        seed=prepared[position][2],
+                    )
+                    for position in group
                 ]
                 with torch.no_grad():
                     waveforms = inference_batched(s3gen, rows)
             except Exception as error:  # noqa: BLE001 - whole-step fallback
                 logger.warning(f"Chatterbox VC padded batch failed ({error}); using the per-item loop")
                 return None
-            for (index, _tokens, _ref), waveform in zip(group_rows, waveforms, strict=True):
+            for position, waveform in zip(group, waveforms, strict=True):
+                index = prepared[position][0]
                 try:
                     artifact = self._artifact_from_waveform(waveform)
                     result = self._build_result(

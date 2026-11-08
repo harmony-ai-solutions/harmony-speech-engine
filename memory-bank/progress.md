@@ -6,6 +6,20 @@
 **Overall Completion**: ~80%  
 **Release Target**: Stable v0.1.0 within 1-2 months  
 
+## Engine Modernization — Phase 11-1 (COMPLETE, 2026-11-08; measured on the host)
+
+**Plan folder**: `.current_work/engine-modernization/`; task: `11-1-ChatterboxVCBatching.md`
+
+- ✅ **Tokenizer padding audit** — tiny seeded instance of the real upstream `S3Tokenizer`: STFT/log-mel padding-hostile (0.21–0.51 max |Δmel| at a padded row's last valid frame → per-row STFT), `AudioEncoderV2` + `FSQVectorQuantization` padding-safe (0.0 hidden delta, 0/36 token flips over 12 seeds, poison-exact), >30 s mixed path exact, B=1 bit-identical. Recorded in the task file + `docs/batching.md`.
+- ✅ **`tokenize_batched`** — per-row mel + padded mel batch + one encoder/quantizer forward; returns per-row token streams sliced with the tokenizer's own token length. `B=1` bit-identical to upstream; mixed lengths match their solo runs.
+- ✅ **Handler wiring** — one batched tokenize pass per VC step + the 9-5 padded S3Gen vocode; request seed into `S3GenRow`; seeded loop fallback (audio-identical); poisoned row errors alone.
+- ✅ **Critical fix** — the real `embed_ref` prompt mel is `2·tokens + 1` (181/90), so the 9-5 strict 2× check silently looped every real VC target. Relaxed to the true upstream constraint; pinned by unit gates.
+- ✅ **Capacity/class flip** — `chatterbox_vc` width **8** + `batched_inference: true`; `loop` → `padded_batch`; docs matrix/class table + honesty tests in sync.
+- ✅ **Gates** — unit **1132** / integration **84** (+2 opt-in skips) / wire-contract **50** (+3 model-gated) green; host `batching:1-vs-4` **PASS** on all 8 chatterbox cases (4 VC) with **zero fallbacks**; VC throughput c=8 **2.56 → 4.03 req/s (1.57×)**, c=4 1.32×; VC peak **+353.4 MiB** activation for 8 rows.
+- ✅ **Docs/knowledge** — `docs/batching.md`, `docs/benchmarks/{throughput,vram-profiles}.md` (measured, no `_tbd_`), CHANGELOG, README-facing docs, memory bank, `summary.md` ticked.
+
+**Verification**: no commits (per task constraints); the untracked `out/bench/` probe scripts/logs/configs are measurement scaffolding.
+
 ## Engine Modernization — Phase 9-6 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
 
 **Plan folder**: `.current_work/engine-modernization/`; task: `9-6-ARGatesBenchmarksExit.md`

@@ -8,6 +8,16 @@
 
 ## Recent Changes and Developments
 
+### Engine Modernization — Phase 11-1 (COMPLETE, 2026-11-08; measured on the host)
+
+- **Source-tokenizer audit** — tiny seeded instance of the real upstream `S3Tokenizer` (128 state / 2 heads / 2 layers): the **STFT/log-mel is padding-hostile** (a padded row's last valid frame reads zeros instead of the row's reflection; max |Δmel| **0.21–0.51**), while `AudioEncoderV2` + `FSQVectorQuantization` are **safe by construction** (0.0 hidden-state delta, 0/36 token flips over 12 seeds, poisoned mel padding exact, >30 s mixed path exact, B=1 bit-identical). Recorded in the task file + `docs/batching.md`.
+- **`tokenize_batched`** (`modeling/models/chatterbox/s3gen_batch.py`) — per-row STFT (bit-identical to upstream) + padded mel batch + one encoder/quantizer forward; sliced with the tokenizer's own per-row token length. `_chatterbox_vc_clip` keeps the per-row `librosa` decode (decode hygiene fenced out).
+- **Handler** — `_try_batched_chatterbox_vc` resolves targets (precomputed / 7-2 cache / `set_target_voice`), decodes each source, tokenizes all clips in one pass, then vocodes through the 9-5 `inference_batched` hop in length-similar sub-batches. The request seed is threaded into each `S3GenRow`; the loop fallback seeds the global RNG the same way. Fallbacks unchanged (audit-hostile / failure → loop; poisoned row errors alone).
+- **Critical fix** — upstream `S3Gen.embed_ref` trims reference tokens to `mel_frames // 2` and warns, so a real target's prompt mel is **181 frames for 90 tokens** (`2n+1`). The 9-5 strict `prompt_feat == 2 × prompt_token_len` check silently looped every real VC target; relaxed to the true constraint (prompt must leave a generated frame) and pinned.
+- **Capacity/class flip** — `chatterbox_vc` `max_batch_size: 8` + `batched_inference: true` in both configs; `loop` → `padded_batch` in the execution-model class table; docs matrix row final (two batched hops, target cache, serial watermark, perth verdict recorded).
+- **Gates** — unit 1132 / integration 84 (+2 opt-in skips) / wire-contract 50 (+3 model-gated) green. Host `audio_regression.py --families chatterbox --axis batching:1-vs-4 --gpu` **PASS** on all 8 cases (4 VC), **zero fallbacks** (the batched path really ran). VC throughput c=8 **2.56 → 4.03 req/s (1.57×)**, c=4 1.32×, c=1/2 flat within noise; VC peak **+353.4 MiB** activation for eight same-length rows (torch-scoped; device_used 2948.6 MiB constant).
+- **Docs** — `docs/batching.md` audit + VC section, `docs/benchmarks/{throughput,vram-profiles}.md` measured cells, CHANGELOG (concurrent voice conversion), task file deviations.
+
 ### Engine Modernization — Phase 9-6 (COMPLETE, 2026-11-07; benchmark-host measurements pending)
 
 - **Exhaustion proof** — `tests/integration/test_chatterbox_exhaustion.py` (real engine loop + scheduler + pool + admission, tiny T3): 100 distinct-voice requests against an 8-slot pool complete with **zero loss / zero pairing errors**, refusals take the sequential fallback, slots never over-commit; deadline-under-exhaustion errors only the expired request; an abort storm frees every slot; combined pool-full + cold `EmbeddingCache` + 20 concurrent stays lossless with rising `hse_ar_cache_refusals_total` and sane `hse_ar_decode_*`; fewer slots than requests completes in more engine steps (never a crash/OOM/loss).
