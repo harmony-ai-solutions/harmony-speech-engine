@@ -10,7 +10,7 @@ A thin wrapper turning 14-3's frame generator into the event stream: the "contra
 
 ## Implementation steps
 
-1. Envelope generator: same frame source as 14-3; each frame → `speech.audio.delta` with `audio` (base64 PCM, resampled if requested) + additive `chunk_index`; terminal `speech.audio.done` with `id/model/created/sample_rate/format/chunks/duration_s/usage` (duration from the stitcher's cumulative sample counts — consume 12-2's exposure, don't recompute); then `data: [DONE]`.
+1. Envelope generator: same frame source as 14-3; each frame → `speech.audio.delta` with `audio` (base64 PCM, resampled if requested) + additive `chunk_index`; terminal `speech.audio.done` with `id/model/created/sample_rate/format/chunks/duration_s/usage` (duration from the **frame generator's own emitted-sample counter** — sum of `feed()`/`flush()` return lengths ÷ sample rate. Corrected 2026-11-09: the earlier note said "consume 12-2's exposure", but `CrossfadeStitcher` exposes no cumulative counter (`audio_utils.py:605-613`); count in the generator, or add a `samples_emitted` property if 14-2 touches the class — don't recompute from wire bytes, the resampled stream length ≠ source length); then `data: [DONE]`.
 2. Error semantics: pre-first-byte failure ⇒ normal HTTP JSON error; post-first-byte ⇒ `speech.audio.error {error:{message,type,code}}` then close (exactly one terminal event, `done` xor `error` — pinned by test).
 3. Keepalive: `: keepalive` comment line when a chunk takes >15 s (before the first delta too — browsers/proxies keep the connection warm during first-chunk synthesis).
 4. Content-Type `text/event-stream; charset=utf-8` + the 14-1 headers; no gzip.
