@@ -23,9 +23,10 @@ What is pinned:
 import asyncio
 import base64
 import dataclasses
+import json
 import threading
 import types
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
@@ -2270,6 +2271,49 @@ async def test_warmup_populates_disk_and_memory(tmp_path):
     assert embed.prepare_calls == len(voices)
     assert entries == len(voices)
     assert len(list(tmp_path.glob("*.pt"))) == len(voices)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_warmup_stats_flip_from_null_and_surface_on_health(tmp_path, monkeypatch):
+    """The warm-up result must become visible on /health, not only in the engine.
+
+    Regression (2026-11-10): the 13-2 host helper polled
+    ``voice_pack_cache.warmup`` for 30 minutes and never saw it, although the
+    engine had recorded the stats right after the summary log. ``check_health``
+    produced the block; the ``/health`` route's field allowlist dropped it. This
+    drives the real warm-up flow and the real route.
+    """
+    from types import SimpleNamespace
+
+    from harmonyspeech.endpoints.openai import api_server
+
+    harness, _models = _warmup_harness(tmp_path)
+    async with harness:
+        inner = harness.engine.engine
+        assert inner.get_voice_pack_cache_stats()["warmup"] is None
+        stats = await harness.engine.start_voice_pack_warmup()
+        assert inner.get_voice_pack_cache_stats()["warmup"] == stats
+
+        healthy = SimpleNamespace(check_health=AsyncMock(return_value=None))
+        tts_engine = SimpleNamespace(
+            check_health=AsyncMock(return_value=inner.check_health())
+        )
+        monkeypatch.setattr(api_server, "openai_serving_tts", SimpleNamespace(engine=tts_engine))
+        for name in (
+            "openai_serving_stt",
+            "openai_serving_vc",
+            "openai_serving_embedding",
+            "openai_serving_vad",
+        ):
+            monkeypatch.setattr(api_server, name, SimpleNamespace(engine=healthy))
+
+        response = await api_server.health()
+        payload = json.loads(response.body)
+
+    assert payload["text_to_speech"] == "healthy"
+    assert payload["voice_pack_cache"]["warmup"] == stats
+    assert payload["voice_pack_cache"]["warmup"]["targets"] > 0
 
 
 @pytest.mark.integration

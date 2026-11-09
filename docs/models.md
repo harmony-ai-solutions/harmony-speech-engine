@@ -134,10 +134,11 @@ number of hydrated entries and the last warm-up result under `voice_pack_cache`.
 #### `input_vad_mode`
 
 The OpenVoice pipelines accept `input_vad_mode: "whisper" | "silero"` to choose
-the VAD backend for the reference-audio segmentation. `"whisper"` (or omitting
-the field) uses Faster-Whisper; `"silero"` uses Silero VAD when one is
-configured and otherwise falls back to Faster-Whisper with a warning. See
-[Request routing](routing.md).
+the VAD backend for the reference-audio segmentation. Since the 2026-11-10
+owner decision, omitting the field prefers **Silero VAD** (a dedicated VAD is
+more reliable and much faster than running a Whisper model only to segment); it
+falls back to Faster-Whisper with a warning when no Silero model is configured.
+`"whisper"` explicitly selects Faster-Whisper. See [Request routing](routing.md).
 
 The following table should help with evaluating the requirements (footprint
 figures are **measured** on the shipped GPU config after Phase 4 — see

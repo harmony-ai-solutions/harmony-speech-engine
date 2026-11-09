@@ -240,3 +240,14 @@ tests/integration tests/e2e/wire_contract`, 2026-11-09) — +10 tests over the
 change, 6 integration: OV2 TTS pack, harmonyspeech pack, OV VC cold/warm, OV VC
 after pack warm-up, concrete OV2 VC, no-encoder 400). No new skips.
 
+
+## Verification log (2026-11-10) — gated real-model e2e (host session)
+
+`HSE_E2E_MODEL_TESTS=1 python -m pytest tests/e2e/tts/test_standard_voice_pack.py`
+(GPU 1 discipline, post the 2026-11-10 Silero-default + transcript-cap fixes):
+**3 passed in 107.6 s** — `test_standard_voice_pack_on_chatterbox` (25.8 s),
+`test_standard_voice_pack_on_chatterbox_multilingual` (26.8 s), and the
+cross-family openvoice case. Real-weights pack synthesis, cache ride and
+catalog consistency all green; warnings are pre-existing upstream
+deprecations (`sunau`, `sdp_kernel`). This closes the 13-1 host follow-up;
+the 13-2 measurement + fix records are in that task's log.

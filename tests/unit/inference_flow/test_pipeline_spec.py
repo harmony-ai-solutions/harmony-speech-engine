@@ -100,7 +100,7 @@ def test_family_requirements_are_derived_from_the_registry():
         "chatterbox_vc",
     }
     assert FAMILY_REQUIREMENTS["openvoice_v2"] == [
-        "FasterWhisper",
+        "SileroVAD",
         "OpenVoiceV2ToneConverterEncoder",
         "MeloTTSSynthesizer",
         "OpenVoiceV2ToneConverter",
@@ -147,26 +147,34 @@ def test_get_spec_resolves_sentinels_only():
 
 
 @pytest.mark.unit
-def test_next_step_prefers_the_first_required_type():
+def test_next_step_default_prefers_silero_vad():
+    """Regression (2026-11-10): an omitted ``input_vad_mode`` resolves to Silero.
+
+    This is the assertion that would have caught the Phase 13-2 warm-up bug:
+    before the default flip the VAD step was FasterWhisper-first, so this test
+    failed — and the real pack warm-up then dropped 26 of 28 OpenVoice encoder
+    embeddings because the whole-clip Whisper transcript exceeded the encoder's
+    legacy text-length filter.
+    """
     spec = PIPELINE_SPECS["openvoice_v2"]
     request = _tts(input_audio="legacy")
     state = resolve_entry(spec, request, {})
-    configs = [_cfg("silero", "SileroVAD"), _cfg("whisper", "FasterWhisper")]
+    configs = [_cfg("whisper", "FasterWhisper"), _cfg("silero", "SileroVAD")]
 
     config = next_step(spec, state, request, configs, {})
 
-    assert config.name == "whisper"  # requires order wins over config order
+    assert config.name == "silero"  # requires order wins over config order
 
 
 @pytest.mark.unit
-def test_next_step_falls_back_to_alternative_backend():
+def test_next_step_default_falls_back_to_whisper_without_silero():
     spec = PIPELINE_SPECS["openvoice_v2"]
     request = _tts(input_audio="legacy")
     state = resolve_entry(spec, request, {})
 
-    config = next_step(spec, state, request, [_cfg("silero", "SileroVAD")], {})
+    config = next_step(spec, state, request, [_cfg("whisper", "FasterWhisper")], {})
 
-    assert config.name == "silero"
+    assert config.name == "whisper"
 
 
 @pytest.mark.unit

@@ -426,7 +426,7 @@ Based on the [OpenAI TTS API](https://platform.openai.com/docs/api-reference/aud
 | `input_audio` | string | Conditional | null | Base64-encoded reference speaker audio — required for `voice_cloning` mode (unless `input_embedding` is provided) |
 | `input_embedding` | string | Conditional | null | Base64-encoded speaker embedding — alternative to `input_audio` (faster, skips VAD/embedding steps) |
 | `input_vad_data` | string | No | null | VAD result JSON from a prior `/v1/audio/vad` call. If provided, skips the internal VAD step in voice-cloning pipelines |
-| `input_vad_mode` | string | No | null | VAD backend for reference-audio segmentation: `"whisper"` (default) or `"silero"`. `"silero"` falls back to Whisper with a warning when no Silero model is configured. |
+| `input_vad_mode` | string | No | null | VAD backend for reference-audio segmentation: `"silero"` (default when a Silero model is configured) or `"whisper"` (explicit Faster-Whisper). With no value the engine prefers Silero and falls back to Whisper with a warning when no Silero model is configured; `"whisper"` always selects Faster-Whisper when one is configured. |
 | `generation_options` | [GenerationOptions](#generationoptions) | No | null | Generation parameters (speed, pitch, Chatterbox params, etc.) |
 | `output_options` | [AudioOutputOptions](#audiooutputoptions) | No | null | Output audio format settings |
 | `pre_processing_filters` | list | No | `[]` | Filters to apply before synthesis |

@@ -206,6 +206,11 @@ async def health() -> JSONResponse:
         if isinstance(result, dict) and result.get("embedding_cache") is not None:
             # Phase 7-3: cross-request embedding cache accounting.
             health_status["embedding_cache"] = result["embedding_cache"]
+        if isinstance(result, dict) and result.get("voice_pack_cache") is not None:
+            # Phase 13-2: standard voice pack disk cache + last warm-up result.
+            # ``check_health`` always produces this block; copying it here is
+            # what makes ``voice_pack_cache.warmup`` observable on /health.
+            health_status["voice_pack_cache"] = result["voice_pack_cache"]
         if isinstance(result, dict) and result.get("ar_cache") is not None:
             # Phase 9-2: shared AR KV-cache pool accounting.
             health_status["ar_cache"] = result["ar_cache"]

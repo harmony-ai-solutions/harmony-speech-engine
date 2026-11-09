@@ -29,7 +29,10 @@ from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 from harmonyspeech.processing import pipeline_registry as registry
 from harmonyspeech.task_handler import inputs as prepare_module
 from harmonyspeech.task_handler import model_runner_base as runner_module
-from harmonyspeech.task_handler.inputs import prepare_openvoice_tone_converter_encoder_inputs
+from harmonyspeech.task_handler.inputs import (
+    prepare_openvoice_tone_converter_encoder_inputs,
+    prepare_silero_vad_inputs,
+)
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 # ---------------------------------------------------------------------------
@@ -164,6 +167,61 @@ def test_whisper_segments_with_text_still_pass(monkeypatch):
     segments = _encoder_segments(monkeypatch, vad)
 
     assert len(segments) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("text_length", "expected_segments"),
+    [
+        # The pack clips transcribe to one whole-clip segment of ~206 characters
+        # (large-v3-turbo), which the legacy OpenVoice heuristic used to drop
+        # (26/28 pack voices failed the 2026-11-09 warm-up; Henry/Michael were
+        # the only transcripts under 200 characters). The 2026-11-10 fix keeps
+        # the anti-hallucination floor and drops the cap: the duration filter
+        # already bounds the segment.
+        (206, 1),
+        (194, 1),
+        (400, 1),
+        (1, 0),
+    ],
+)
+def test_whisper_segment_transcript_floor_without_the_legacy_length_cap(
+    monkeypatch, text_length, expected_segments
+):
+    """Whisper segments are kept by duration, not transcript length.
+
+    This incident was *not* a VAD detection failure: whisper emits one segment
+    spanning the clip, and the OpenVoice encoder's historical
+    ``2 <= len(text) < 200`` filter (upstream's proxy for the 1.5–20 s
+    duration bound) then discarded it — 26/28 pack clips transcribe to 206
+    characters. The cap is gone; only the non-empty-transcript floor remains.
+    Silero segments carry no text and bypass the filter entirely.
+    """
+    vad = VadArtifact(
+        segments=[{"start": 0.0, "end": 3.0, "text": "x" * text_length}], source="whisper"
+    )
+
+    assert len(_encoder_segments(monkeypatch, vad)) == expected_segments
+
+
+@pytest.mark.unit
+def test_silero_vad_step_receives_16khz_audio_from_a_44khz_reference():
+    """The Silero seam must resample admission audio to its 16 kHz contract.
+
+    A rate bug here would trade the whisper failure for a new flaky VAD; the
+    pack clips are 44.1 kHz and Silero's ``get_speech_timestamps`` expects
+    16 kHz.
+    """
+    reference = AudioArtifact.from_numpy(np.zeros(44100 * 3, dtype=np.float32), 44100)
+    request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="openvoice_v2", model="ov2-enc")
+    engine_request = SimpleNamespace(
+        request_id="emb-1", request_data=request, artifacts={"input_audio": reference}
+    )
+
+    (audio, _params) = prepare_silero_vad_inputs([engine_request])[0]
+
+    assert audio.sample_rate == 16000
+    assert audio.duration_s == pytest.approx(3.0, rel=0.01)
 
 
 @pytest.mark.unit

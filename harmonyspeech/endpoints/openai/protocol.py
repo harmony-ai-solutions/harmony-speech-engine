@@ -309,7 +309,11 @@ class TextToSpeechRequest(BaseRequest):
     )
     input_vad_mode: str | None = Field(
         default=None,
-        description="VAD mode to use in case the provided TTS or VC framework requires VAD information for processing",
+        description=(
+            "VAD backend for reference-audio segmentation: omit to prefer Silero VAD "
+            "(falls back to Faster-Whisper with a warning when none is configured), "
+            "or set 'silero' / 'whisper' explicitly."
+        ),
     )
     input_vad_data: str | None = Field(
         default=None, description="result data from VAD step to be processed in follow-up TTS or VC steps"

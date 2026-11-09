@@ -361,11 +361,14 @@ def _is_audio_conversion(request: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _vad_step(model_types: tuple[str, ...] = ("FasterWhisper", "SileroVAD")) -> Step:
+def _vad_step(model_types: tuple[str, ...] = ("SileroVAD", "FasterWhisper")) -> Step:
     """Voice-activity step used by the OpenVoice pipelines.
 
-    The ``requires`` tuple already encodes the preference (Whisper first);
-    ``input_vad_mode`` reorders it at request time (Phase 3-4).
+    The ``requires`` tuple encodes the **default** preference (Silero first,
+    owner decision 2026-11-10: dedicated VAD is more reliable and much faster
+    than running a Whisper model only to segment); ``input_vad_mode`` reorders
+    it at request time (Phase 3-4), and ``"whisper"`` keeps FasterWhisper
+    explicitly.
     """
     return Step(
         name="vad",

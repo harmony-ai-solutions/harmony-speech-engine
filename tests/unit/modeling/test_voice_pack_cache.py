@@ -241,6 +241,30 @@ def test_build_warmup_targets_predicts_openvoice_and_harmonyspeech_params():
     assert by_model["hs1-encoder"].request.requested_model == "harmonyspeech"
 
 
+def test_build_warmup_targets_predicts_silero_as_the_default_vad_source():
+    """Regression (2026-11-10): the warm-up must key on the Silero default.
+
+    Before the default flip the planner predicted ``"whisper"``; warm-up then
+    warmed an artifact the default request would not use, and the whisper path
+    dropped 26/28 pack voices in the OpenVoice encoder's text-length filter.
+    """
+    engine = _FakeEngine(
+        [
+            _config("whisper", "FasterWhisper"),
+            _config("silero", "SileroVAD"),
+            _config("ov1-encoder", "OpenVoiceV1ToneConverterEncoder"),
+        ],
+        {
+            "ov1-encoder": _FakeExecutor("ov1|OpenVoiceV1ToneConverterEncoder|float32|stub/model@main|v1"),
+        },
+        EmbeddingCache(),
+    )
+    target = next(t for t in build_warmup_targets(engine) if t.model_name == "ov1-encoder")
+
+    assert target.request.input_vad_mode is None
+    assert target.params == {"vad_source": "silero"}
+
+
 def test_build_warmup_targets_is_empty_without_cache_or_executors():
     engine = _FakeEngine([_config("chatterbox_embedding", "ChatterboxEmbedding")], {}, EmbeddingCache())
     assert build_warmup_targets(engine) == []

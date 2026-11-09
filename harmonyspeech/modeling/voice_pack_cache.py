@@ -356,7 +356,9 @@ def _embed_params(model_type: str, vad_source: str | None) -> dict:
     if model_type in _CHATTERBOX_EMBED_TYPES:
         return {"exaggeration": DEFAULT_EXAGGERATION}
     if model_type in _OPENVOICE_ENCODER_TYPES:
-        return {"vad_source": vad_source or "whisper"}
+        # Default VAD is Silero since the 2026-11-10 owner decision; an explicit
+        # ``input_vad_mode: "whisper"`` request still keys on its actual source.
+        return {"vad_source": vad_source or "silero"}
     return {}
 
 
@@ -364,8 +366,10 @@ def _predicted_vad_source(spec, by_type: dict[str, Any]) -> str | None:
     """The VAD backend a default (no ``input_vad_mode``) request would use.
 
     Mirrors ``Step.candidates_for``: the first ``requires`` entry backed by a
-    configured model wins. Returns ``None`` when the pipeline has no resolvable
-    VAD step (an incomplete OpenVoice toolchain, skipped by warm-up).
+    configured model wins (Silero first since the 2026-11-10 owner decision,
+    with Faster-Whisper as the fallback). Returns ``None`` when the pipeline has
+    no resolvable VAD step (an incomplete OpenVoice toolchain, skipped by
+    warm-up).
     """
     for step in getattr(spec, "steps", ()):
         if step.name != "vad":

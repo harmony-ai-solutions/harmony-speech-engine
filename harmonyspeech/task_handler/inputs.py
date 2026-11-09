@@ -465,8 +465,14 @@ def prepare_openvoice_tone_converter_encoder_inputs(
             segment_samples = quantized[start_frame:end_frame].astype(np.float32) / float(1 << 15)
             duration_s = segment_samples.size / float(target_sr)
 
-            # filter out the segment if shorter than 1.5s and longer than 20s
-            text_ok = (2 <= len(text) < 200) if text_filtered else True
+            # filter out the segment if shorter than 1.5s and longer than 20s.
+            # Whisper segments additionally require a non-empty transcript
+            # (anti-hallucination floor). The historical < 200-character cap
+            # was upstream OpenVoice's proxy for the duration bound above and
+            # dropped speech-dense ~6 s+ clips (2026-11-10 host-session
+            # finding: 26/28 pack clips transcribe to 206 characters at
+            # large-v3-turbo) — removed; the duration filter bounds segments.
+            text_ok = (len(text) >= 2) if text_filtered else True
             if 1.5 < duration_s < 20.0 and text_ok:
                 segment_artifacts.append(AudioArtifact.from_numpy(segment_samples, target_sr))
 

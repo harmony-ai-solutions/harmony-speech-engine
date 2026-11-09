@@ -80,7 +80,7 @@ def test_validate_registry_reports_alternative_backends_as_one_step():
 
     incomplete = validate_registry(configs)
 
-    assert "vad (FasterWhisper, SileroVAD)" in incomplete["openvoice_v2"]
+    assert "vad (SileroVAD, FasterWhisper)" in incomplete["openvoice_v2"]
 
 
 @pytest.mark.unit

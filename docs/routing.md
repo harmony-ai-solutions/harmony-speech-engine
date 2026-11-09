@@ -68,13 +68,14 @@ also declares single-step pipelines (`kitten_tts`, `fasterwhisper`,
 ## VAD backend selection (`input_vad_mode`)
 
 The OpenVoice pipelines need a VAD/ASR step to segment the reference audio. The
-step declares a backend preference list (`FasterWhisper`, then `SileroVAD`), and
+step declares a backend preference list (`SileroVAD`, then `FasterWhisper`), and
 `input_vad_mode` reorders it per request:
 
 | `input_vad_mode` | Behaviour |
 |---|---|
-| `"whisper"` / omitted | Faster-Whisper (the default and historical backend). |
+| omitted | Silero VAD when one is configured (the default since the 2026-11-10 owner decision); otherwise Faster-Whisper with a warning in the log. |
 | `"silero"` | Silero VAD when one is configured; otherwise Faster-Whisper with a warning in the log. |
+| `"whisper"` | Faster-Whisper explicitly, even when Silero is configured. |
 
 Both backends emit the same `VadArtifact` segment schema (`start`/`end` in
 seconds plus `text`), so the encoder consumes either transparently. Silero

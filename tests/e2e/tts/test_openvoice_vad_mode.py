@@ -1,9 +1,10 @@
 """E2E tests for the ``input_vad_mode`` pipeline switch (Phase 3-4).
 
 ``input_vad_mode: "silero"`` must route the OpenVoice VAD step to a configured
-Silero VAD executor and complete the whole cloning pipeline; ``"whisper"`` (or
-unset) keeps using Faster-Whisper, and a missing Silero model falls back with a
-warning instead of failing.
+Silero VAD executor and complete the whole cloning pipeline; an unset value
+prefers Silero since the 2026-11-10 owner decision, ``"whisper"`` keeps using
+Faster-Whisper explicitly, and a missing Silero model falls back with a warning
+instead of failing.
 """
 
 import asyncio
