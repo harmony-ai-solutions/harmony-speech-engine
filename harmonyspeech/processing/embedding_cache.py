@@ -224,6 +224,16 @@ class EmbeddingCache:
         with self._lock:
             return self._load_versions.get(model_name, 0)
 
+    def contains(self, key: str) -> bool:
+        """Return True when ``key`` is present and not expired (no counters bumped).
+
+        Phase 13-2 uses this for hydration/warm-up dedupe: a presence check must
+        not look like a cache miss to the 7-3 hit-ratio accounting.
+        """
+        with self._lock:
+            entry = self._entries.get(key)
+            return entry is not None and time.monotonic() < entry.expires_at
+
     # -- store -----------------------------------------------------------
     def get(self, key: str) -> SpeakerArtifact | None:
         """Return a deep copy of the stored artifact, or ``None``.

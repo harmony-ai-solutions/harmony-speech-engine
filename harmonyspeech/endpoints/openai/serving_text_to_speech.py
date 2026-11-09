@@ -58,8 +58,13 @@ from harmonyspeech.common.utils import random_uuid
 from harmonyspeech.endpoints.openai.output_encoding import validate_output_options
 from harmonyspeech.endpoints.openai.protocol import ErrorResponse, ModelCard, TextToSpeechRequest, TextToSpeechResponse
 from harmonyspeech.endpoints.openai.serving_engine import OpenAIServing
+from harmonyspeech.endpoints.openai.standard_voice import standard_voice_wire_payload
 from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+from harmonyspeech.modeling.voice_catalog import (
+    lookup_standard_voice,
+    request_model_types,
+)
 from harmonyspeech.processing.pipeline_registry import get_spec
 
 #: Default character budget per chunk when a client enables ``split_text``
@@ -187,7 +192,37 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         self, request: TextToSpeechRequest, raw_request: Request
     ) -> ErrorResponse | AsyncGenerator[str, None] | TextToSpeechResponse:
 
-        error_check_model = await self._check_model(request)
+        # Phase 13-1: resolve a standard voice pack name ONCE per HTTP request,
+        # before the model check and before ``from_wire_audio``/
+        # ``_resolve_chunks``. The resolved pack WAV becomes the request's
+        # ``input_audio`` (+ cloning mode), so the single-shot and the 12-2
+        # chunked clone paths see exactly a client-supplied reference, and the
+        # 7-2 embedding cache keys on the WAV content hash unchanged.
+        voice_lookup = self._lookup_standard_voice(request)
+        if voice_lookup.error is not None:
+            return self.create_error_response(voice_lookup.error)
+
+        # ``_check_model`` is shared by every serving module (CRITICAL blast
+        # radius), so it is not changed: the pack voice is validated through an
+        # effective copy of the request that carries the reference and cloning
+        # mode the serving layer will actually dispatch.
+        validation_request = request
+        if voice_lookup.resolution is not None:
+            payload = standard_voice_wire_payload(voice_lookup.resolution.name)
+            if payload is None:  # pragma: no cover - resolution validated the path
+                return self.create_error_response(
+                    f"Standard voice '{voice_lookup.resolution.name}' is missing from the "
+                    "voice pack installation."
+                )
+            validation_request = request.model_copy(
+                update={
+                    "input_audio": payload,
+                    "mode": "voice_cloning",
+                    "voice": voice_lookup.native_default,
+                }
+            )
+
+        error_check_model = await self._check_model(validation_request)
         if error_check_model is not None:
             return error_check_model
 
@@ -208,6 +243,12 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         request_id = f"tts-{random_uuid()}"
 
         request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+        if voice_lookup.resolution is not None:
+            apply_error = self._apply_standard_voice(
+                request_data, voice_lookup.resolution, voice_lookup.native_default
+            )
+            if apply_error is not None:
+                return self.create_error_response(apply_error)
         # Boundary decode-once: the reference audio becomes an artifact now, so
         # no pipeline step re-reads the base64 field.
         artifacts = from_wire_audio(request_data)
@@ -256,30 +297,68 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         the global defaults.
         """
         requested = getattr(request_data, "requested_model", None)
-        spec = get_spec(requested)
+        model_name = getattr(request_data, "model", None) or requested
+        return request_model_types(
+            self._engine_model_configs(),
+            requested,
+            model_name,
+            only_configured=True,
+        )
+
+    def _engine_model_configs(self) -> list[ModelConfig]:
+        """Return the engine's configured models (empty for test doubles)."""
         engine = getattr(self, "engine", None)
         engine = getattr(engine, "engine", None) or engine
-        configs = getattr(engine, "model_configs", None) or []
-        available = {getattr(config, "model_type", None) for config in configs}
-        available.discard(None)
-        model_types: set[str] = set()
-        if spec is not None:
-            model_types.update(
-                model_type
-                for step in spec.steps
-                for model_type in step.requires
-                if model_type in available
-            )
-        # Also honour a concrete config named exactly like the request: this is
-        # the "request names the executor directly" path, and it stays correct
-        # even when a same-named pipeline sentinel points at a different family.
-        model_name = getattr(request_data, "model", None) or requested
-        model_types.update(
-            config.model_type
-            for config in configs
-            if config.name == model_name and getattr(config, "model_type", None)
+        return list(getattr(engine, "model_configs", None) or [])
+
+    def _standard_voice_pack_enabled(self) -> bool:
+        """Global ``standard_voice_pack`` switch (default on)."""
+        engine = getattr(self, "engine", None)
+        engine = getattr(engine, "engine", None) or engine
+        return bool(getattr(engine, "standard_voice_pack", True))
+
+    def _lookup_standard_voice(self, request):
+        """Resolve the request's ``voice`` as a standard pack name (Phase 13-1).
+
+        Returns a :class:`~harmonyspeech.modeling.voice_catalog.StandardVoiceLookup`.
+        A non-pack name yields an empty lookup, so native voices and the
+        pre-13 paths are untouched.
+        """
+        model = getattr(request, "model", "") or ""
+        return lookup_standard_voice(
+            self._engine_model_configs(),
+            model,
+            getattr(request, "voice", None),
+            language_id=getattr(request, "language", None),
+            enabled=self._standard_voice_pack_enabled(),
+            model_exists=self.get_model_by_id(model) is not None,
+            has_explicit_reference=bool(
+                getattr(request, "input_audio", None)
+                or getattr(request, "input_embedding", None)
+                or getattr(request, "input_vad_data", None)
+            ),
         )
-        return model_types
+
+    @staticmethod
+    def _apply_standard_voice(request_data, resolution, native_default) -> str | None:
+        """Turn a resolved pack voice into the request's cloning reference.
+
+        The pack WAV is injected as ``input_audio`` (the same wire form a client
+        supplies), the mode is derived as ``voice_cloning``, and any native
+        voice id is replaced with the model's default source voice. Returns an
+        error string only if the pack file vanished between listing and reading.
+        """
+        payload = standard_voice_wire_payload(resolution.name)
+        if payload is None:  # pragma: no cover - resolution validated the path
+            return (
+                f"Standard voice '{resolution.name}' is missing from the voice pack "
+                "installation."
+            )
+        request_data.input_audio = payload
+        request_data.input_embedding = None
+        request_data.mode = "voice_cloning"
+        request_data.voice_id = native_default
+        return None
 
     def _resolve_default_chunk_size(self, request_data) -> int:
         """Return the default character budget for this request's family.

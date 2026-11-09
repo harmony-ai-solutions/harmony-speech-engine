@@ -459,7 +459,9 @@ ext_modules = []
 package_data = {
     "harmonyspeech": [
         "endpoints/kobold/klite.embd", "quantization/hadamard.safetensors",
-        "py.typed", "modeling/layers/fused_moe/configs/*.json"
+        "py.typed", "modeling/layers/fused_moe/configs/*.json",
+        # Phase 13-1: vendored MIT standard voice pack (reference WAVs).
+        "assets/voices/*.wav", "assets/voices/LICENSE", "assets/voices/PROVENANCE.md",
     ]
 }
 if os.environ.get("HARMONYSPEECH_USE_PRECOMPILED"):

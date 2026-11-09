@@ -226,6 +226,186 @@ Returns the running Harmony Speech Engine version.
 
 ---
 
+### Voices Catalog
+
+**GET /v1/audio/voices**
+
+Lists the selectable voices of every configured model, so clients no longer
+need to read the server's configuration to know what they can ask for. Each
+entry is a model id you can send as `model`, with its native presets and — on a
+voice-cloning-capable id — the standard voice pack names, each labeled with its
+`source`. See [standard voice pack names](#standard-voice-pack-names) for what a
+pack name means across families.
+
+The response is additive and `ModelList`-consistent (`object: "list"` plus
+`data`). `?model=<name>` narrows it to one id; an unknown or non-voice id
+returns `400` with the message below.
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `object` | string | `"list"` |
+| `data[].model` | string | Model or toolchain id to send as `model` |
+| `data[].object` | string | `"model"` for a configured executor, `"toolchain"` for a pipeline alias |
+| `data[].model_type` | string \| null | Executor model type; `null` for a toolchain entry |
+| `data[].cloning_capable` | boolean | A standard voice pack name is meaningful for this id in some direction (TTS `voice` or VC `target_voice`) |
+| `data[].vc_target_kind` | string \| null | How a standard `target_voice` is consumed: `"target_audio"` (the executor takes the clip) or `"target_embedding"` (the server embeds the clip first); `null` when the id is not a voice-conversion target |
+| `data[].voices[].name` | string | Voice id |
+| `data[].voices[].source` | string | `"native"` (a preset of the configured model) or `"standard"` (a vendored pack identity) |
+| `data[].voices[].languages` | array \| null | Configured language(s) of a native voice; `null` for pack clips, which are language-agnostic references |
+
+Toolchain ids (`openvoice_v1`, `harmonyspeech`, …) appear as their own entries
+because clients can name them as `model`. When a pipeline id is also a
+configured model name (the shipped `chatterbox`, `chatterbox_vc`), it is one
+merged entry with `object: "model"` — the same presentation as
+`GET /v1/audio/speech/models`. A toolchain's native voices are merged across its
+configured variants, so `default` on `openvoice_v1` carries both `"EN"` and
+`"ZH"`.
+
+The endpoint is read-only catalog state: it does not wait for pack-voice warm-up,
+so standard voices are listable before their embeddings are cached. With
+`standard_voice_pack: false`, `voices` contains no `standard` entries; the
+capability fields still describe the model, because explicit reference clips
+keep working.
+
+**Example — full list:**
+
+```bash
+curl "http://localhost:12080/v1/audio/voices" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "model": "ov2-synthesizer-en",
+      "object": "model",
+      "model_type": "MeloTTSSynthesizer",
+      "cloning_capable": false,
+      "vc_target_kind": null,
+      "voices": [
+        {"name": "EN-Newest", "source": "native", "languages": ["EN"]}
+      ]
+    },
+    {
+      "model": "chatterbox",
+      "object": "model",
+      "model_type": "ChatterboxTTS",
+      "cloning_capable": true,
+      "vc_target_kind": null,
+      "voices": [
+        {"name": "Abigail", "source": "standard", "languages": null},
+        {"name": "Adrian", "source": "standard", "languages": null}
+      ]
+    },
+    {
+      "model": "chatterbox_vc",
+      "object": "model",
+      "model_type": "ChatterboxVC",
+      "cloning_capable": true,
+      "vc_target_kind": "target_audio",
+      "voices": [
+        {"name": "Abigail", "source": "standard", "languages": null}
+      ]
+    },
+    {
+      "model": "openvoice_v1",
+      "object": "toolchain",
+      "model_type": null,
+      "cloning_capable": true,
+      "vc_target_kind": "target_embedding",
+      "voices": [
+        {"name": "default", "source": "native", "languages": ["EN", "ZH"]},
+        {"name": "friendly", "source": "native", "languages": ["EN"]},
+        {"name": "Abigail", "source": "standard", "languages": null}
+      ]
+    }
+  ]
+}
+```
+
+> Entries and pack voices are truncated above for readability; the real response
+> lists every configured model and all 28 pack names.
+
+**Example — narrow to one model:**
+
+```bash
+curl "http://localhost:12080/v1/audio/voices?model=openvoice_v1" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "model": "openvoice_v1",
+      "object": "toolchain",
+      "model_type": null,
+      "cloning_capable": true,
+      "vc_target_kind": "target_embedding",
+      "voices": [
+        {"name": "default", "source": "native", "languages": ["EN", "ZH"]},
+        {"name": "Abigail", "source": "standard", "languages": null}
+      ]
+    }
+  ]
+}
+```
+
+**Example — unknown model (400):**
+
+```bash
+curl "http://localhost:12080/v1/audio/voices?model=openvoice_v3" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```json
+{
+  "object": "error",
+  "message": "The model `openvoice_v3` has no voice catalog entry. Call GET /v1/audio/voices without `model` to list every model with selectable voices.",
+  "type": "BadRequestError",
+  "param": "model",
+  "code": 400
+}
+```
+
+**Using a listed name.** A `standard` name is sent back unchanged as `voice`
+(TTS) or `target_voice` (voice conversion). A `native` name is a preset of the
+selected model.
+
+```bash
+# TTS: a standard pack voice on a cloning family
+curl -X POST "http://localhost:12080/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"model": "chatterbox", "mode": "voice_cloning", "input": "Hello.", "voice": "Abigail"}'
+
+# VC target-audio: the pack clip becomes the conversion target directly
+curl -X POST "http://localhost:12080/v1/voice/convert" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"model": "chatterbox_vc", "source_audio": "base64_encoded_source_voice", "target_voice": "Abigail"}'
+
+# VC target-embedding: the server embeds the clip through the pipeline first
+curl -X POST "http://localhost:12080/v1/voice/convert" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"model": "ov2-tone-converter", "source_audio": "base64_encoded_source_voice", "target_voice": "Abigail"}'
+```
+
+`target_embedding` needs the OpenVoice pipeline's encoder and VAD configured;
+otherwise that id honestly reports `vc_target_kind: null` and rejects a pack
+`target_voice`. Native voices are unaffected by the pack switch, and a pack name
+cannot be combined with an explicit reference (see
+[Voice Conversion](#voice-conversion)).
+
+
+---
+
 ### Text-to-Speech
 
 **POST /v1/audio/speech**
@@ -242,7 +422,7 @@ Based on the [OpenAI TTS API](https://platform.openai.com/docs/api-reference/aud
 | `input` | string | Yes | - | The text to synthesize. Some models (e.g. `chatterbox_turbo`) support [paralinguistic tags](#paralinguistic-tags) embedded in the text |
 | `mode` | string | Yes | - | Pipeline mode: `"single_speaker_tts"` or `"voice_cloning"` (see [Mode Selection](#tts-mode-selection) below) |
 | `language` | string | Conditional | null | Language ID — required by models with multiple languages (see [Language & Voice](#tts-language-and-voice) below) |
-| `voice` | string | Conditional | null | Voice ID — required when the selected language has preset voices |
+| `voice` | string | Conditional | null | Voice ID — a native preset for the selected language, or a [standard voice pack name](#standard-voice-pack-names) on a cloning-capable model |
 | `input_audio` | string | Conditional | null | Base64-encoded reference speaker audio — required for `voice_cloning` mode (unless `input_embedding` is provided) |
 | `input_embedding` | string | Conditional | null | Base64-encoded speaker embedding — alternative to `input_audio` (faster, skips VAD/embedding steps) |
 | `input_vad_data` | string | No | null | VAD result JSON from a prior `/v1/audio/vad` call. If provided, skips the internal VAD step in voice-cloning pipelines |
@@ -285,7 +465,7 @@ The `mode` parameter is **required** and controls which pipeline steps execute:
 
 #### TTS Language and Voice
 
-For models with multiple languages, the `language` parameter selects the language, and `voice` selects a preset voice within that language. Both are validated against the model's configuration. Call `GET /v1/audio/speech/models` to discover the available languages and voices for each model.
+For models with multiple languages, the `language` parameter selects the language, and `voice` selects a preset voice within that language. Both are validated against the model's configuration. Call [`GET /v1/audio/voices`](#voices-catalog) to discover every model's selectable voices — native presets and standard pack names, each labeled by source. `GET /v1/audio/speech/models` keeps the per-model language and voice card view.
 
 **OpenVoice V1 (`"openvoice_v1"`):**
 
@@ -316,13 +496,44 @@ No `language` parameter needed. Valid `voice` values: `"Bella"`, `"Jasper"`, `"L
 
 **Chatterbox, Chatterbox Turbo, and HarmonySpeech:**
 
-These models are **English-only** and use **voice cloning exclusively** — they do not expose a `language` or `voice` parameter. A reference voice must always be supplied via `input_audio` or `input_embedding` (see [Mode Selection](#tts-mode-selection)).
+These models are **English-only** and use **voice cloning exclusively** — they do not expose a `language` parameter and have no native voice presets. A reference voice must be supplied via `input_audio`, `input_embedding`, or a [standard voice pack name](#standard-voice-pack-names) in `voice` (see [Mode Selection](#tts-mode-selection)).
 
 - `"chatterbox"` — standard Chatterbox voice cloning
 - `"chatterbox_turbo"` — faster variant; additionally supports [paralinguistic tags](#paralinguistic-tags)
 - `"harmonyspeech"` — Harmony Speech V1 voice cloning pipeline
 
 > Only `"chatterbox_multilingual"`, `"openvoice_v1"`, and `"openvoice_v2"` accept the `language` parameter. All other TTS models are single-language (English) and do not expose it.
+
+#### Standard voice pack names
+
+The engine ships 28 named reference speakers. On a voice-cloning model, `voice`
+may be one of these names instead of a native preset; the server resolves it to
+the shipped reference clip and enters the normal cloning path. A pack name also
+implies `mode: "voice_cloning"`, so it can be combined with either declared mode
+and does not need `input_audio`.
+
+```
+Abigail  Adrian    Alexander  Alice    Austin   Axel     Connor   Cora
+Elena    Eli       Emily      Everett  Gabriel  Gianna   Henry    Ian
+Jade     Jeremiah  Jordan     Julian   Layla    Leonardo Michael  Miles
+Olivia   Ryan      Taylor     Thomas
+```
+
+Accepted by: `chatterbox`, `chatterbox_turbo`, `chatterbox_multilingual`,
+`openvoice_v1`, `openvoice_v2`, `harmonyspeech`, and the voice-conversion
+endpoint as `target_voice` — both `chatterbox_vc` (target audio) and the
+OpenVoice V1/V2 tone converters (target embedding). Single-speaker models
+(MeloTTS, KittenTTS, concrete OpenVoice/Melo synthesizers) list native voices
+only; a pack name on them is rejected with an error naming their native voices
+— it is never silently mapped to a native voice.
+
+The same name is the same *reference clip* everywhere, but each family embeds
+it in its own embedding space: expect the same speaker identity, not identical
+audio. Do not combine a pack name with `input_audio`/`input_embedding` (or
+`target_audio`/`target_embedding`); the server rejects the ambiguity. The
+`standard_voice_pack: true` config switch (default on) controls name resolution;
+native voices and explicit references are unaffected when it is off. See
+[Models](models.md#standard-voice-pack) for the full pack table.
 
 #### Paralinguistic Tags
 
@@ -615,11 +826,12 @@ Converts the voice in a source audio to sound like a target speaker. The target 
 | `source_audio` | string | Yes | - | Base64-encoded audio of the voice to convert |
 | `target_audio` | string | No | null | Base64-encoded reference speaker audio to clone |
 | `target_embedding` | string | No | null | Base64-encoded speaker embedding (faster than `target_audio`) |
+| `target_voice` | string | No | null | A [standard voice pack name](#standard-voice-pack-names) (e.g. `"Abigail"`) used as the conversion target. Supported by target-audio VC models (`"chatterbox_vc"`, the clip becomes `target_audio`) and by OpenVoice V1/V2 tone converters (the engine embeds the clip once through the pipeline encoder and uses the result as `target_embedding`); cannot be combined with `target_audio` or `target_embedding` |
 | `generation_options` | [GenerationOptions](#generationoptions) | No | null | Generation parameters |
 | `output_options` | [AudioOutputOptions](#audiooutputoptions) | No | null | Output audio format settings |
 | `pre_processing_filters` | list | No | `[]` | Filters to apply before conversion |
 
-> **Note:** At least one of `target_audio` or `target_embedding` must be provided.
+> **Note:** Provide exactly one target: `target_audio`, `target_embedding`, or `target_voice`. `target_voice` needs either a target-audio VC model (`chatterbox_vc`) or an OpenVoice tone-converter pipeline with its encoder and VAD configured. The OpenVoice embedding uses the same encoder artifact (and warm cache) as the TTS clone path, so a pack voice warmed at boot costs no encoder forward here.
 
 **Example Request:**
 

@@ -12,6 +12,7 @@ a variety of Speech-related model architectures for Text-To-Speech, Speech-To-Te
 
 ## Core Features
 - [OpenAI-Style APIs](docs/api.md) for Text-to-Speech, Speech-To-Text, Voice Conversion and Speech Embedding.
+- Voice discovery API: `GET /v1/audio/voices` lists every configured model's selectable voices — native presets and the shipped standard voice pack names, each labeled by source (See [API reference](docs/api.md#voices-catalog)).
 - Multi-Model & Parallel Model Processing Support (See [Models](docs/models.md)).
 - Toolchain-based request processing & internal re-routing between models working together (See [Routing](docs/routing.md)).
 - Honest batching: one-shot steps — synthesizers (OpenVoice V1, MeloTTS), speaker embedders, tone converters, vocoders and the VoiceFixer restorer/vocoder — process a step's requests as one padded batch, Chatterbox English/Turbo decode autoregressive rows on the shared KV-cache pool (up to four concurrent requests per step in the shipped configs, derived from the 1 GiB pool budget) and vocode finished rows as a padded batch, Chatterbox voice conversion batches its source tokenization and vocode passes (up to eight concurrent requests per step), KittenTTS (which cannot batch) and Whisper (native CTranslate2 workers on shared weights) run their requests as parallel lanes with fair short/long admission, every other non-batchable step uses a documented per-item loop, and every model's `max_batch_size` matches what its executor actually does (See [Batching & concurrency](docs/batching.md)).

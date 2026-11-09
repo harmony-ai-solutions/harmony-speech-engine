@@ -18,6 +18,22 @@
 # clamps its slots or degrades that model to the sequential loop (never an
 # error). Pending the benchmark-host `batching:1-vs-N` gate; set
 # `batched_inference: false` to force the proven sequential loop everywhere.
+# `standard_voice_pack` (Phase 13-1) enables the vendored MIT standard voice
+# pack: cloning-capable models accept the pack's names (e.g. `Abigail`) as
+# `voice` / `target_voice` and resolve them to the shipped reference clip.
+# `false` makes a pack name an honest 400 instead of a silently ignored voice
+# id. Native voices and explicit references are unaffected.
+standard_voice_pack: true
+
+# Phase 13-2: persist pack-voice embeddings so a restart does not re-embed every
+# standard voice. On boot the disk artifacts are hydrated into the in-memory
+# embedding cache (no model forwards); the background warm-up then fills any
+# missing entries. `voice_pack_cache_dir` defaults to the platform user-cache
+# directory (Windows: %LOCALAPPDATA%\harmony-speech\voice-pack; otherwise
+# $XDG_CACHE_HOME/harmony-speech/voice-pack). Delete that directory to clear it.
+voice_pack_warmup: true
+# voice_pack_cache_dir: "/custom/path/voice-pack"
+
 ar_inference:
   kv_cache_budget_bytes: 2952790016   # 2.75 GiB; fits all three AR arenas at their preferred caps
   default_cap_tokens: 1536            # ceiling; English/Multilingual clamp to 1152

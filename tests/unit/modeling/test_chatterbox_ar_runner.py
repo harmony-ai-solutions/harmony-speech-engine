@@ -706,3 +706,41 @@ def test_cast_conditionals_applies_exaggeration_without_mutating(english_model):
     assert float(conds.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.5)
     assert float(updated.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.9)
     assert updated.t3.speaker_emb.dtype == next(model.parameters()).dtype
+
+
+@pytest.mark.unit
+def test_cast_conditionals_second_request_leaves_cached_object_byte_identical(english_model):
+    """Phase 13-2 precondition: a persisted/shared object is never mutated.
+
+    The disk layer may persist (and later hydrate) the *cached* conditionals, so
+    two requests with different ``exaggeration`` values must both derive fresh T3
+    halves while the cached object stays byte-identical to what was stored.
+    """
+    model, hp = english_model
+    conds = Conditionals(_english_conds(hp), {})
+
+    def snapshot():
+        return {
+            key: value.detach().clone() if torch.is_tensor(value) else value
+            for key, value in vars(conds.t3).items()
+        }
+
+    before = snapshot()
+    first = cast_conditionals(conds, model, exaggeration=0.5)
+    second = cast_conditionals(conds, model, exaggeration=0.9)
+
+    # Two independent derived objects; neither aliases the cached T3 half.
+    assert first is not second
+    assert first.t3 is not second.t3
+    assert first.t3 is not conds.t3
+    assert second.t3 is not conds.t3
+    # The cached object is untouched (byte-identical tensors, equal scalars).
+    after = snapshot()
+    assert set(after) == set(before)
+    for key, value in before.items():
+        if torch.is_tensor(value):
+            assert torch.equal(after[key], value), f"cached field {key!r} mutated"
+        else:
+            assert after[key] == value
+    assert float(first.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.5)
+    assert float(second.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.9)

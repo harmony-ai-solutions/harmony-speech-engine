@@ -76,11 +76,22 @@ def synth_wav_b64(sample_rate: int = 24000, seconds: float = 1.0, amplitude: flo
 class FakeEngine:
     """Stand-in for :class:`AsyncHarmonySpeech` with optional boundary decoding."""
 
-    def __init__(self, *, decode_inputs: bool = False, output_wav_b64: str | None = None):
+    def __init__(
+        self,
+        *,
+        decode_inputs: bool = False,
+        output_wav_b64: str | None = None,
+        model_configs: list | None = None,
+        standard_voice_pack: bool = True,
+    ):
         self.decode_inputs = decode_inputs
         self.output_wav_b64 = output_wav_b64 or wav_b64()
         self.requests = []
         self.abort_calls = []
+        # Catalog state read by ``GET /v1/audio/voices`` (Phase 13-3); the
+        # serving layer reads the same attributes off the real engine.
+        self.model_configs = list(model_configs or [])
+        self.standard_voice_pack = bool(standard_voice_pack)
 
     async def get_model_configs(self):
         return []
@@ -175,8 +186,19 @@ class WireApp:
         "ac": "test-ac",
     }
 
-    def __init__(self, *, decode_inputs: bool = False, max_upload_bytes: int | None = None):
-        self.engine = FakeEngine(decode_inputs=decode_inputs)
+    def __init__(
+        self,
+        *,
+        decode_inputs: bool = False,
+        max_upload_bytes: int | None = None,
+        model_configs: list | None = None,
+        standard_voice_pack: bool = True,
+    ):
+        self.engine = FakeEngine(
+            decode_inputs=decode_inputs,
+            model_configs=model_configs,
+            standard_voice_pack=standard_voice_pack,
+        )
         self.max_upload_bytes = max_upload_bytes
         self._stack: ExitStack | None = None
         self.app = None

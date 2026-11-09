@@ -239,6 +239,21 @@ class EngineConfig:
     embedding_cache_ttl_s: float = 300.0
     embedding_cache_max_entries: int = 1000
     embedding_cache_max_bytes: int = 1073741824
+    # Standard voice pack (Phase 13-1). Global on/off switch; `True` only adds
+    # resolvable voice names for cloning-capable models (the vendored pack is
+    # always shipped). When disabled, a pack name is an honest 400 rather than
+    # a silently ignored voice id. Native voices and explicit references are
+    # unaffected either way.
+    standard_voice_pack: bool = True
+    # Standard voice pack persistent embedding cache (Phase 13-2). When enabled,
+    # pack-voice conditioning artifacts are persisted under
+    # ``voice_pack_cache_dir`` (default: the platform user-cache directory) and
+    # hydrated into the in-memory embedding cache at model init, so a restart
+    # does not re-embed every pack voice. ``voice_pack_warmup`` also runs the
+    # one-shot background warm-up after the executors are resident. The code
+    # default is off; both shipped configs set it on.
+    voice_pack_warmup: bool = False
+    voice_pack_cache_dir: str | None = None
     # Optional hard bound for the projected Whisper device footprint (Phase
     # 10-3). `None` keeps the boot check advisory (warn when the projected peak
     # exceeds the measured free device headroom); a value turns an overshoot
@@ -291,6 +306,12 @@ class EngineConfig:
         if isinstance(cap_tokens, bool) or not isinstance(cap_tokens, int) or cap_tokens <= 0:
             raise ValueError(f"ar_cache_default_cap_tokens must be a positive int, got {cap_tokens!r}")
 
+        if self.voice_pack_cache_dir is not None and not isinstance(self.voice_pack_cache_dir, str):
+            raise ValueError(
+                "voice_pack_cache_dir must be a filesystem path string or None, "
+                f"got {self.voice_pack_cache_dir!r}"
+            )
+
     def to_dict(self):
         """Return the configs as a dictionary, for use in **kwargs."""
         return dict((field.name, getattr(self, field.name)) for field in fields(self))
@@ -329,6 +350,9 @@ class EngineConfig:
             embedding_cache_ttl_s=float(config_data.get("embedding_cache_ttl_s", 300.0)),
             embedding_cache_max_entries=int(config_data.get("embedding_cache_max_entries", 1000)),
             embedding_cache_max_bytes=int(config_data.get("embedding_cache_max_bytes", 1073741824)),
+            standard_voice_pack=bool(config_data.get("standard_voice_pack", True)),
+            voice_pack_warmup=bool(config_data.get("voice_pack_warmup", False)),
+            voice_pack_cache_dir=config_data.get("voice_pack_cache_dir"),
             whisper_vram_budget_bytes=(
                 None
                 if config_data.get("whisper_vram_budget_bytes") is None

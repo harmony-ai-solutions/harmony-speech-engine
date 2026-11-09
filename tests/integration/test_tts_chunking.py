@@ -1,4 +1,4 @@
-"""Long-form TTS chunking + stitching through the real engine loop (Phase 12-2).
+﻿"""Long-form TTS chunking + stitching through the real engine loop (Phase 12-2).
 
 Every test here drives the *real* ``OpenAIServingTextToSpeech`` and the real
 ``AsyncHarmonySpeech`` background loop, scheduler and runner dispatch. Model
@@ -47,6 +47,8 @@ from harmonyspeech.endpoints.openai.protocol import (
     GenerationOptions,
     TextToSpeechRequest,
     TextToSpeechResponse,
+    VoiceConversionRequest,
+    VoiceConversionResponse,
 )
 from harmonyspeech.endpoints.openai.serving_text_to_speech import (
     NATIVE_SPEED_MODEL_TYPES,
@@ -193,6 +195,23 @@ class HarmonySpeechVocoderStubModel(torch.nn.Module):
         frames = int(c.shape[0])
         # Match the real ``inference`` contract: (samples, channels).
         return torch.full((frames * 4, 1), 0.1)
+
+
+class HarmonySpeechEncoderStubModel(torch.nn.Module):
+    """HarmonySpeech encoder stand-in: counts real embedding forwards."""
+
+    def __init__(self):
+        super().__init__()
+        self._param = torch.nn.Parameter(torch.zeros(1))
+        self.forward_calls = 0
+
+    def forward(self, utterances=None, **kwargs):  # noqa: ARG002 - upstream signature
+        self.forward_calls += 1
+        return torch.ones(int(utterances.shape[0]), 16)
+
+    def forward_batched(self, x, lengths):  # noqa: ARG002 - padded-batch path
+        self.forward_calls += 1
+        return torch.ones(int(x.shape[0]), 16)
 
 
 class _RefEncStub(torch.nn.Module):
@@ -444,6 +463,16 @@ def _prepare_inputs(model_config, requests_to_batch):
                 inputs.append((text, "en", speaker, 0.5, 0.5, 0.8, 1.2, 1.0, 0.05))
             else:
                 inputs.append((text, speaker, 0.5, 0.5, 0.8, 1.2, 1.0, 0.05))
+        elif model_type == "ChatterboxEmbedding":
+            inputs.append(entry.artifacts["input_audio"])
+        elif model_type == "ChatterboxVC":
+            inputs.append(
+                (
+                    entry.artifacts["source_audio"],
+                    None,
+                    entry.artifacts.get("target_audio"),
+                )
+            )
         elif model_type == "FasterWhisper":
             inputs.append(entry.artifacts["input_audio"])
         elif model_type == "KittenTTSSynthesizer":
@@ -467,17 +496,29 @@ def _prepare_inputs(model_config, requests_to_batch):
         elif model_type == "HarmonySpeechVocoder":
             mel = entry.artifacts["input_audio"]
             inputs.append((mel, mel.breaks))
+        elif model_type == "HarmonySpeechEncoder":
+            inputs.append(entry.artifacts["input_audio"])
         elif model_type in ("OpenVoiceV1ToneConverterEncoder", "OpenVoiceV2ToneConverterEncoder"):
+            # The fake VAD yields exactly one segment, so the faithful segment
+            # set is one row (the real prepare slices the VAD segments).
             segment = AudioArtifact.from_numpy(
                 np.full((SAMPLE_RATE,), 0.1, dtype=np.float32), SAMPLE_RATE
             )
-            inputs.append([segment, segment])
+            inputs.append([segment])
         elif model_type in ("OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"):
-            audio = entry.artifacts["input_audio"]
-            target = entry.artifacts.get("input_embedding") or SpeakerArtifact(
-                embedding=torch.ones(1, 4, 1), backend="openvoice"
-            )
-            source = SpeakerArtifact(embedding=torch.ones(1, 4, 1), backend="openvoice")
+            request = entry.request_data
+            if isinstance(request, VoiceConversionRequestInput):
+                # VC reads source_audio + target_embedding and uses the target
+                # embedding as the source too (no native source voice).
+                audio = entry.artifacts["source_audio"]
+                target = entry.artifacts.get("target_embedding")
+                source = target
+            else:
+                audio = entry.artifacts["input_audio"]
+                target = entry.artifacts.get("input_embedding") or SpeakerArtifact(
+                    embedding=torch.ones(1, 4, 1), backend="openvoice"
+                )
+                source = SpeakerArtifact(embedding=torch.ones(1, 4, 1), backend="openvoice")
             inputs.append((audio, target, source))
         else:  # pragma: no cover - harness guard
             raise AssertionError(f"no stub prepare for {model_type}")
@@ -525,6 +566,17 @@ class EngineHarness:
                 "harmonyspeech.task_handler.model_runner_base.BatchedInferencePipeline",
                 _FakeWhisperPipeline,
             ),
+            # The HarmonySpeech clone path runs its encoder on the pack WAV;
+            # the real numpy frontend is irrelevant to the routing/cache gates,
+            # so it is replaced by one deterministic partial-utterance row.
+            patch(
+                "harmonyspeech.task_handler.model_runner_base.preprocess_wav",
+                side_effect=lambda wav, source_sr=None: wav,
+            ),
+            patch(
+                "harmonyspeech.task_handler.model_runner_base.get_input_frames",
+                side_effect=lambda wav: np.zeros((1, 3, 40), dtype=np.float32),
+            ),
         ]
         for patcher in self._patchers:
             patcher.start()
@@ -560,6 +612,11 @@ class EngineHarness:
         return self
 
     async def __aexit__(self, *exc):
+        warmup = getattr(self.engine, "_voice_pack_warmup_task", None)
+        if warmup is not None and not warmup.done():
+            warmup.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await warmup
         loop = getattr(self.engine, "_background_loop_unshielded", None)
         if loop is not None and not loop.done():
             loop.cancel()
@@ -1311,7 +1368,7 @@ async def test_openvoice_clone_chunking_embeds_once():
 # ---------------------------------------------------------------------------
 
 
-def _openvoice_v2_clone_harness():
+def _openvoice_v2_clone_harness(*, engine_kwargs=None):
     configs = [
         _model_config("faster-whisper", "FasterWhisper"),
         _model_config("ov2-encoder", "OpenVoiceV2ToneConverterEncoder"),
@@ -1326,7 +1383,7 @@ def _openvoice_v2_clone_harness():
         "ov2-synth-en": MeloStubModel(),
         "ov2-tone-converter": ToneConverterStubModel(),
     }
-    return EngineHarness(configs, models), models
+    return EngineHarness(configs, models, engine_kwargs=engine_kwargs), models
 
 
 def _ov2_clone_request(*, model="openvoice_v2", split_text=True, vad_data=None):
@@ -1622,4 +1679,700 @@ async def test_slow_loop_chunked_burst_expires_without_override():
     errors = [response for response in responses if isinstance(response, ErrorResponse)]
     assert all("exceeded timeout" in response.message for response in errors), errors
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 13-1: standard voice pack routing
+#
+# The pack ships reference WAVs; a pack name is resolved ONCE per HTTP request
+# into the request's `input_audio` (+ cloning mode), before the boundary decode
+# and the 12-2 chunk dispatcher. These tests drive the real serving layer and
+# engine loop with the production-shaped ChatterboxEmbedding executor, so the
+# 7-2 embedding cache assertions are real.
+# ---------------------------------------------------------------------------
+
+
+class ChatterboxVCStubModel(torch.nn.Module):
+    """ChatterboxVC stand-in: target-voice prep + deterministic vocode."""
+
+    def __init__(self):
+        super().__init__()
+        self._param = torch.nn.Parameter(torch.zeros(1))
+        self.sr = SAMPLE_RATE
+        self.watermarker = CountingWatermarker()
+        self.ref_dict = {"target": 0}
+        self.target_calls = 0
+
+    def set_target_voice(self, wav):  # noqa: ARG002 - upstream signature
+        self.target_calls += 1
+        self.ref_dict = {"target": self.target_calls}
+
+    def generate(self, audio=None, **kwargs):  # noqa: ARG002 - upstream signature
+        samples = max(1, int(audio.shape[-1])) if hasattr(audio, "shape") else SAMPLE_RATE
+        return torch.full((1, samples), 0.1)
+
+
+def _pack_chatterbox_harness(*, with_turbo=False):
+    """Production-shaped chatterbox deployment: dedicated embed + TTS executors."""
+    configs = [
+        _model_config("chatterbox_embedding", "ChatterboxEmbedding"),
+        _model_config("chatterbox", "ChatterboxTTS"),
+    ]
+    models = {
+        "chatterbox_embedding": ChatterboxStubModel(model_type="ChatterboxEmbedding"),
+        "chatterbox": ChatterboxStubModel(model_type="ChatterboxTTS"),
+    }
+    if with_turbo:
+        configs.append(_model_config("chatterbox_turbo", "ChatterboxTurboTTS"))
+        models["chatterbox_turbo"] = ChatterboxStubModel(model_type="ChatterboxTurboTTS")
+    return EngineHarness(configs, models), models
+
+
+def _pack_audio_hash(name):
+    from harmonyspeech.common.audio_codec import decode_audio
+    from harmonyspeech.modeling.voice_catalog import standard_voice_path
+
+    path = standard_voice_path(name)
+    assert path is not None and path.is_file()
+    waveform, sample_rate = decode_audio(path.read_bytes())
+    return AudioArtifact.from_numpy(waveform, sample_rate).content_hash
+
+
+def _pack_request(model, voice="Abigail", text=None, language=None, **options):
+    return TextToSpeechRequest(
+        model=model,
+        input=text or "Hello from the standard voice pack.",
+        mode="voice_cloning",
+        voice=voice,
+        language=language,
+        generation_options=GenerationOptions(**options),
+    )
+
+
+def _vc_serving(harness):
+    from harmonyspeech.endpoints.openai.serving_voice_conversion import (
+        OpenAIServingVoiceConversion,
+    )
+
+    return OpenAIServingVoiceConversion(
+        harness.engine,
+        OpenAIServingVoiceConversion.models_from_config(harness.configs),
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_resolves_to_the_shipped_clip_and_caches():
+    """`voice: Abigail` becomes the pack WAV; the repeat request is a cache hit."""
+    harness, models = _pack_chatterbox_harness()
+    embed = models["chatterbox_embedding"]
+    tts = models["chatterbox"]
+    recorded = []
+
+    async with harness:
+        original_add = harness.engine.add_request
+
+        async def recording_add(request_id, request_data, **kwargs):
+            recorded.append((request_data, dict(kwargs.get("artifacts") or {})))
+            return await original_add(request_id, request_data, **kwargs)
+
+        harness.engine.add_request = recording_add
+        first = await _speak(harness, _pack_request("chatterbox"))
+        cache = harness.engine.engine.embedding_cache
+        after_first = cache.stats()
+        second = await _speak(harness, _pack_request("chatterbox"))
+        after_second = cache.stats()
+
+    assert isinstance(first, TextToSpeechResponse), first
+    assert isinstance(second, TextToSpeechResponse), second
+    # The dispatched request carries the pack WAV as its cloning reference and
+    # the derived cloning mode; no native voice id is left behind.
+    dispatched, artifacts = recorded[0]
+    assert dispatched.mode == "voice_cloning"
+    assert dispatched.voice_id is None
+    assert artifacts["input_audio"].content_hash == _pack_audio_hash("Abigail")
+    # One real embedding computation, reused by the repeat request (7-2).
+    assert embed.prepare_calls == 1
+    assert tts.prepare_calls == 0
+    assert after_first["misses"] == 1 and after_first["stores"] == 1
+    assert after_second["hits"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_with_split_text_embeds_once_across_all_chunks():
+    """Extends the 12-2 embed-once gate: a pack reference is embedded once."""
+    harness, models = _pack_chatterbox_harness()
+    embed = models["chatterbox_embedding"]
+    tts = models["chatterbox"]
+
+    async with harness:
+        response = await _speak(
+            harness,
+            _pack_request(
+                "chatterbox", text=TEXT_3, split_text=True, chunk_size=40
+            ),
+        )
+        chunks_generated = len(tts.generate_calls)
+        cache = harness.engine.engine.embedding_cache
+        after_chunked = cache.stats()
+        again = await _speak(
+            harness,
+            _pack_request(
+                "chatterbox", text=TEXT_3, split_text=True, chunk_size=40
+            ),
+        )
+        after_repeat = cache.stats()
+
+    assert isinstance(response, TextToSpeechResponse), response
+    assert isinstance(again, TextToSpeechResponse), again
+    wave, sr = _decode(response)
+    assert wave.size > 0 and sr > 0
+    assert embed.prepare_calls == 1
+    assert chunks_generated == 3
+    assert len(tts.generate_calls) == 6
+    assert after_chunked["stores"] == 1 and after_chunked["misses"] == 1
+    assert after_repeat["hits"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_same_pack_voice_works_on_two_chatterbox_families():
+    """The same name resolves on chatterbox and chatterbox_turbo (shared VE)."""
+    harness, models = _pack_chatterbox_harness(with_turbo=True)
+    async with harness:
+        standard = await _speak(harness, _pack_request("chatterbox"))
+        turbo = await _speak(harness, _pack_request("chatterbox_turbo"))
+
+    assert isinstance(standard, TextToSpeechResponse), standard
+    assert isinstance(turbo, TextToSpeechResponse), turbo
+    for response in (standard, turbo):
+        wave, sr = _decode(response)
+        assert wave.size > 0 and sr > 0
+    # One embedding identity (the shared VoiceEncoder) computed once, reused.
+    assert models["chatterbox_embedding"].prepare_calls == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_on_melo_is_an_honest_400():
+    """A single-speaker model lists native voices only; a pack name never maps."""
+    config = _model_config(
+        "melo-en", "MeloTTSSynthesizer", language="EN", voices=["EN-Newest"]
+    )
+    harness = EngineHarness([config], {"melo-en": MeloStubModel()})
+    request = TextToSpeechRequest(
+        model="melo-en",
+        input="Hello.",
+        mode="single_speaker_tts",
+        language="EN",
+        voice="Abigail",
+    )
+    async with harness:
+        response = await _speak(harness, request)
+        dispatched = harness.engine.engine.model_executors["melo-en"].batch_sizes
+
+    assert isinstance(response, ErrorResponse), response
+    assert "standard voice pack name" in response.message
+    assert "does not support voice cloning" in response.message
+    assert "EN-Newest" in response.message
+    assert dispatched == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_target_voice_on_chatterbox_vc_resolves_and_caches():
+    """`target_voice: Abigail` becomes the VC target clip (and rides 7-2)."""
+    config = _model_config("chatterbox_vc", "ChatterboxVC")
+    model = ChatterboxVCStubModel()
+    harness = EngineHarness([config], {"chatterbox_vc": model})
+    request = VoiceConversionRequest(
+        model="chatterbox_vc",
+        source_audio=_reference_audio_b64(),
+        target_voice="Abigail",
+    )
+    async with harness:
+        serving_vc = _vc_serving(harness)
+        first = await serving_vc.convert_voice(request, RAW)
+        cache = harness.engine.engine.embedding_cache
+        after_first = cache.stats()
+        second = await serving_vc.convert_voice(request, RAW)
+        after_second = cache.stats()
+
+    assert isinstance(first, VoiceConversionResponse), first
+    assert isinstance(second, VoiceConversionResponse), second
+    assert model.target_calls == 1
+    assert after_first["misses"] == 1 and after_first["stores"] == 1
+    assert after_second["hits"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_is_rejected_when_the_pack_is_disabled():
+    """`standard_voice_pack: false` turns a pack name into an honest 400."""
+    harness, _models = _pack_chatterbox_harness()
+    harness.engine_kwargs["standard_voice_pack"] = False
+    async with harness:
+        response = await _speak(harness, _pack_request("chatterbox"))
+    assert isinstance(response, ErrorResponse), response
+    assert "standard voice pack is disabled" in response.message
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_conflicts_with_an_explicit_reference():
+    harness, _models = _pack_chatterbox_harness()
+    request = TextToSpeechRequest(
+        model="chatterbox",
+        input="Hello.",
+        mode="voice_cloning",
+        voice="Abigail",
+        input_audio=_reference_audio_b64(),
+    )
+    async with harness:
+        response = await _speak(harness, request)
+    assert isinstance(response, ErrorResponse), response
+    assert "not both" in response.message
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_on_openvoice_v2_clone_resolves_and_caches():
+    """`voice: Abigail` on the openvoice_v2 TTS clone path embeds once.
+
+    The pack name resolves to the shipped clip, the native source-voice default
+    (``EN-Newest``) is applied, and the repeat request is a 7-2 cache hit.
+    """
+    harness, models = _openvoice_v2_clone_harness()
+    encoder = models["ov2-encoder"]
+    recorded = []
+
+    async with harness:
+        original_add = harness.engine.add_request
+
+        async def recording_add(request_id, request_data, **kwargs):
+            recorded.append(request_data)
+            return await original_add(request_id, request_data, **kwargs)
+
+        harness.engine.add_request = recording_add
+        first = await _speak(
+            harness, _pack_request("openvoice_v2", language="EN")
+        )
+        cache = harness.engine.engine.embedding_cache
+        after_first = cache.stats()
+        forwards_after_first = encoder.ref_enc.forward_calls
+        second = await _speak(
+            harness, _pack_request("openvoice_v2", language="EN")
+        )
+        after_second = cache.stats()
+
+    assert isinstance(first, TextToSpeechResponse), first
+    assert isinstance(second, TextToSpeechResponse), second
+    # The dispatched clone request carries the pack WAV and the native default
+    # source voice (OpenVoice still needs a valid style for its synthesizer).
+    tts_requests = [
+        request for request in recorded if isinstance(request, TextToSpeechRequestInput)
+    ]
+    assert tts_requests
+    assert tts_requests[0].voice_id == "EN-Newest"
+    assert tts_requests[0].mode == "voice_cloning"
+    # One real encoder forward for the first request, none for the repeat.
+    assert forwards_after_first == 1
+    assert encoder.ref_enc.forward_calls == forwards_after_first
+    assert after_first["misses"] == 1 and after_first["stores"] == 1
+    assert after_second["hits"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_voice_on_harmonyspeech_clone_mode():
+    """`voice: Abigail` drives the harmonyspeech encoder → synth → vocoder path."""
+    configs = [
+        _model_config("hs1-encoder", "HarmonySpeechEncoder"),
+        _model_config("hs1-synthesizer", "HarmonySpeechSynthesizer"),
+        _model_config("hs1-vocoder", "HarmonySpeechVocoder"),
+    ]
+    encoder = HarmonySpeechEncoderStubModel()
+    models = {
+        "hs1-encoder": encoder,
+        "hs1-synthesizer": HarmonySpeechSynthStubModel(),
+        "hs1-vocoder": HarmonySpeechVocoderStubModel(),
+    }
+    harness = EngineHarness(configs, models)
+    recorded = []
+
+    async with harness:
+        original_add = harness.engine.add_request
+
+        async def recording_add(request_id, request_data, **kwargs):
+            recorded.append(request_data)
+            return await original_add(request_id, request_data, **kwargs)
+
+        harness.engine.add_request = recording_add
+        first = await _speak(harness, _pack_request("harmonyspeech"))
+        cache = harness.engine.engine.embedding_cache
+        after_first = cache.stats()
+        forwards_after_first = encoder.forward_calls
+        second = await _speak(harness, _pack_request("harmonyspeech"))
+        after_second = cache.stats()
+
+    assert isinstance(first, TextToSpeechResponse), first
+    assert isinstance(second, TextToSpeechResponse), second
+    tts_requests = [
+        request for request in recorded if isinstance(request, TextToSpeechRequestInput)
+    ]
+    assert tts_requests
+    # Harmony Speech has no native voices, so the pack voice clears voice_id.
+    assert tts_requests[0].voice_id is None
+    assert tts_requests[0].mode == "voice_cloning"
+    assert forwards_after_first == 1
+    assert encoder.forward_calls == forwards_after_first
+    assert after_first["misses"] == 1 and after_first["stores"] == 1
+    assert after_second["hits"] == 1
+
+
+def _ov2_vc_request(model="openvoice_v2"):
+    return VoiceConversionRequest(
+        model=model,
+        source_audio=_reference_audio_b64(),
+        target_voice="Abigail",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_target_voice_on_openvoice_v2_embeds_cold_then_caches():
+    """OV VC `target_voice` runs the pipeline embed step once, then rides 7-2.
+
+    The pack clip is embedded through ``vad → embed`` and set as
+    ``target_embedding`` (never ``target_audio``, which the tone converter
+    ignores). Cold = one encoder forward; warm = zero.
+    """
+    harness, models = _openvoice_v2_clone_harness()
+    encoder = models["ov2-encoder"]
+    recorded = []
+
+    async with harness:
+        original_add = harness.engine.add_request
+
+        async def recording_add(request_id, request_data, **kwargs):
+            recorded.append((request_data, dict(kwargs.get("artifacts") or {})))
+            return await original_add(request_id, request_data, **kwargs)
+
+        harness.engine.add_request = recording_add
+        serving_vc = _vc_serving(harness)
+        first = await serving_vc.convert_voice(_ov2_vc_request(), RAW)
+        cache = harness.engine.engine.embedding_cache
+        after_first = cache.stats()
+        forwards_after_first = encoder.ref_enc.forward_calls
+        second = await serving_vc.convert_voice(_ov2_vc_request(), RAW)
+        after_second = cache.stats()
+
+    assert isinstance(first, VoiceConversionResponse), first
+    assert isinstance(second, VoiceConversionResponse), second
+    # One embedding sub-request per HTTP request, routed at the pipeline id
+    # (VAD first), then the VC request itself.
+    embed_requests = [
+        request
+        for request, _artifacts in recorded
+        if isinstance(request, SpeechEmbeddingRequestInput)
+    ]
+    assert len(embed_requests) == 2
+    assert all(request.requested_model == "openvoice_v2" for request in embed_requests)
+    vc_artifacts = [
+        artifacts
+        for request, artifacts in recorded
+        if isinstance(request, VoiceConversionRequestInput)
+    ]
+    assert len(vc_artifacts) == 2
+    for artifacts in vc_artifacts:
+        assert isinstance(artifacts["target_embedding"], SpeakerArtifact)
+        assert "target_audio" not in artifacts
+    # Cold: exactly one encoder forward; warm: none.
+    assert forwards_after_first == 1
+    assert encoder.ref_enc.forward_calls == forwards_after_first
+    assert after_first["misses"] == 1 and after_first["stores"] == 1
+    assert after_second["hits"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_target_voice_on_openvoice_v2_is_warm_after_pack_warmup(tmp_path):
+    """The VC target embedding shares the 13-2 warm-up cache: zero forwards.
+
+    Warm-up computes the OV2 encoder artifact for every pack voice (through the
+    same ``vad → embed`` route the VC request uses); the first VC request for a
+    warmed voice must therefore perform no encoder forward.
+    """
+    harness, models = _openvoice_v2_clone_harness(
+        engine_kwargs={
+            "voice_pack_warmup": True,
+            "voice_pack_cache_dir": str(tmp_path),
+        }
+    )
+    encoder = models["ov2-encoder"]
+    async with harness:
+        stats = await harness.engine.start_voice_pack_warmup()
+        warmed_forwards = encoder.ref_enc.forward_calls
+        encoder.ref_enc.forward_calls = 0
+        serving_vc = _vc_serving(harness)
+        response = await serving_vc.convert_voice(_ov2_vc_request(), RAW)
+        cache = harness.engine.engine.embedding_cache
+
+    assert stats["failed"] == 0
+    assert warmed_forwards > 0
+    assert isinstance(response, VoiceConversionResponse), response
+    # The VC path reuses the warm artifact: no encoder forward at all.
+    assert encoder.ref_enc.forward_calls == 0
+    assert cache.stats()["hits"] >= 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_target_voice_on_concrete_ov2_tone_converter():
+    """A directly named tone converter resolves its sibling encoder pipeline."""
+    harness, models = _openvoice_v2_clone_harness()
+    encoder = models["ov2-encoder"]
+    recorded = []
+
+    async with harness:
+        original_add = harness.engine.add_request
+
+        async def recording_add(request_id, request_data, **kwargs):
+            recorded.append(request_data)
+            return await original_add(request_id, request_data, **kwargs)
+
+        harness.engine.add_request = recording_add
+        serving_vc = _vc_serving(harness)
+        response = await serving_vc.convert_voice(
+            _ov2_vc_request(model="ov2-tone-converter"), RAW
+        )
+
+    assert isinstance(response, VoiceConversionResponse), response
+    embed_requests = [
+        request
+        for request in recorded
+        if isinstance(request, SpeechEmbeddingRequestInput)
+    ]
+    assert len(embed_requests) == 1
+    # The concrete converter routes its embedding through the pipeline id.
+    assert embed_requests[0].requested_model == "openvoice_v2"
+    assert encoder.ref_enc.forward_calls == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_pack_target_voice_on_a_tone_converter_without_encoder_is_a_400():
+    """No configured encoder/VAD => honest 400, never a half-run request."""
+    config = _model_config("ov2-tone-converter", "OpenVoiceV2ToneConverter")
+    harness = EngineHarness([config], {"ov2-tone-converter": ToneConverterStubModel()})
+    async with harness:
+        serving_vc = _vc_serving(harness)
+        response = await serving_vc.convert_voice(
+            _ov2_vc_request(model="ov2-tone-converter"), RAW
+        )
+    assert isinstance(response, ErrorResponse), response
+    assert "does not accept a standard target voice" in response.message
+
+
+# ---------------------------------------------------------------------------
+# Phase 13-2: persistent pack-embedding cache + warm-up
+#
+# The disk layer persists the *same* artifact the 7-2 handler caches, so these
+# tests use a Chatterbox stub whose conditionals are a real upstream
+# ``Conditionals`` (the shared chunking stub's SimpleNamespace is deliberately
+# not serializable). Warm-up goes through the real engine loop/scheduler; the
+# second-boot gate proves hydration serves a request with zero embed forwards.
+# ---------------------------------------------------------------------------
+
+
+class _SerializableChatterboxStubModel(ChatterboxStubModel):
+    """Chatterbox stub whose conditionals round-trip through the disk store."""
+
+    def prepare_conditionals(self, audio_buf, **kwargs):  # noqa: ARG002 - upstream signature
+        from chatterbox.tts import Conditionals, T3Cond
+        from harmonyspeech.common.audio_codec import decode_audio
+
+        waveform, _sr = decode_audio(audio_buf.read())
+        self.prepare_calls += 1
+        self.conds = Conditionals(
+            T3Cond(
+                speaker_emb=torch.tensor([float(waveform[0]), float(waveform.std())]),
+                emotion_adv=torch.zeros(1, 1, 1),
+            ),
+            {"ge_bes": torch.tensor([float(waveform.std())])},
+        )
+
+
+class _FailingEmbedStubModel(ChatterboxStubModel):
+    """Every conditioning pass fails: warm-up must log, skip and keep serving."""
+
+    def prepare_conditionals(self, audio_buf, **kwargs):  # noqa: ARG002 - upstream signature
+        self.prepare_calls += 1
+        raise RuntimeError("synthetic warm-up embedding failure")
+
+
+def _warmup_harness(cache_dir, *, embed_model=None):
+    """Production-shaped chatterbox deployment with the 13-2 knobs enabled."""
+    configs = [
+        _model_config("chatterbox_embedding", "ChatterboxEmbedding"),
+        _model_config("chatterbox", "ChatterboxTTS"),
+    ]
+    models = {
+        "chatterbox_embedding": embed_model
+        or _SerializableChatterboxStubModel(model_type="ChatterboxEmbedding"),
+        "chatterbox": ChatterboxStubModel(model_type="ChatterboxTTS"),
+    }
+    harness = EngineHarness(
+        configs,
+        models,
+        engine_kwargs={
+            "voice_pack_warmup": True,
+            "voice_pack_cache_dir": str(cache_dir),
+        },
+    )
+    return harness, models
+
+
+def _warmup_conditionals_artifact():
+    from chatterbox.tts import Conditionals, T3Cond
+
+    return SpeakerArtifact(
+        conditionals=Conditionals(
+            T3Cond(speaker_emb=torch.zeros(1, 2), emotion_adv=torch.zeros(1, 1, 1)),
+            {"ge_bes": torch.tensor([0.0])},
+        ),
+        backend="chatterbox",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_warmup_populates_disk_and_memory(tmp_path):
+    """Warm-up computes every pack voice once and persists each artifact."""
+    from harmonyspeech.modeling.voice_catalog import standard_voice_names
+
+    harness, models = _warmup_harness(tmp_path)
+    embed = models["chatterbox_embedding"]
+    voices = standard_voice_names()
+
+    async with harness:
+        task = harness.engine.start_voice_pack_warmup()
+        assert task is not None
+        stats = await task
+        cache = harness.engine.engine.embedding_cache
+        entries = cache.stats()["entries"]
+
+    assert stats["targets"] == len(voices)
+    assert stats["computed"] == len(voices)
+    assert stats["persisted"] == len(voices)
+    assert stats["failed"] == 0
+    assert embed.prepare_calls == len(voices)
+    assert entries == len(voices)
+    assert len(list(tmp_path.glob("*.pt"))) == len(voices)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_second_boot_with_warm_disk_does_zero_embed_forwards(tmp_path):
+    """A warm disk hydrates the 7-2 cache: the first request is a pure hit."""
+    from harmonyspeech.modeling.voice_catalog import standard_voice_names
+    from harmonyspeech.modeling.voice_pack_cache import hydrate_embedding_cache
+
+    first_boot, _models = _warmup_harness(tmp_path)
+    async with first_boot:
+        await first_boot.engine.start_voice_pack_warmup()
+
+    second_boot, models = _warmup_harness(tmp_path)
+    embed = models["chatterbox_embedding"]
+    async with second_boot:
+        restored = hydrate_embedding_cache(second_boot.engine.engine)
+        response = await _speak(second_boot, _pack_request("chatterbox"))
+
+    assert restored == len(standard_voice_names())
+    assert isinstance(response, TextToSpeechResponse), response
+    # The whole point: no conditioning pass on the first request after restart.
+    assert embed.prepare_calls == 0
+    assert models["chatterbox"].generate_calls
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_corrupt_disk_entry_is_ignored_and_recomputed(tmp_path):
+    """A corrupt file never fails boot; the on-demand/warm-up path recomputes it."""
+    from harmonyspeech.modeling.voice_catalog import standard_voice_names
+    from harmonyspeech.modeling.voice_pack_cache import hydrate_embedding_cache
+
+    first_boot, _models = _warmup_harness(tmp_path)
+    async with first_boot:
+        await first_boot.engine.start_voice_pack_warmup()
+
+    files = sorted(tmp_path.glob("*.pt"))
+    assert len(files) == len(standard_voice_names())
+    files[0].write_bytes(b"this is not a torch checkpoint")
+
+    second_boot, models = _warmup_harness(tmp_path)
+    embed = models["chatterbox_embedding"]
+    async with second_boot:
+        restored = hydrate_embedding_cache(second_boot.engine.engine)
+        stats = await second_boot.engine.start_voice_pack_warmup()
+
+    assert restored == len(standard_voice_names()) - 1
+    assert stats["computed"] == 1
+    assert stats["cache_hits"] == len(standard_voice_names()) - 1
+    assert embed.prepare_calls == 1
+    assert len(list(tmp_path.glob("*.pt"))) == len(standard_voice_names())
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_warmup_failure_does_not_block_boot_or_serving(tmp_path):
+    """Every voice may fail; the task returns stats and the engine still serves."""
+    from harmonyspeech.modeling.voice_catalog import standard_voice_names
+
+    harness, models = _warmup_harness(
+        tmp_path, embed_model=_FailingEmbedStubModel(model_type="ChatterboxEmbedding")
+    )
+    embed = models["chatterbox_embedding"]
+
+    async with harness:
+        stats = await harness.engine.start_voice_pack_warmup()
+        response = await _speak(harness, _pack_request("chatterbox"))
+
+    assert stats["failed"] == len(standard_voice_names())
+    assert stats["computed"] == 0
+    # Warm-up attempted every voice; the follow-up request attempted one more.
+    assert embed.prepare_calls >= len(standard_voice_names())
+    assert isinstance(response, ErrorResponse), response
+    assert len(list(tmp_path.glob("*.pt"))) == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_on_demand_compute_dedupes_warmup(tmp_path):
+    """A voice an on-demand request already cached is not recomputed by warm-up."""
+    from harmonyspeech.modeling.voice_catalog import standard_voice_names
+    from harmonyspeech.modeling.voice_pack_cache import build_warmup_targets
+
+    harness, models = _warmup_harness(tmp_path)
+    embed = models["chatterbox_embedding"]
+    voices = standard_voice_names()
+
+    async with harness:
+        inner = harness.engine.engine
+        cache = inner.embedding_cache
+        target = next(t for t in build_warmup_targets(inner) if t.voice == "Abigail")
+        # Simulate an on-demand request that won the race and cached the voice.
+        cache.put(
+            target.cache_key,
+            _warmup_conditionals_artifact(),
+            model_identity=target.model_identity,
+        )
+        stats = await harness.engine.start_voice_pack_warmup()
+
+    assert stats["cache_hits"] == 1
+    assert stats["computed"] == len(voices) - 1
+    assert embed.prepare_calls == len(voices) - 1
+    # The already-computed voice still lands on disk for the next boot.
+    assert len(list(tmp_path.glob("*.pt"))) == len(voices)
 

@@ -33,13 +33,16 @@ from harmonyspeech.endpoints.openai.protocol import (
     EmbedSpeakerResponse,
     ErrorResponse,
     ModelList,
+    ModelVoiceCatalogEntry,
     SpeechToTextResponse,
     SpeechTranscribeRequest,
     SpeechTranslationRequest,
     TextToSpeechRequest,
     TextToSpeechResponse,
+    VoiceCatalogList,
     VoiceConversionRequest,
     VoiceConversionResponse,
+    VoiceDescriptor,
 )
 from harmonyspeech.endpoints.openai.request_envelope import (
     UploadTooLargeError,
@@ -55,6 +58,7 @@ from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServin
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
 from harmonyspeech.engine.args_tools import AsyncEngineArgs
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
+from harmonyspeech.modeling.voice_catalog import voice_catalog_listing
 
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "harmony-speech-engine")
 
@@ -299,6 +303,77 @@ async def show_available_speech_models(x_api_key: str | None = Header(None)):
     """Show available speech models."""
     models = await openai_serving_tts.show_available_models()
     return JSONResponse(content=models.model_dump())
+
+
+def _voice_catalog_source() -> tuple[list, bool]:
+    """Return ``(configured models, standard voice pack enabled)``.
+
+    The catalog comes from the running engine (the same source the serving
+    modules use), so the listing describes exactly what requests will route to.
+    A missing engine (e.g. an app built without ``run_server``) yields an empty
+    listing instead of an error.
+    """
+    engine_ref = engine
+    if engine_ref is None:
+        return [], True
+    inner = getattr(engine_ref, "engine", None)
+    if inner is None:
+        inner = engine_ref
+    return list(getattr(inner, "model_configs", None) or []), bool(
+        getattr(inner, "standard_voice_pack", True)
+    )
+
+
+@router.get("/v1/audio/voices", response_model=VoiceCatalogList)
+async def show_available_voices(model: str | None = None, x_api_key: str | None = Header(None)):
+    """List the selectable voices of every configured model (Phase 13-3).
+
+    Each entry is a configured model or a toolchain id, with its native voices
+    and — on a voice-cloning-capable id — the standard voice pack names, each
+    honestly labeled with its ``source``. ``?model=<name>`` narrows the
+    response to one id. The endpoint is read-only catalog state: it works
+    before pack-voice warm-up completes, because standard voices are listable
+    whether or not their embeddings are cached yet.
+    """
+    configs, standard_pack_enabled = _voice_catalog_source()
+    listing = voice_catalog_listing(configs, standard_pack_enabled=standard_pack_enabled)
+
+    if model is not None:
+        listing = tuple(entry for entry in listing if entry.model == model)
+        if not listing:
+            error = ErrorResponse(
+                message=(
+                    f"The model `{model}` has no voice catalog entry. Call GET "
+                    "/v1/audio/voices without `model` to list every model with "
+                    "selectable voices."
+                ),
+                type="BadRequestError",
+                param="model",
+                code=HTTPStatus.BAD_REQUEST.value,
+            )
+            return JSONResponse(content=error.model_dump(), status_code=error.code)
+
+    response = VoiceCatalogList(
+        data=[
+            ModelVoiceCatalogEntry(
+                model=entry.model,
+                object=entry.kind,
+                model_type=entry.model_type,
+                cloning_capable=entry.cloning_capable,
+                vc_target_kind=entry.vc_target_kind,
+                voices=[
+                    VoiceDescriptor(
+                        name=voice.name,
+                        source=voice.source,
+                        languages=list(voice.languages) or None,
+                    )
+                    for voice in entry.voices
+                ],
+            )
+            for entry in listing
+        ]
+    )
+    return JSONResponse(content=response.model_dump())
 
 
 @router.post(

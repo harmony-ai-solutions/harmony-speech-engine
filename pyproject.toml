@@ -40,7 +40,10 @@ harmonyspeech = [
     "endpoints/kobold/klite.embd",
     "quantization/hadamard.safetensors",
     "py.typed",
-    "modeling/layers/fused_moe/configs/*.json"
+    "modeling/layers/fused_moe/configs/*.json",
+    "assets/voices/*.wav",
+    "assets/voices/LICENSE",
+    "assets/voices/PROVENANCE.md"
 ]
 
 [tool.pytest.ini_options]

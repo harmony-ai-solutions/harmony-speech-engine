@@ -2,6 +2,7 @@ import os
 import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from loguru import logger
 
@@ -74,6 +75,9 @@ class HarmonySpeechEngine:
         embedding_cache_ttl_s: float = 300.0,
         embedding_cache_max_entries: int = 1000,
         embedding_cache_max_bytes: int = 1073741824,
+        standard_voice_pack: bool = True,
+        voice_pack_warmup: bool = False,
+        voice_pack_cache_dir: str | None = None,
         whisper_vram_budget_bytes: int | None = None,
         whisper_max_audio_seconds: float = 300.0,
         ar_cache_enabled: bool = True,
@@ -82,6 +86,10 @@ class HarmonySpeechEngine:
     ):
         self.model_configs = model_configs
         self.log_stats = log_stats
+        # Standard voice pack (Phase 13-1): global switch for the vendored
+        # pack names. Stored on the engine so the serving layer can read it
+        # without a second config source.
+        self.standard_voice_pack = bool(standard_voice_pack)
         # Per-request deadline (seconds); 0/None disables deadline enforcement.
         self.request_timeout_s = request_timeout_s
         # Turn "pipeline incomplete" startup warnings into a boot error.
@@ -156,6 +164,41 @@ class HarmonySpeechEngine:
         self._apply_whisper_probe_defaults()
         self.model_executors = {}
         self.init_custom_executors()
+
+        # Standard voice pack persistent cache (Phase 13-2). The disk store is
+        # only constructed when the feature is enabled *and* the 7-2 cache exists
+        # (hydration has nowhere to put artifacts otherwise). Hydration is cheap
+        # disk I/O and runs now, after the executors are resident, so the first
+        # real request after a restart is a memory-cache hit. The background
+        # warm-up itself is scheduled by the async wrapper once its loop starts.
+        from harmonyspeech.modeling.voice_pack_cache import (
+            VoicePackDiskCache,
+            default_voice_pack_cache_dir,
+            hydrate_embedding_cache,
+        )
+
+        self.voice_pack_warmup = bool(voice_pack_warmup)
+        self.voice_pack_cache_dir = (
+            Path(voice_pack_cache_dir).expanduser()
+            if voice_pack_cache_dir
+            else default_voice_pack_cache_dir()
+        )
+        self.voice_pack_disk_cache = (
+            VoicePackDiskCache(self.voice_pack_cache_dir)
+            if self.voice_pack_warmup and self.embedding_cache is not None
+            else None
+        )
+        self.voice_pack_warmup_stats: dict | None = None
+        if self.voice_pack_disk_cache is not None:
+            try:
+                self.voice_pack_hydrated = hydrate_embedding_cache(
+                    self, self.voice_pack_disk_cache
+                )
+            except Exception as exc:  # noqa: BLE001 - a cache must never fail boot
+                logger.warning(f"Voice pack cache hydration failed (ignored): {exc}")
+                self.voice_pack_hydrated = 0
+        else:
+            self.voice_pack_hydrated = 0
 
         # Phase 9-2: log the AR cache arena table once the executors (and their
         # runners) had the chance to register arenas during model load, the same
@@ -988,6 +1031,7 @@ class HarmonySpeechEngine:
             # inferable only from the effect).
             "whisper_admission": self.get_whisper_admission(),
             "embedding_cache": self.get_embedding_cache_stats(),
+            "voice_pack_cache": self.get_voice_pack_cache_stats(),
             "ar_cache": self.get_ar_cache_stats(),
             # Phase 9-4: per-AR-model decode progress (active rows, slot
             # occupancy, tokens/step). Present with zeros when no AR model is
@@ -1029,6 +1073,24 @@ class HarmonySpeechEngine:
         stats["max_bytes"] = getattr(cache, "max_bytes", None)
         stats["hit_ratio"] = embedding_cache_hit_ratio(stats)
         return stats
+
+    # ------------------------------------------------------------------
+    # Standard voice pack persistent cache accounting (Phase 13-2)
+    # ------------------------------------------------------------------
+    def get_voice_pack_cache_stats(self) -> dict:
+        """Return the pack-cache configuration + last warm-up result.
+
+        ``enabled`` is False when warm-up/hydration is off, so ``/health`` never
+        implies a cache that does not exist. ``warmup`` is ``None`` until the
+        background task has finished (or ``{}``-shaped zeros when it never ran).
+        """
+        disk = getattr(self, "voice_pack_disk_cache", None)
+        return {
+            "enabled": disk is not None,
+            "cache_dir": str(getattr(self, "voice_pack_cache_dir", "")) if disk is not None else None,
+            "hydrated": int(getattr(self, "voice_pack_hydrated", 0) or 0),
+            "warmup": getattr(self, "voice_pack_warmup_stats", None),
+        }
 
     # ------------------------------------------------------------------
     # Shared AR KV-cache pool accounting (Phase 9-2)

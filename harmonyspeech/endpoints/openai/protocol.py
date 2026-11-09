@@ -48,6 +48,55 @@ class ModelList(BaseModel):
     data: list[ModelCard] = Field(default_factory=list)
 
 
+class VoiceDescriptor(BaseModel):
+    """One selectable voice in the voices catalog (Phase 13-3).
+
+    ``source`` is the honesty label: ``"native"`` is a preset owned by the
+    configured model (its ``voices:`` keys), ``"standard"`` is a vendored
+    standard voice pack identity. A standard entry carries no ``languages``
+    (pack clips are language-agnostic references); native entries carry the
+    configured language, or ``"default"`` for models that expose voices
+    without a language.
+    """
+
+    name: str
+    source: Literal["native", "standard"]
+    languages: list[str] | None = None
+
+
+class ModelVoiceCatalogEntry(BaseModel):
+    """The voices listing for one model or toolchain id (Phase 13-3).
+
+    ``object`` mirrors ``/v1/audio/speech/models``: ``"model"`` for a
+    configured executor, ``"toolchain"`` for a pipeline alias that is not also
+    a configured model name. ``model_type`` is null for a toolchain entry.
+
+    ``cloning_capable`` means a standard voice pack name is meaningful for this
+    id in some direction (TTS ``voice`` or VC ``target_voice``). The capability
+    flags describe the model; ``voices`` only contains ``standard`` entries
+    while the pack is enabled on the server.
+
+    ``vc_target_kind`` keeps the two VC capability kinds distinct:
+    ``"target_audio"`` (the executor consumes the clip itself) or
+    ``"target_embedding"`` (the serving layer embeds the clip first); null when
+    the id is not a voice-conversion target.
+    """
+
+    model: str
+    object: Literal["model", "toolchain"] = "model"
+    model_type: str | None = None
+    cloning_capable: bool = False
+    vc_target_kind: Literal["target_audio", "target_embedding"] | None = None
+    voices: list[VoiceDescriptor] = Field(default_factory=list)
+
+
+class VoiceCatalogList(BaseModel):
+    """``GET /v1/audio/voices`` response (``ModelList``-consistent)."""
+
+    object: str = "list"
+    data: list[ModelVoiceCatalogEntry] = Field(default_factory=list)
+
+
 class ResponseFormat(BaseModel):
     # type must be "json_object" or "text"
     type: Literal["text", "json_object"]
@@ -215,6 +264,17 @@ class VoiceConversionRequest(AudioConversionRequest):
     target_audio: str | None = Field(
         default=None,
         description="Binary audio data of the reference speaker for converting the source, encoded in base64",
+    )
+    target_voice: str | None = Field(
+        default=None,
+        description=(
+            "Name of a standard voice pack speaker (for example 'Abigail') to use as the "
+            "conversion target. Resolves to the shipped reference clip; cannot be combined "
+            "with target_audio or target_embedding. On target-audio models (for example "
+            "'chatterbox_vc') the clip is the target audio; on OpenVoice tone converters the "
+            "engine embeds the clip once through the pipeline encoder and uses the result as "
+            "the target embedding."
+        ),
     )
     target_embedding: str | None = Field(
         default=None,

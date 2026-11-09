@@ -34,6 +34,103 @@ Model cards are generated from the same declaration: each card lists its
 its `models` (the configured member executors) and the languages of its
 configured variants (for example every configured MeloTTS language).
 
+### Standard voice pack
+
+The engine ships a **standard voice pack** of 28 reference clips (44.1 kHz mono
+WAV, 7–10 seconds each) so the same named speaker is available on every
+voice-cloning pipeline without uploading a reference every time:
+
+`Abigail`, `Adrian`, `Alexander`, `Alice`, `Austin`, `Axel`, `Connor`, `Cora`,
+`Elena`, `Eli`, `Emily`, `Everett`, `Gabriel`, `Gianna`, `Henry`, `Ian`, `Jade`,
+`Jeremiah`, `Jordan`, `Julian`, `Layla`, `Leonardo`, `Michael`, `Miles`,
+`Olivia`, `Ryan`, `Taylor`, `Thomas`.
+
+The clips are vendored verbatim, with their original names, from the
+MIT-licensed [Chatterbox-TTS-Server](https://github.com/devnen/Chatterbox-TTS-Server)
+project. The upstream license text and a provenance note are shipped in
+`harmonyspeech/assets/voices/` (`LICENSE`, `PROVENANCE.md`).
+
+**What the name means.** A pack name selects the same *reference clip* on every
+family. Each family embeds that clip in its own embedding space, so the result
+is **speaker identity similarity**, not identical rendered audio: Chatterbox,
+OpenVoice and Harmony Speech each sound like themselves. A pack voice on
+Chatterbox English and on Chatterbox Turbo is the same speaker; a pack voice on
+OpenVoice is the same reference speaker through OpenVoice's own voice
+conversion.
+
+**Where it applies.** Standard names are accepted by the voice-cloning
+pipelines only:
+
+| Model / pipeline | Standard `voice` | Native voices | Notes |
+|---|---|---|---|
+| `chatterbox`, `chatterbox_turbo`, `chatterbox_multilingual` | Yes | — | Reference clip drives the clone |
+| `chatterbox_vc` | Yes, as `target_voice` | — | Target-audio voice conversion: the clip becomes `target_audio` |
+| OpenVoice V1/V2 tone converters (`ov1-tone-converter`, `ov2-tone-converter`) | Yes, as `target_voice` | — | Target-embedding voice conversion: the engine embeds the clip through the pipeline's `vad → embed` steps |
+| `openvoice_v1`, `openvoice_v2` | Yes | Yes (styles / language voices) | Pack name is the target; the native default is the source style |
+| `harmonyspeech` | Yes | — | Encoder → synthesizer → vocoder |
+| MeloTTS (`ov2-synthesizer-*`), KittenTTS (`kitten-*`) | No | Yes | Single-speaker models list native voices only |
+| OpenVoice/Melo concrete synthesizers | No | Yes | The pipeline id is the cloning entry point |
+
+Using a pack name on a single-speaker model is rejected with an explicit error
+listing that model's native voices — it is never silently mapped to one of
+them. A pack name also implies `mode: "voice_cloning"`; combining it with an
+explicit `input_audio`/`input_embedding` (or `target_audio`/`target_embedding`)
+is rejected as ambiguous. User-supplied references and embeddings are
+unchanged.
+
+`GET /v1/audio/voices` lists each configured model's native voices and, on a
+cloning-capable id, the pack names with `source: "standard"` (see the
+[API reference](api.md#voices-catalog)).
+
+**Voice conversion targets.** `target_voice` works on both VC capability kinds.
+On `chatterbox_vc` the pack clip is the target audio. On an OpenVoice tone
+converter the engine runs the clip once through the pipeline's `vad → embed`
+steps and uses the returned artifact as `target_embedding` (the tone converter
+ignores `target_audio`); this needs the pipeline's encoder and VAD configured,
+otherwise the request is rejected honestly. The embedding is the same artifact
+the TTS clone path computes, so it shares the warm cache below: a pack voice
+warmed at boot (or already used by a TTS request) costs no encoder forward on
+the first VC request.
+
+**Configuration.** `standard_voice_pack: true` (the default, top level of the
+config file) enables the names. Setting it to `false` turns every pack name into
+an honest error instead of a silently ignored voice id; native voices and
+explicit references keep working. The pack is always shipped — the switch only
+controls name resolution.
+
+Embeddings for pack voices are computed on demand through each family's normal
+cloning path and cached by the engine's embedding cache. Phase 13-2 adds a
+**persistent disk cache** and boot warm-up, so a restart does not pay the
+embedding cost again:
+
+- Each family's conditioning artifact is written to one file per
+  `(model type, model repository, revision, voice, reference-clip content hash,
+  embedding parameters)` under `voice_pack_cache_dir`. The content hash is the
+  invalidation story: a changed reference clip (or a different Chatterbox
+  `exaggeration`, or a different OpenVoice VAD source) is simply a different key,
+  so stale entries are never read and can be pruned.
+- On boot, the cached artifacts are hydrated into the in-memory embedding cache
+  *before* serving (disk I/O only — no model forwards), so the first request for
+  a pack voice after a restart is a memory-cache hit.
+- With `voice_pack_warmup: true`, a background task then computes any pack voice
+  that is not yet cached, one model at a time, through the normal engine
+  scheduler. It never blocks or fails boot; a voice that fails to warm is logged
+  and skipped, and the on-demand path remains the fallback. A real request that
+  already computed a voice wins — warm-up reuses it instead of recomputing.
+- Writes are atomic, and an unreadable/corrupt cache file is ignored and
+  recomputed rather than failing startup.
+
+**Configuration and clearing.** Both shipped configs set `voice_pack_warmup:
+true` (the code default is off). `voice_pack_cache_dir` selects the cache root;
+it defaults to the platform user-cache directory — Windows
+`%LOCALAPPDATA%\harmony-speech\voice-pack`, elsewhere
+`$XDG_CACHE_HOME/harmony-speech/voice-pack` (`~/.cache/...` when unset) — and can
+also be overridden with `HSE_VOICE_PACK_CACHE_DIR`. To clear the cache, stop the
+engine and delete that directory (or just the affected `*.pt` files); the next
+boot recomputes what is missing. `/health` reports the effective directory, the
+number of hydrated entries and the last warm-up result under `voice_pack_cache`.
+
+
 #### `input_vad_mode`
 
 The OpenVoice pipelines accept `input_vad_mode: "whisper" | "silero"` to choose

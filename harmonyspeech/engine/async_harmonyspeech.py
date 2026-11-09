@@ -273,6 +273,9 @@ class AsyncHarmonySpeech:
         self.start_engine_loop = start_engine_loop
         self._request_tracker: RequestTracker | None = None
         self._errored_with: BaseException | None = None
+        # Phase 13-2: the one-shot standard-voice-pack warm-up task (scheduled
+        # when the engine loop starts; None until then / when disabled).
+        self._voice_pack_warmup_task: asyncio.Task | None = None
 
     @classmethod
     def from_engine_args_and_config(
@@ -333,9 +336,51 @@ class AsyncHarmonySpeech:
         )
         self.background_loop = asyncio.shield(self._background_loop_unshielded)
 
+        # Phase 13-2: the executors are already resident (they load during engine
+        # construction), so the loop starting is the post-init hook. Scheduling
+        # the warm-up as a task keeps boot non-blocking and lets the work go
+        # through this scheduler exactly like client traffic.
+        self.start_voice_pack_warmup()
+
     def _init_engine(self, *args, **kwargs) -> _AsyncHarmonySpeech:
         engine_class = self._engine_class
         return engine_class(*args, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Standard voice pack warm-up (Phase 13-2)
+    # ------------------------------------------------------------------
+    def start_voice_pack_warmup(self) -> "asyncio.Task | None":
+        """Schedule the one-shot pack warm-up task (idempotent, never raises).
+
+        Returns the task so tests can await it; ``None`` when the feature is
+        disabled or no running event loop is available. The task catches every
+        exception: a warm-up failure is logged and the on-demand path remains.
+        """
+        inner = self.engine
+        if not getattr(inner, "voice_pack_warmup", False):
+            return None
+        if getattr(inner, "voice_pack_disk_cache", None) is None:
+            return None
+        existing = self._voice_pack_warmup_task
+        if existing is not None:
+            return existing
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:  # pragma: no cover - no loop yet (sync construction)
+            return None
+        self._voice_pack_warmup_task = loop.create_task(self._run_voice_pack_warmup())
+        return self._voice_pack_warmup_task
+
+    async def _run_voice_pack_warmup(self) -> dict | None:
+        from harmonyspeech.modeling.voice_pack_cache import warm_up_voice_packs
+
+        try:
+            return await warm_up_voice_packs(self)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - warm-up must never fail boot
+            logger.warning(f"Standard voice pack warm-up failed (ignored): {exc}")
+            return None
 
     async def engine_step(self) -> bool:
         """Kick the engine to process the waiting requests.
@@ -588,6 +633,10 @@ class AsyncHarmonySpeech:
     def get_embedding_cache_stats(self) -> dict:
         """Cross-request embedding-cache accounting of the underlying engine."""
         return self.engine.get_embedding_cache_stats()
+
+    def get_voice_pack_cache_stats(self) -> dict:
+        """Standard voice pack disk-cache + warm-up accounting (Phase 13-2)."""
+        return self.engine.get_voice_pack_cache_stats()
 
     def get_ar_cache_stats(self) -> dict:
         """Shared AR KV-cache pool accounting of the underlying engine (Phase 9-2)."""
