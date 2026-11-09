@@ -68,6 +68,89 @@ Controls generation parameters for TTS and voice conversion models. Most fields 
 | `min_p` | float | null | *(Chatterbox TTS/Multilingual only)* Minimum probability threshold (default: 0.05) |
 | `top_k` | integer | null | *(Chatterbox Turbo only)* Top-k sampling candidates (default: 1000) |
 | `norm_loudness` | boolean | null | *(Chatterbox Turbo only)* Apply pyloudnorm loudness normalization (default: true) |
+| `split_text` | boolean | false | Split long input into sentence-aware chunks, synthesize them concurrently and stitch the result. A request that yields 0 or 1 chunk is sent through the single-shot path unchanged |
+| `chunk_size` | integer | null | Character budget per synthesis chunk. Enables chunking even when `split_text` is omitted. When `split_text: true` and this is null, the server budget is **300 characters** (one to three sentences) for **every** family — the Phase 12-5 per-model Turbo 150 / Multilingual 75 overrides were removed in Phases 12-7/12-8 once the underlying AR/KV and analyzer bugs were fixed. An explicit value always wins, for every model |
+| `crossfade_ms` | integer | null | Equal-power crossfade length between stitched chunks (ms). When chunking is on and this is null, the server default is **40 ms**. The fade consumes part of `sentence_pause_ms` rather than adding to it. Explicit `0` disables the fade (joins are still edge-conditioned) |
+| `sentence_pause_ms` | integer | null | Silence inserted between stitched sentence chunks (ms). When chunking is on and this is null, the server default is **120 ms**. The audible gap is `sentence_pause_ms - crossfade_ms` (clamped at zero), plus the two 10 ms guard pads kept by edge conditioning |
+| `remove_dc_offset` | boolean | false | Remove the constant (DC) offset. In the chunked path each chunk's mean is removed **before** stitching (offsets differ per synthesis run); in the single-shot path the final buffer's mean is removed |
+| `trim_silence` | boolean | false | Trim leading/trailing silence from the final output. Energy gate: a frame is silent when its RMS is **40 dB below the loudest frame** (32 ms frames, 8 ms hop); **50 ms** of padding is kept at each end |
+| `fix_internal_silence` | boolean | false | Collapse internal pauses longer than **700 ms** to at most **300 ms**. Leading/trailing silence is left to `trim_silence`, so a chunk boundary is never treated as the buffer's edge |
+
+> Long-form requests are split sentence-aware (Latin `.!?` and CJK `。！？…`,
+> with abbreviations/numbers/versions/bullets preserved; parenthetical prose and
+> inline `[laugh]`/`[gasp]`-style tags stay inside their sentence and are never
+> split boundaries) and the chunks are submitted **concurrently** so they can
+> share one engine batch; stitching is always by chunk index, never completion
+> order. Voice-cloning requests resolve the reference embedding once and reuse
+> it for every chunk;
+> a watermark is applied exactly once, on the stitched buffer. `speed` is
+> applied after stitching for families that do not consume it natively (the
+> Chatterbox families); native-speed families keep their existing handling.
+> Any chunk failure fails the whole request (HTTP error, no partial audio).
+> Omitting all four chunking fields leaves single-shot requests byte-identical.
+>
+> The three Phase B filters are independent opt-ins (all default `false`, so
+> omitting them is byte-identical to the pre-filter behaviour). Ordering is
+> fixed: in the chunked path DC removal is **per chunk before stitching**, then
+> `trim_silence` and `fix_internal_silence` run on the **final stitched buffer**
+> (before the post-stitch `speed` stretch and the single watermark). In the
+> single-shot path all three run on the model's final buffer. The filters are
+> pure numpy and model-agnostic; the thresholds above are presets (there are no
+> per-request knobs).
+>
+> **Join quality (Phases 12-5 / 12-6).** Before joining, the stitcher conditions
+> every chunk's edges: synthesis-native leading/trailing near-silence is trimmed
+> to a **10 ms guard pad**, with a gate **45 dB below that chunk's own peak** and
+> a hard bound of **150 ms removed per edge**. Joins are therefore uniform and
+> independent of how much silence the model happened to emit; a chunk with no
+> near-silence (or an all-quiet chunk) is left intact.
+>
+> When `sentence_pause_ms > 0`, the pause is applied as a **two-sided equal-power
+> fade** (Phase 12-6): the outgoing chunk's conditioned tail fades **out into
+> silence** over `crossfade_ms` (`cos²`), the pause follows, then the incoming
+> chunk's conditioned head fades **in from that silence** (`sin²`). No chunk is
+> hard-cut at a join. The audible gap is therefore
+> `sentence_pause_ms - crossfade_ms` plus the two guard pads — the fades consume
+> the last part of the pause rather than adding to it. With `sentence_pause_ms: 0`
+> the two conditioned edges overlap directly in a single equal-power crossfade.
+>
+> This is **stitcher-internal** and separate from `trim_silence`: conditioning
+> normalises joins (and also bounds the first/last chunk's outer edges to the
+> guard pad), while `trim_silence` remains an explicit whole-output option. On
+> chunked output the guard pad is shorter than the filter's 32 ms analysis frame,
+> so `trim_silence` usually has nothing left to remove at the outer edges; use it
+> for the single-shot path or for models whose output carries longer outer
+> silence. The tuned defaults (40 ms fade / 120 ms pause) apply only when
+> chunking is on and the client left the field `null`; an explicit value —
+> including `0` — always wins, and non-chunked requests are byte-identical to
+> before.
+>
+> **Unified chunk budget & fidelity gate (Phases 12-5..12-8).** When
+> `split_text` is on and `chunk_size` is null, the server budget is
+> **300 characters for every family**. The earlier 150-character Turbo and
+> 75-character Multilingual overrides were removed after the audit found that
+> the missing words were engine bugs, not model long-context limits:
+>
+> * **Turbo** was silently truncating mid-sentence because the shared
+>   autoregressive KV-cache slot cap was **768 tokens**, while Turbo's
+>   un-resampled conditioning prompt alone can be **376 tokens**; the remaining
+>   budget could not cover a 300-character chunk's speech. Raising the slot
+>   capacity (Phase 12-8) restores the full generation budget.
+> * **Multilingual** was hitting a premature EOS because the engine passed
+>   `repetition_penalty = 1.2` instead of upstream's **2.0** into the
+>   `AlignmentStreamAnalyzer` repeat detector, and its leaked attention hooks
+>   forced slow eager attention. Restoring the upstream penalty and fixing the
+>   hook/EOS path (Phase 12-7) also lets it use fast attention with batched AR
+>   decoding and batched vocoding.
+>
+> The **fidelity gate** (`bench_throughput.py --scenario longform --fidelity`,
+> faster-whisper `large-v3-turbo`) transcribes a 138-word real-prose fixture and
+> reports word edit distance and words heard, so a text-coverage regression is
+> caught automatically. The pre-fix fidelity figures at 300 characters and the
+> post-fix Phase 12-9 host re-measurement (every family speaks 138/138 words;
+> Chatterbox ON edit distance 2/4/4) are recorded in the
+> [throughput benchmarks](benchmarks/throughput.md). An explicit `chunk_size`
+> always wins, for every model.
 
 ### AudioOutputOptions
 

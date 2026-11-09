@@ -107,11 +107,15 @@ def test_matrix_documents_the_phase_8_5_skip_evidence():
     assert "1.71×" in text and "1.91×" in text
     # Silero: sequential verdict with lane numbers.
     assert "0.95×" in text
-    # Chatterbox: Phase 9-3's AR decode + the multilingual documented skip.
+    # Chatterbox: Phase 9-3's AR decode + Phase 12-7's multilingual join.
     normalized = " ".join(text.replace(">", " ").split())
     assert "Chatterbox AR decode (Phase 9-3)" in text
-    assert "Multilingual is a documented skip" in text
-    assert "per-request loop with `max_batch_size: 1`" in normalized
+    assert "Multilingual uses the same contract" in text
+    multilingual_row = next(
+        row for row in _matrix_rows() if _mentions(row, "ChatterboxMultilingualTTS")
+    )
+    assert "AR decode" in multilingual_row
+    assert _matrix_sizes()["ChatterboxMultilingualTTS"] == 4
 
 
 @pytest.mark.unit

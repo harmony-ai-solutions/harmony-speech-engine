@@ -121,6 +121,20 @@ Python 3.12.12, Windows 11. GPU 1 of 3 (otherwise idle), `CUDA_VISIBLE_DEVICES=1
 |---|---|---|---|---|---|---|---|
 | kittentts (CPU) | tts_en | PASS | 0.0 | 0.0 | 0.0 | 1.0 | True |
 
+> **Correction (2026-11-09, Phase 12-4).** The KittenTTS row above is not
+> reproducible on the current build: the exported ONNX graphs carry
+> `RandomNormalLike` / `RandomUniformLike` nodes without a `seed` attribute, so
+> ONNX Runtime draws fresh noise on every `session.run`. Two fresh processes
+> synthesising the same sentence now differ (max |Δsample| 0.14, corr 0.992,
+> identical duration); the 6-chunk stitched pair measured log-mel MSE ≈ 3.0 dB²,
+> corr 0.992. `onnxruntime` is unpinned in `requirements-common.txt`, so the
+> old row most likely reflects an older runtime's random-op behaviour. Treat
+> KittenTTS as a family that **samples every run**: its identity/determinism
+> gates are distributional (`audio_regression.MODEL_SAMPLES_EVERY_RUN`), and the
+> engine-side chunk→result pairing is pinned in-process with a deterministic
+> stub (`tests/integration/test_tts_chunking.py`). Do not re-add a bit-exact
+> kitten gate from this row.
+
 ### `dtype:float32-vs-float16`
 
 | Family | Case | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical |

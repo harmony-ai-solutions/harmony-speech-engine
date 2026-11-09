@@ -12,10 +12,13 @@ import torch
 
 # Import Chatterbox models from the chatterbox library
 from chatterbox import ChatterboxMultilingualTTS, ChatterboxTTS, ChatterboxVC
+from chatterbox.models.t3 import T3
 from chatterbox.mtl_tts import SUPPORTED_LANGUAGES as _CHATTERBOX_SUPPORTED_LANGUAGES
 from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
 from huggingface_hub import snapshot_download
 from loguru import logger
+
+from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
 
 # HuggingFace repo ID for ChatterboxTurboTTS (mirrors tts_turbo.py REPO_ID)
 _CHATTERBOX_TURBO_REPO_ID = "ResembleAI/chatterbox-turbo"
@@ -183,6 +186,19 @@ if _perth_module.PerthImplicitWatermarker is None:
     _perth_module.PerthImplicitWatermarker = _FallbackPerthImplicitWatermarker
 
 
+def _ensure_chatterbox_t3_ar(model) -> None:
+    """Graft HSE's cleaned decode loop onto a freshly loaded Chatterbox T3.
+
+    Models built through the sharing factory already get ``ChatterboxT3AR`` (see
+    ``factory._AR_T3_ROLES``); this covers the direct ``from_pretrained`` paths
+    (which upstream builds with plain ``T3``) so both entry points decode the same
+    way. A genuine Turbo T3 (GPT-2 topology, ``inference_turbo``) is left alone.
+    """
+    t3 = getattr(model, "t3", None)
+    if isinstance(t3, T3) and not isinstance(t3, ChatterboxT3AR):
+        t3.__class__ = ChatterboxT3AR
+
+
 class ChatterboxTTSModel:
     """Wrapper for ChatterboxTTS model.
 
@@ -217,6 +233,7 @@ class ChatterboxTTSModel:
             device = str(device)
 
         model = ChatterboxTTS.from_pretrained(device=device, **kwargs)
+        _ensure_chatterbox_t3_ar(model)
         apply_model_dtype(model, dtype, s3gen_precision)
         return model
 
@@ -354,15 +371,10 @@ class ChatterboxMultilingualTTSModel:
 
         model = ChatterboxMultilingualTTS.from_pretrained(device=device, **kwargs)
 
-        # Workaround: newer transformers defaults to attn_implementation="sdpa" for LlamaModel.
-        # The upstream AlignmentStreamAnalyzer (used only for multilingual inference) sets
-        #   tfmr.config.output_attentions = True
-        # which raises a ValueError when attn_implementation is "sdpa":
-        #   "The `output_attentions` attribute is not supported when using the `attn_implementation` set to sdpa"
-        # Fix: force _attn_implementation back to "eager" on the T3's LlamaModel config directly
-        # so that the AlignmentStreamAnalyzer can enable output_attentions without crashing.
-        if hasattr(model, "t3") and hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
-            model.t3.tfmr.config._attn_implementation = "eager"
+        # Phase 12-7: keep Llama_520M's native SDPA and use HSE's cleaned decode
+        # loop. The alignment analyzer (which needs eager attention) is opt-in via
+        # ``HSE_CHATTERBOX_MTL_ANALYZER`` and toggles attention per call.
+        _ensure_chatterbox_t3_ar(model)
 
         apply_model_dtype(model, dtype, s3gen_precision)
         return model

@@ -244,21 +244,20 @@ def test_tight_pool_100_distinct_voice_flood_zero_loss_zero_pairing(monkeypatch)
         # Zero pairing errors: an output never carries another request's marker.
         assert _pairing_ok(result, index + 1), f"{request_id} was paired with another voice"
 
-    # The pool really was the bottleneck: grants happened, refusals happened
-    # (the surplus requests took the sequential fallback), and nothing leaked.
+    # The pool really was the bottleneck, but Phase 12-8's `rows_per_request`
+    # admission now prevents over-admission: surplus requests wait for free
+    # slots instead of being refused. Nothing leaks.
     stats = pool.stats()
     assert stats["grants_total"] > 0
-    assert stats["refusals_total"] > 0
+    assert stats["refusals_total"] == 0, "admission control prevents over-admission"
     assert stats["slots"] == 8
     assert stats["slots_active"] == 0
     assert stats["releases_total"] == stats["grants_total"]
-    # The fallback really ran for the refused requests.
-    assert len(runner.model.generate_calls) > 0
 
-    # Honest metrics: the refusal counter is non-zero and the decode counters
-    # advanced (tokens/step is a real ratio, not a placeholder).
+    # Honest metrics: the refusal counter stays zero (no over-admission) and the
+    # decode counters advanced (tokens/step is a real ratio, not a placeholder).
     cache_metrics = render_ar_cache_metrics(engine.get_ar_cache_stats())
-    assert re.search(r"^hse_ar_cache_refusals_total ([1-9]\d*)$", cache_metrics, re.M)
+    assert re.search(r"^hse_ar_cache_refusals_total 0$", cache_metrics, re.M)
     decode = engine.get_ar_decode_stats()
     entry = decode["models"][AR_MODEL]
     assert entry["tokens_total"] > 0
@@ -414,12 +413,14 @@ def test_combined_pool_full_and_cold_embedding_cache_zero_loss(monkeypatch):
     assert cache["hits"] == 0
     assert cache["entries"] == count
 
-    # Honest pool + decode metrics under the combined load.
+    # Honest pool + decode metrics under the combined load. Phase 12-8's
+    # `rows_per_request` admission keeps the 20-request flood from overflowing
+    # the 8-slot pool, so surplus requests queue rather than being refused.
     stats = pool.stats()
-    assert stats["refusals_total"] > 0, "a 20-request flood must exhaust an 8-slot pool"
+    assert stats["refusals_total"] == 0, "admission control prevents over-admission"
     assert stats["slots_active"] == 0
     cache_metrics = render_ar_cache_metrics(engine.get_ar_cache_stats())
-    assert re.search(r"^hse_ar_cache_refusals_total ([1-9]\d*)$", cache_metrics, re.M)
+    assert re.search(r"^hse_ar_cache_refusals_total 0$", cache_metrics, re.M)
     entry = engine.get_ar_decode_stats()["models"][AR_MODEL]
     assert entry["tokens_total"] > 0 and entry["steps_total"] > 0
     assert entry["tokens_per_step"] > 0
@@ -467,7 +468,12 @@ def test_degradation_fewer_slots_than_requests_completes_every_request(monkeypat
         assert run["pool"]["slots_active"] == 0
     assert tight["pool"]["slots"] == 2
     assert roomy["pool"]["slots"] == 2 * count
-    assert tight["pool"]["refusals_total"] > 0
-    # Fewer slots means more serialized work: more engine steps for the same
-    # requests. This is the "slower, never broken" degradation statement.
-    assert tight_steps > roomy_steps
+    assert tight["pool"]["refusals_total"] == 0
+    assert tight["pool"]["slots_free"] == 2
+    # Fewer slots means serialized admission: the tight run must at least take
+    # one engine step per request. (A solo admission uses the sequential loop,
+    # so it can finish inside a single step; the roomy run decodes the whole
+    # batch token-by-token through the AR runner.) This is the "slower, never
+    # broken" degradation statement.
+    assert tight_steps >= count
+    assert roomy_steps >= 1

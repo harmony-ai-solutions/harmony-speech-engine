@@ -67,6 +67,26 @@ import torch
 #: padding, so such a mix is split into length-similar groups instead.
 LENGTH_SIMILARITY_RATIO = 4.0
 
+#: Padded-area cap for the phone/token-axis synthesizers (MeloTTS/OpenVoice V1),
+#: in phones. Measured on GPU 2 (2026-11-09): 453-phone rows run at
+#: ``0.180s/item`` at ``B=2`` (``total_phones = 906``) versus ``0.654s/item`` at
+#: ``B=1``, and ``B=8`` (``total_phones = 3624``) is no faster than ``B=2``
+#: while reserving 6512 MiB — enough to spill into Windows WDDM Shared GPU
+#: Memory when other models are resident. Capping the area at 1024 keeps
+#: ``B=8`` of ~128-phone chunks and ``B=2`` of ~500-phone long sentences, so a
+#: short/chunked step still uses the full batching width while peak reserved
+#: VRAM stays ≤ 1.8 GiB.
+DEFAULT_PHONE_BATCH_BUDGET = 1024
+
+#: Padded-area cap for the mel-frame-axis tone converters (OpenVoice V2), in mel
+#: frames. Measured on GPU 2 (2026-11-09): 42.5 s audio (3660 frames) runs at
+#: ``0.403s/item`` at ``B=2`` (``total_frames = 7320``) versus ``0.698s/item``
+#: at ``B=1``, while ``B=8`` (``total_frames = 29280``) reserved 9796 MiB and
+#: spilled into WDDM Shared Memory (a 400 s stall). Capping the area at 7500
+#: keeps ``B=8`` of ~10.8 s chunks or ``B=2`` of ~43 s unchunked paragraphs, so
+#: peak reserved VRAM stays ≤ 2.6 GiB.
+DEFAULT_MEL_FRAME_BATCH_BUDGET = 7500
+
 #: Model types whose handler implements a real padded-batch forward.
 BATCHED_INFERENCE_FAMILIES = frozenset(
     {
@@ -100,8 +120,9 @@ def supports_batched_inference(model_config) -> bool:
 #: (Phase 9-3). They are not padded-batch families: one engine step decodes one
 #: speech token per active row through :class:`ARBatchRunner`. This set must stay
 #: equal to ``processing.scheduler.AR_INFERENCE_MODEL_TYPES`` (the runtime
-#: admission flag); both name the same two Phase 9 members.
-AR_INFERENCE_FAMILIES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+#: admission flag); both name the same three members (Multilingual joined in
+#: Phase 12-7).
+AR_INFERENCE_FAMILIES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"})
 
 
 def supports_ar_batching(model_config) -> bool:
@@ -355,7 +376,9 @@ def plan_batches(
     return [sorted(group) for group in groups]
 
 
-def default_token_budget(lengths, max_batch_size: int) -> int | None:
+def default_token_budget(
+    lengths, max_batch_size: int, *, max_budget: int | None = None
+) -> int | None:
     """Per-step padded-area budget: ``max_batch_size × median length``.
 
     Derived from the step's own lengths rather than a fixed constant, so a step
@@ -363,11 +386,22 @@ def default_token_budget(lengths, max_batch_size: int) -> int | None:
     of short ones. The unit is whatever axis the step pads on (phones, mel
     frames or audio samples); the arithmetic is unit-agnostic. ``None`` for an
     empty step.
+
+    ``max_budget`` optionally caps the returned area (still at least 1). The
+    un-capped ``B × median`` formula lets a homogeneous batch of huge rows keep
+    its full width — ``B=8 × 3660`` mel frames — which is no faster than
+    ``B=2`` and spills into Windows WDDM Shared GPU Memory. The per-axis
+    constants :data:`DEFAULT_PHONE_BATCH_BUDGET` /
+    :data:`DEFAULT_MEL_FRAME_BATCH_BUDGET` are the measured caps; a step of
+    short rows stays under them and keeps its full width.
     """
     if not lengths:
         return None
     median = max(1, int(statistics.median(int(length) for length in lengths)))
-    return max(1, int(max_batch_size)) * median
+    budget = max(1, int(max_batch_size)) * median
+    if max_budget is not None:
+        return min(budget, max(1, int(max_budget)))
+    return budget
 
 
 def collapse_per_sample(values, tolerance: float = 1e-12):

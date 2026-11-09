@@ -62,11 +62,13 @@ only.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from dataclasses import dataclass, field
 
 import torch
 from chatterbox.models.s3tokenizer import drop_invalid_tokens
+from chatterbox.tts import Conditionals
 from loguru import logger
 from torch import Tensor
 from transformers.cache_utils import Cache
@@ -79,8 +81,18 @@ from transformers.generation.logits_process import (
 )
 
 from harmonyspeech.common.device import devices_match, resolve_device
-from harmonyspeech.engine.ar_cache import ARCacheBudgetError, ARCacheDescriptor, ARCachePool, ARCacheSlot
-from harmonyspeech.modeling.models.chatterbox.t3_ar import T3ARSampler
+from harmonyspeech.engine.ar_cache import (
+    DEFAULT_AR_CACHE_CAP_TOKENS,
+    ARCacheBudgetError,
+    ARCacheDescriptor,
+    ARCachePool,
+    ARCacheSlot,
+)
+from harmonyspeech.modeling.models.chatterbox.t3_ar import (
+    ChatterboxT3AR,
+    T3ARSampler,
+    _SafeAlignmentStreamAnalyzer,
+)
 
 __all__ = [
     "ARBatchRunner",
@@ -88,12 +100,19 @@ __all__ = [
     "ARRow",
     "ARStepOutcome",
     "ARPrefillTooLongError",
+    "DEFAULT_AR_STEP_TOKENS",
     "EnglishContract",
     "TurboContract",
     "cast_conditionals",
     "english_text_tokens",
+    "multilingual_text_tokens",
     "turbo_text_tokens",
 ]
+
+#: Tokens a pure continuation engine step may decode before yielding back to the
+#: scheduler (Phase 12-8). Admission steps (new rows) still decode exactly one
+#: token, so a freshly prefilled row returns immediately.
+DEFAULT_AR_STEP_TOKENS = 16
 
 #: Upstream English ``tts.py`` hard-codes ``max_new_tokens=1000``.
 ENGLISH_MAX_NEW_TOKENS = 1000
@@ -140,19 +159,55 @@ def turbo_text_tokens(model, text: str) -> Tensor:
     return encoded.input_ids.to(device=model.t3.device)
 
 
-def cast_conditionals(conds, t3):
-    """Cast a request's ``T3Cond`` to the T3 weight dtype/device, in place.
+def multilingual_text_tokens(model, text: str, language_id: str | None = "en") -> Tensor:
+    """BOT + multilingual tokenizer(text, language_id) + EOT, as ``mtl_tts`` builds it.
+
+    Mirrors ``chatterbox/mtl_tts.py:268-275``. Returns ``[1, T]``; the CFG
+    duplication happens in :meth:`EnglishContract.build_prefill` (multilingual
+    shares English's decode contract).
+    """
+    from chatterbox.mtl_tts import punc_norm
+
+    tokens = model.tokenizer.text_to_tokens(
+        punc_norm(text), language_id=language_id.lower() if language_id else None
+    ).to(model.device)
+    tokens = torch.atleast_2d(tokens).to(dtype=torch.long)
+    start = int(model.t3.hp.start_text_token)
+    stop = int(model.t3.hp.stop_text_token)
+    tokens = torch.nn.functional.pad(tokens, (1, 0), value=start)
+    tokens = torch.nn.functional.pad(tokens, (0, 1), value=stop)
+    return tokens.to(device=model.t3.device)
+
+
+def cast_conditionals(conds, t3, exaggeration: float | None = None):
+    """Cast a request's ``T3Cond`` to the T3 weight dtype/device, without mutation.
 
     The AR path never assigns conditionals to ``model.conds``; this is the local
     equivalent of :meth:`ModelRunnerBase._align_chatterbox_conditionals` (Phase
-    4-1 dtype alignment) applied to the request-owned object.
+    4-1 dtype alignment) applied to a **copy** of the request-owned object. A
+    ``SpeakerArtifact`` may carry cached/shared conditionals, so mutating
+    ``conds.t3`` in place would leak ``exaggeration`` (and dtype moves) across
+    requests. ``exaggeration`` updates ``emotion_adv`` exactly like the sequential
+    aligner when the checkpoint has that field.
     """
     t3_cond = getattr(conds, "t3", None)
     if t3_cond is None:
         return conds
+    import copy as _copy
+
     dtype = next(t3.parameters()).dtype
-    conds.t3 = t3_cond.to(device=t3.device, dtype=dtype)
-    return conds
+    # T3Cond.to() mutates in place, so clone before moving/casting. Conditionals
+    # may come from a cached/shared SpeakerArtifact.
+    new_t3_cond = _copy.deepcopy(t3_cond).to(device=t3.device, dtype=dtype)
+    if exaggeration is not None and getattr(new_t3_cond, "emotion_adv", None) is not None:
+        new_t3_cond.emotion_adv = float(exaggeration) * torch.ones(1, 1, 1, dtype=dtype, device=t3.device)
+    # Shallow Conditionals: `gen` (S3Gen ref dict) is shared read-only; the T3
+    # half is the per-request/temporary object we just built.
+    if isinstance(conds, Conditionals):
+        return Conditionals(t3=new_t3_cond, gen=conds.gen)
+    cloned = _copy.copy(conds)
+    cloned.t3 = new_t3_cond
+    return cloned
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +296,10 @@ class ARRow:
     processors: LogitsProcessorList | None = None
     start_token: Tensor | None = None
     generated_ids: Tensor | None = None
+    #: Per-row multilingual ``_SafeAlignmentStreamAnalyzer`` (``None`` for English/
+    #: Turbo). Created with ``attach_hooks=False``: the runner feeds it from its own
+    #: batched forward and never leaves a hook on the shared ``tfmr``.
+    analyzer: object | None = None
     tokens: list[Tensor] = field(default_factory=list)
     logits: Tensor | None = None
     prefill_len: int = 0
@@ -285,6 +344,12 @@ class ARStepOutcome:
 class _BaseContract:
     rows_per_request = 1
     max_new_tokens = ENGLISH_MAX_NEW_TOKENS
+    #: Token capacity this contract actually needs per KV slot. ``None`` means
+    #: "no opinion — use the pool's ``default_cap_tokens``". A value is only
+    #: honoured when the pool is at its production default (see
+    #: :meth:`ARBatchRunner.register`), so explicit small test pools keep their
+    #: own cap.
+    preferred_cap_tokens: int | None = None
 
     def build_prefill(self, t3, conds_t3, text_tokens: Tensor, cfg_weight: float) -> Tensor:  # pragma: no cover
         raise NotImplementedError
@@ -307,6 +372,11 @@ class EnglishContract(_BaseContract):
 
     rows_per_request = 2
     max_new_tokens = ENGLISH_MAX_NEW_TOKENS
+    #: ``34`` Perceiver-resampled conditioning tokens + ~118 text + 1000 speech
+    #: = 1152. Unlike Turbo, the English/Multilingual prompt is resampled, so it
+    #: never grows to Turbo's 376-token un-resampled size; 1152 (135 MiB/slot on
+    #: fp16) is enough and saves 720 MiB across the two 8-slot arenas.
+    preferred_cap_tokens = 1152
 
     def build_prefill(self, t3, conds_t3, text_tokens: Tensor, cfg_weight: float) -> Tensor:
         # `prepare_input_embeds` is upstream's own composition (cond + text +
@@ -334,6 +404,15 @@ class EnglishContract(_BaseContract):
 
     def sample(self, t3, row: ARRow) -> Tensor | None:
         logits = row.sampler.combine_cfg(row.logits)
+        if row.analyzer is not None:
+            if logits.dim() == 1:  # guard in case something upstream squeezed
+                logits = logits.unsqueeze(0)  # (1, V)
+            last_token = (
+                row.generated_ids[0, -1].item()
+                if row.generated_ids is not None and row.generated_ids.numel() > 0
+                else None
+            )
+            logits = row.analyzer.step(logits, next_token=last_token)
         token = row.sampler.pick(logits, row.generated_ids, generator=row.generator)
         row.generated_ids = torch.cat([row.generated_ids, token], dim=1)
         row.tokens.append(token)
@@ -353,6 +432,10 @@ class TurboContract(_BaseContract):
 
     rows_per_request = 1
     max_new_tokens = TURBO_MAX_NEW_TOKENS
+    #: Turbo's conditioning prompt is not Perceiver-resampled (up to 376 tokens),
+    #: so it needs the full 1536-token slot: 144 MiB/slot on fp16, 576 MiB for
+    #: the 4-slot arena.
+    preferred_cap_tokens = 1536
 
     def build_prefill(self, t3, conds_t3, text_tokens: Tensor, cfg_weight: float) -> Tensor:
         start = int(t3.hp.start_speech_token)
@@ -427,11 +510,16 @@ class ARBatchRunner:
         model_config=None,
         contract: _BaseContract | None = None,
         model_type: str | None = None,
+        step_tokens: int = DEFAULT_AR_STEP_TOKENS,
     ) -> None:
         self.t3 = t3
         self.pool = pool
         self.model_key = model_key
         self.model_config = model_config
+        # Phase 12-8: a pure continuation engine step decodes this many tokens
+        # before returning to the scheduler. Clamped so a bad config can never
+        # stall the engine loop.
+        self.step_tokens = max(1, int(step_tokens))
         # Canonical indexed device (Phase 11-0): ``t3.device`` is already
         # indexed in practice, but resolving keeps a mocked/CPU t3 and an
         # explicit ``cuda:1`` consistent with the pool's accounting.
@@ -441,6 +529,10 @@ class ARBatchRunner:
         self.arena = None
         self.rows: dict[str, ARRow] = {}
         self._lock = threading.RLock()
+        # Phase 12-8: rows whose T3 decode finished but whose S3Gen vocode is held
+        # until the batch's active rows finish, so finished chunks vocode in one
+        # padded ``inference_batched`` call instead of solo mid-decode.
+        self._pending_vocode: dict[str, tuple] = {}
         self.default_seed = int(getattr(model_config, "seed", 0) or 0)
         self._seed_counter = 0
         self._registration_attempted = False
@@ -514,7 +606,14 @@ class ARBatchRunner:
                 # the whole shared pool and makes a runtime refusal impossible
                 # when the budget is adequate; an arena that still cannot fit a
                 # slab is a graceful sequential fallback, never a boot failure.
-                cap = int(getattr(pool, "default_cap_tokens", 768) or 768)
+                cap = int(getattr(pool, "default_cap_tokens", DEFAULT_AR_CACHE_CAP_TOKENS) or DEFAULT_AR_CACHE_CAP_TOKENS)
+                # Only shrink a *production-default* pool to the contract's
+                # measured need; a test pool with an explicit small cap keeps it.
+                if (
+                    cap == DEFAULT_AR_CACHE_CAP_TOKENS
+                    and self.contract.preferred_cap_tokens is not None
+                ):
+                    cap = min(cap, int(self.contract.preferred_cap_tokens))
                 slab = ARCacheDescriptor(
                     model_key=self.model_key,
                     layers=layers,
@@ -522,6 +621,7 @@ class ARBatchRunner:
                     head_dim=head_dim,
                     dtype=dtype,
                     cap_tokens=cap,
+                    rows_per_request=self.contract.rows_per_request,
                 ).slab_bytes(cap)
                 desired = max(
                     1,
@@ -542,8 +642,9 @@ class ARBatchRunner:
                         kv_heads=kv_heads,
                         head_dim=head_dim,
                         dtype=dtype,
-                        cap_tokens=None,  # pool default (`ar_inference.default_cap_tokens`)
+                        cap_tokens=cap,
                         slots=slots,
+                        rows_per_request=self.contract.rows_per_request,
                     ),
                     device=model_device,
                 )
@@ -570,6 +671,24 @@ class ARBatchRunner:
         with self._lock:
             return request_id in self.rows
 
+    def has_pending_vocode(self, request_id: str) -> bool:
+        """True when this request finished T3 decode but its vocode is deferred."""
+        with self._lock:
+            return request_id in self._pending_vocode
+
+    def put_pending_vocode(self, request_id: str, item: tuple) -> None:
+        """Hold a finished row's ``(tokens, conds, seed, progress)`` for batching."""
+        with self._lock:
+            self._pending_vocode[request_id] = item
+
+    def pop_pending_vocode(self, request_id: str) -> tuple | None:
+        with self._lock:
+            return self._pending_vocode.pop(request_id, None)
+
+    def peek_pending_vocode(self, request_id: str) -> tuple | None:
+        with self._lock:
+            return self._pending_vocode.get(request_id)
+
     def active_rows(self) -> int:
         with self._lock:
             return len(self.rows)
@@ -593,6 +712,7 @@ class ARBatchRunner:
         generator.manual_seed(self._resolved_seed(seed))
         return generator
 
+    @torch.no_grad()
     def begin(
         self,
         request_id: str,
@@ -697,6 +817,28 @@ class ARBatchRunner:
             float(getattr(row.sampler, "cfg_weight", 0.0)) if row.sampler is not None else 0.0,
         )
         length = int(embeds.shape[1])
+
+        # Phase 12-7: multilingual rows decode with a per-row analyzer so a chunk
+        # that never emits EOS naturally stops on the post-completion long tail.
+        # ``attach_hooks=False`` keeps the shared ``tfmr`` hook-free; the runner's
+        # ``_run_with_alignment`` fills ``last_aligned_attns`` for this forward.
+        if (
+            getattr(self.t3.hp, "is_multilingual", False)
+            and ChatterboxT3AR.analyzer_enabled()
+            and isinstance(self.contract, EnglishContract)
+        ):
+            text_len = int(row.text_tokens.size(-1))
+            # `embeds` = len_cond + text + start-speech + BOS.
+            len_cond = length - text_len - 2
+            row.analyzer = _SafeAlignmentStreamAnalyzer(
+                self.t3.tfmr,
+                None,
+                text_tokens_slice=(len_cond, len_cond + text_len),
+                alignment_layer_idx=9,
+                eos_idx=int(self.t3.hp.stop_speech_token),
+                attach_hooks=False,
+            )
+
         if length > self.arena.cap_tokens:
             raise ARPrefillTooLongError(
                 f"prefill of {length} tokens exceeds the arena's cap_tokens={self.arena.cap_tokens} "
@@ -712,12 +854,16 @@ class ARBatchRunner:
         )
         cache_position = torch.arange(length, dtype=torch.long, device=self.t3.device)
         position_ids = cache_position.unsqueeze(0).expand(rows, -1)
-        output = self._forward(
-            embeds,
-            cache,
-            cache_position=cache_position,
-            attention_mask=None,
-            position_ids=position_ids,
+        output = self._run_with_alignment(
+            [row],
+            [length],
+            lambda: self._forward(
+                embeds,
+                cache,
+                cache_position=cache_position,
+                attention_mask=None,
+                position_ids=position_ids,
+            ),
         )
         logits = self.t3.speech_head(output.last_hidden_state)  # [R, length, V]
         row.logits = logits[:, -1, :]
@@ -725,6 +871,79 @@ class ARBatchRunner:
         row.length = length
         row.position = 1
         row.max_new_tokens = max(0, min(self.contract.max_new_tokens, self.arena.cap_tokens - length))
+
+    def _run_with_alignment(self, rows: list[ARRow], kv_lengths: list[int], forward_fn):
+        """Run one batched forward and feed every row's analyzer from it.
+
+        Only multilingual rows carry an analyzer. When none does, this is a plain
+        ``forward_fn()`` call with no config or hook mutation (English/Turbo keep
+        native SDPA). Otherwise one temporary forward hook per aligned head
+        captures the eager attention matrix for the whole batch; each row's
+        conditional CFG slot (``2 * r_idx``) is sliced to its valid KV prefix
+        (``:kv_len``) and stored on that row's analyzer. Every hook is removed and
+        both config attributes are restored in ``finally``, so zero hooks remain
+        on the shared ``tfmr`` after the forward returns.
+        """
+        if not any(row.analyzer is not None for row in rows):
+            return forward_fn()
+
+        import chatterbox.models.t3.inference.alignment_stream_analyzer as _asa_mod
+
+        config = getattr(self.t3.tfmr, "config", None)
+        num_layers = len(self.t3.tfmr.layers)
+        num_heads = int(getattr(config, "num_attention_heads", 16) or 16)
+        aligned_heads = [
+            (layer_idx % num_layers, head_idx % num_heads)
+            for layer_idx, head_idx in _asa_mod.LLAMA_ALIGNED_HEADS
+        ]
+
+        prev_attn = getattr(config, "_attn_implementation", "sdpa") if config is not None else None
+        prev_out = getattr(config, "output_attentions", False) if config is not None else False
+        prev_capture = getattr(self.t3.tfmr, "_hse_capture_attentions", False)
+
+        captured: list[Tensor | None] = [None for _ in aligned_heads]
+        handles = []
+
+        if config is not None:
+            # `output_attentions` requires eager, and SDPA returns no weights.
+            config._attn_implementation = "eager"
+        self.t3.tfmr._hse_capture_attentions = True
+
+        def _make_hook(buffer_idx):
+            def attention_forward_hook(module, inputs, output):
+                if isinstance(output, tuple) and len(output) > 1 and output[1] is not None:
+                    captured[buffer_idx] = output[1].detach()
+
+            return attention_forward_hook
+
+        try:
+            for buffer_idx, (layer_idx, _head_idx) in enumerate(aligned_heads):
+                target_layer = self.t3.tfmr.layers[layer_idx].self_attn
+                handles.append(target_layer.register_forward_hook(_make_hook(buffer_idx)))
+
+            result = forward_fn()
+
+            for r_idx, (row, kv_len) in enumerate(zip(rows, kv_lengths, strict=True)):
+                if row.analyzer is None:
+                    continue
+                for buffer_idx, (_layer_idx, head_idx) in enumerate(aligned_heads):
+                    attention = captured[buffer_idx]
+                    if attention is None:
+                        continue
+                    # (B, H, T0, Ti): 2*r_idx is row r_idx's conditional CFG slot.
+                    row.analyzer.last_aligned_attns[buffer_idx] = attention[
+                        2 * r_idx, head_idx, :, :kv_len
+                    ].cpu()
+            return result
+        finally:
+            for handle in handles:
+                with contextlib.suppress(Exception):
+                    handle.remove()
+            self.t3.tfmr._hse_capture_attentions = prev_capture
+            if config is not None:
+                config._attn_implementation = prev_attn
+                with contextlib.suppress(Exception):
+                    config.output_attentions = prev_out
 
     def _forward(self, inputs_embeds, cache, *, cache_position, attention_mask, position_ids):
         return self.t3.tfmr(
@@ -735,6 +954,12 @@ class ARBatchRunner:
             cache_position=cache_position,
             use_cache=True,
             return_dict=True,
+            # Only materialise attention while `_run_with_alignment` is driving an
+            # eager forward for analyzer rows; otherwise keep the native path.
+            output_attentions=bool(
+                getattr(self.t3.tfmr.config, "_attn_implementation", None) == "eager"
+                and getattr(self.t3.tfmr, "_hse_capture_attentions", False)
+            ),
         )
 
     def _advance(self, rows: list[ARRow]) -> None:
@@ -777,12 +1002,16 @@ class ARBatchRunner:
         position_ids = torch.tensor(
             [[row.length] for row in rows for _ in row.slots], dtype=torch.long, device=self.t3.device
         )
-        output = self._forward(
-            embeds,
-            cache,
-            cache_position=cache_position,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
+        output = self._run_with_alignment(
+            rows,
+            [row.length + 1 for row in rows],
+            lambda: self._forward(
+                embeds,
+                cache,
+                cache_position=cache_position,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            ),
         )
         logits = self.t3.speech_head(output.last_hidden_state)  # [R, 1, V]
         index = 0
@@ -794,6 +1023,7 @@ class ARBatchRunner:
             row.position += 1
 
     # -- decode ----------------------------------------------------------
+    @torch.no_grad()
     def step(self, request_ids) -> list[ARStepOutcome]:
         """Advance every named row by one speech token (one batched forward)."""
         outcomes: list[ARStepOutcome] = []
@@ -822,6 +1052,12 @@ class ARBatchRunner:
                     # bounds the KV write, so a longer request truncates here.
                     row.finished = True
                     row.finish_reason = "length"
+                    logger.warning(
+                        f"AR row '{row.request_id}' ({self.model_key}) truncated at "
+                        f"{row.tokens_emitted} tokens: finish_reason=length "
+                        f"(max_new_tokens={row.max_new_tokens}, length={row.length}, "
+                        f"cap_tokens={self.arena.cap_tokens})"
+                    )
                 else:
                     advance.append(row)
             if advance:
@@ -861,6 +1097,7 @@ class ARBatchRunner:
     def pop(self, request_id: str) -> ARRow | None:
         """Remove a row and release its slots (finish, error, abort, deadline)."""
         with self._lock:
+            self._pending_vocode.pop(request_id, None)
             row = self.rows.pop(request_id, None)
         if row is not None:
             row.release_slots()
@@ -874,5 +1111,6 @@ class ARBatchRunner:
         with self._lock:
             rows = list(self.rows.values())
             self.rows.clear()
+            self._pending_vocode.clear()
         for row in rows:
             row.release_slots()

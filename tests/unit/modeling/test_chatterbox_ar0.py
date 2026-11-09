@@ -35,7 +35,10 @@ from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.models.t3.modules.t3_config import T3Config
 
 from harmonyspeech.modeling.models.chatterbox import factory
-from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
+from harmonyspeech.modeling.models.chatterbox.t3_ar import (
+    ChatterboxT3AR,
+    _SafeAlignmentStreamAnalyzer,
+)
 
 #: Tiny Llama topology for the gate: small enough to build in a second, deep
 #: enough (2 layers) that the KV cache and position embeddings are exercised.
@@ -248,11 +251,11 @@ def test_decode_state_does_not_leak_between_calls(tiny_pair, tiny_hp):
 # Factory wiring
 # ---------------------------------------------------------------------------
 @pytest.mark.unit
-def test_t3_class_for_role_maps_only_the_english_tts_role():
+def test_t3_class_for_role_maps_tts_and_multilingual_to_the_cleaned_class():
     assert factory._t3_class_for_role(factory.ROLE_TTS) is ChatterboxT3AR
-    # Multilingual keeps upstream (per-request analyzer + attention hooks);
-    # turbo keeps `T3.inference_turbo` (a structurally different loop, 9-3).
-    assert factory._t3_class_for_role(factory.ROLE_MULTILINGUAL) is T3
+    # Phase 12-7: multilingual shares English's Llama_520M contract and now uses
+    # the cleaned loop too; turbo keeps `T3.inference_turbo` (a different loop).
+    assert factory._t3_class_for_role(factory.ROLE_MULTILINGUAL) is ChatterboxT3AR
     assert factory._t3_class_for_role(factory.ROLE_TURBO) is T3
     assert factory._t3_class_for_role(factory.ROLE_VC) is T3
 
@@ -282,8 +285,8 @@ class _FakeChatterboxT3AR(_FakeT3):
 
 
 @pytest.mark.unit
-def test_load_t3_instantiates_the_cleaned_class_for_tts_only(monkeypatch):
-    """TTS gets ``ChatterboxT3AR``; multilingual keeps the upstream class.
+def test_load_t3_instantiates_the_cleaned_class_for_tts_and_multilingual(monkeypatch):
+    """TTS and Multilingual get ``ChatterboxT3AR`` (Phase 12-7).
 
     The turbo branch of ``load_t3`` is unreachable (the factory never assembles
     turbo: ``build_role_model`` returns None and ``assemble_role`` raises) and
@@ -299,7 +302,7 @@ def test_load_t3_instantiates_the_cleaned_class_for_tts_only(monkeypatch):
         return factory.load_t3("resemble-ai/chatterbox", None, "cpu", torch.float32, role=role)
 
     assert isinstance(load(factory.ROLE_TTS), _FakeChatterboxT3AR)
-    assert not isinstance(load(factory.ROLE_MULTILINGUAL), _FakeChatterboxT3AR)
+    assert isinstance(load(factory.ROLE_MULTILINGUAL), _FakeChatterboxT3AR)
 
 
 @pytest.mark.unit
@@ -394,3 +397,104 @@ def test_build_role_model_leaves_multilingual_on_the_upstream_class(tiny_hp, mon
 
     assert model.t3 is plain
     assert not isinstance(model.t3, ChatterboxT3AR)
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-7: multilingual analyzer is on by default and never leaks hooks
+# ---------------------------------------------------------------------------
+def _tiny_multilingual_hp(monkeypatch):
+    monkeypatch.setitem(LLAMA_CONFIGS, "tiny_ar0_mtl", dict(_TINY_LLAMA))
+    hp = T3Config.multilingual()  # text_tokens_dict_size == 2454 -> is_multilingual
+    hp.llama_config_name = "tiny_ar0_mtl"
+    hp.speech_tokens_dict_size = 96
+    hp.start_speech_token = 90
+    hp.stop_speech_token = 91
+    hp.max_text_tokens = 64
+    hp.max_speech_tokens = 64
+    hp.use_perceiver_resampler = False
+    hp.emotion_adv = True
+    return hp
+
+
+def _tiny_multilingual_text(hp):
+    return torch.tensor([[hp.start_text_token, *range(5, 13), hp.stop_text_token]] * 2)
+
+
+def _forward_hook_count(t3) -> int:
+    return sum(len(layer.self_attn._forward_hooks) for layer in t3.tfmr.layers)
+
+
+@pytest.mark.unit
+def test_multilingual_analyzer_is_on_by_default_and_never_leaks_hooks(monkeypatch):
+    """Default ON: a multilingual decode uses the analyzer but leaks no hooks.
+
+    GPU-2 verified (2026-11-09): ``t3_mtl23ls_v2`` rarely emits
+    ``stop_speech_token`` naturally at a chunk's end, so without the analyzer's
+    post-completion ``long_tail`` trigger a chunk keeps babbling until
+    ``max_new_tokens``. It must therefore be the default, while still leaving the
+    shared Llama exactly as it found it (SDPA, ``output_attentions=False``, no
+    forward hooks).
+    """
+    monkeypatch.delenv(ChatterboxT3AR.ANALYZER_ENV, raising=False)
+    hp = _tiny_multilingual_hp(monkeypatch)
+    torch.manual_seed(20261112)
+    model = ChatterboxT3AR(hp).eval()
+    model.requires_grad_(False)
+    model.tfmr.config._attn_implementation = "sdpa"
+    model.tfmr.config.output_attentions = False
+
+    assert ChatterboxT3AR.analyzer_enabled() is True
+
+    backend = model.build_ar_backend(len_cond=5, text_len=4)
+    analyzer = backend.alignment_stream_analyzer
+    assert isinstance(analyzer, _SafeAlignmentStreamAnalyzer)
+    assert model.ar_output_attentions(backend) is True
+    # Construction switched to eager and registered the spy hooks.
+    assert model.tfmr.config._attn_implementation == "eager"
+    assert model.tfmr.config.output_attentions is True
+    assert _forward_hook_count(model) > 0
+
+    # ``close`` is the only teardown path and restores the config.
+    analyzer.close()
+    assert _forward_hook_count(model) == 0
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    assert model.tfmr.config.output_attentions is False
+
+    # A full decode also ends on SDPA with zero hooks.
+    torch.manual_seed(7)
+    model.inference(
+        t3_cond=_conditionals(hp),
+        text_tokens=_tiny_multilingual_text(hp),
+        **{**_DECODE, "max_new_tokens": 3},
+    )
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    assert model.tfmr.config.output_attentions is False
+    assert _forward_hook_count(model) == 0, "every analyzer hook must be removed"
+
+
+@pytest.mark.unit
+def test_multilingual_analyzer_can_be_disabled(monkeypatch):
+    """``HSE_CHATTERBOX_MTL_ANALYZER=0`` restores native SDPA and no analyzer."""
+    monkeypatch.setenv(ChatterboxT3AR.ANALYZER_ENV, "0")
+    hp = _tiny_multilingual_hp(monkeypatch)
+    torch.manual_seed(20261112)
+    model = ChatterboxT3AR(hp).eval()
+    model.requires_grad_(False)
+
+    assert ChatterboxT3AR.analyzer_enabled() is False
+
+    backend = model.build_ar_backend(len_cond=5, text_len=4)
+
+    assert backend.alignment_stream_analyzer is None
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    assert _forward_hook_count(model) == 0
+    assert model.ar_output_attentions(backend) is False
+
+    torch.manual_seed(7)
+    model.inference(
+        t3_cond=_conditionals(hp),
+        text_tokens=_tiny_multilingual_text(hp),
+        **{**_DECODE, "max_new_tokens": 3},
+    )
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    assert _forward_hook_count(model) == 0

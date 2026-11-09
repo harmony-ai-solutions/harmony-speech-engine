@@ -27,6 +27,27 @@ Design notes
   whose handler really forwards a padded batch (:data:`BATCHING_AXIS_ENABLED`).
   The remaining Phase 8 families already carry their mixed-length case sets, so
   enabling one is a one-line edit to that set.
+* **Long-form axes are premise-checked (Phase 12-4).** ``longform:off-vs-on``
+  only means something when the case text stays inside ONE chunk at the serving
+  layer's budget, and when the clone reference is speech the VAD can detect; a
+  case that violates either premise is excluded/retargeted with a recorded
+  reason instead of failing for the wrong reason. ``determinism:run1-vs-run2``
+  asserts sample identity for deterministic families, the documented
+  cross-process noise floor for seeded stochastic ones, and a distributional
+  gate (hard duration + RMS/LTAS) for a model that samples on every inference
+  (:data:`MODEL_SAMPLES_EVERY_RUN`) — the KittenTTS ONNX graph has unseeded
+  ``RandomNormalLike``/``RandomUniformLike`` nodes, so its two runs can never be
+  sample-identical.
+* **Output filters are not a harness axis (Phase 12-3).** ``remove_dc_offset``,
+  ``trim_silence`` and ``fix_internal_silence`` are opt-in post-processing whose
+  *intent* is to change samples. The honest on-vs-off gate ("same seed, flags on
+  vs off => expected difference, valid WAV") lives on synthesized fixtures with
+  known DC/silence structure in ``tests/unit/common/test_audio_utils.py`` and
+  ``tests/integration/test_tts_output_filters.py``, because a real model may
+  legitimately emit no DC offset and no long silence — then a "must differ" rule
+  would fail for the wrong reason. The harness therefore treats the filters as
+  an explicit opt-in axis outside its drift comparison rather than rebuilding
+  its metrics for a non-regression.
 
 Usage
 -----
@@ -161,6 +182,87 @@ AUTOCAST_RMS_PCT = 5.0
 AUTOCAST_CORR_MIN = 0.98
 #: The two side labels of the autocast axis (side A is the fp32 reference).
 AUTOCAST_AXIS_SIDES = ("fp32", "autocast")
+
+# ---------------------------------------------------------------------------
+# Long-form axes (Phase 12-4)
+# ---------------------------------------------------------------------------
+#: ``longform:off-vs-on`` is the Phase 12-2 byte-identity gate re-run at family
+#: breadth: a short text (0/1 chunks) with ``split_text: true`` must take the
+#: untouched single-shot path, so the two sides are the same computation. The
+#: in-process gate is bit-exact; this cross-process re-run disables the watermark
+#: (Perth's conv kernels are not bit-reproducible across processes — the sharing
+#: axis hit the same limit) and requires identical length. Deterministic
+#: families must be bit-identical; stochastic families are compared with the
+#: documented CUDA kernel-selection noise floor (:data:`SHARING_MAX_ABS_DIFF`).
+#:
+#: ``determinism:run1-vs-run2`` runs the same *chunked* request twice with the
+#: same request seed; the chunk seeds are ``seed + chunk_index`` and the stitch
+#: is by index, so the stitched bytes must match across the two runs.
+LONGFORM_AXIS_SEED = 1234
+#: Character budget for the determinism axis: small enough that the fixture text
+#: splits into several chunks, so the stitched path really runs.
+LONGFORM_AXIS_CHUNK_SIZE = 120
+#: A deterministic multi-sentence fixture for the chunked-determinism axis. No
+#: abbreviations/digits, so the splitter boundaries are unambiguous.
+LONGFORM_CHUNKED_TEXT = (
+    "The morning train carries a quiet signal across the river while the harbor wakes. "
+    "Each narrow window frames a distant garden and a steady pattern of light. "
+    "We gather the simple story before the weather turns and the current moves. "
+    "A careful measure of motion helps every traveler find the open meadow. "
+    "The engine listens through the long afternoon and promises a gentle return. "
+    "Later the lantern marks the footpath where the evening story begins."
+)
+#: TTS families the long-form axes run at breadth. VoiceFixer has no TTS case
+#: (it restores audio), so it is not in this set.
+LONGFORM_AXIS_FAMILIES = (
+    "chatterbox",
+    "chatterbox_turbo",
+    "chatterbox_multilingual",
+    "openvoice_v1",
+    "openvoice_v2",
+    "melotts",
+    "harmonyspeech",
+    "kittentts",
+)
+
+#: Character budget the serving layer applies when a client sets ``split_text``
+#: without a ``chunk_size`` (``serving_text_to_speech.DEFAULT_CHUNK_SIZE``, the
+#: Phase 12-2 owner decision). The identity axis deliberately leaves
+#: ``chunk_size`` unset so the OFF side never chunks at all; the ON side
+#: therefore splits at this budget. A case text must stay inside ONE chunk or
+#: the two sides legitimately differ (different synthesis boundaries) and the
+#: byte-identity gate would fail for the wrong reason. The unit self-check pins
+#: this value to the serving constant.
+LONGFORM_IDENTITY_CHUNK_BUDGET = 300
+
+#: Families whose *model* draws fresh noise on every inference, so two runs of
+#: the same seeded request cannot be sample-identical no matter what the engine
+#: does. Verified 2026-11-09 on the KittenTTS ONNX graphs: the graph carries
+#: ``RandomNormalLike`` / ``RandomUniformLike`` nodes **without a seed
+#: attribute**, and two fresh processes synthesising the same sentence differ
+#: (max |Δsample| 0.14, corr 0.992, log-mel MSE 2.45 dB²) with identical
+#: duration. Their identity/determinism gates are therefore distributional
+#: (duration is still a hard invariant; RMS/LTAS use the stochastic bounds).
+#: Engine-side chunk→result pairing for these families is pinned separately,
+#: in-process, with a deterministic stub (tests/integration/test_tts_chunking.py).
+MODEL_SAMPLES_EVERY_RUN = frozenset({"kittentts"})
+
+#: Families whose clone conditioning is carried through the Silero VAD step.
+#: A reference clip the VAD cannot detect makes the tone-converter encoder's
+#: segment list empty (OpenVoice ``vad → embed``). The identity axis swaps a
+#: synthetic reference for a real-speech one on these families only: Chatterbox
+#: and HarmonySpeech condition on the clip directly and are happy with the
+#: synthetic fixtures.
+VAD_CARRIED_FAMILIES = frozenset({"openvoice_v1", "openvoice_v2"})
+
+#: Real-speech replacement for a synthetic (VAD-undetectable) reference clip.
+#: Chosen to keep the same role (a/b) so the case still exercises a second
+#: timbre; see ``tests.audio_fixtures.VAD_UNDETECTABLE_CLIPS``.
+REAL_SPEECH_REFERENCE = {
+    "voice_a": "repo_voice_a",
+    "voice_b": "repo_voice_b",
+}
+
 
 #: Families with ``batching_cases`` already registered (so a later Phase 8 task
 #: only flips the allow-list entry above) and the task that enables them.
@@ -826,12 +928,21 @@ def parse_axis(text: str) -> Axis:
     if "-vs-" not in pair:
         raise ValueError(f"axis must contain '-vs-', got {text!r}")
     a, b = pair.split("-vs-", 1)
-    if kind not in {"dtype", "sharing", "baseline", "batching"}:
-        raise ValueError(f"unknown axis kind '{kind}' (expected dtype, sharing, batching or baseline)")
+    if kind not in {"dtype", "sharing", "baseline", "batching", "longform", "determinism"}:
+        raise ValueError(
+            f"unknown axis kind '{kind}' (expected dtype, sharing, batching, longform, "
+            "determinism or baseline)"
+        )
     if kind == "batching":
         for side in (a, b):
             if not side.isdigit() or int(side) < 1:
                 raise ValueError(f"batching axis sides must be batch sizes >= 1, got {side!r}")
+    if kind == "longform":
+        if (a, b) != ("off", "on"):
+            raise ValueError(f"the long-form axis is 'longform:off-vs-on', got {text!r}")
+    if kind == "determinism":
+        if (a, b) != ("run1", "run2"):
+            raise ValueError(f"the determinism axis is 'determinism:run1-vs-run2', got {text!r}")
     if kind == "dtype" and {a, b} == set(AUTOCAST_AXIS_SIDES):
         # Phase 11-2 experiment axis. Side A must be the fp32 reference so the
         # report's "A vs B" reads as "baseline vs experiment".
@@ -884,6 +995,34 @@ def side_settings(axis: Axis, side: str) -> dict:
             # Diagnostic mode: zero the stochastic scales and disable TF32 so the
             # comparison isolates padding/unpacking instead of sampling noise or
             # TF32's batch-shape-dependent kernel choice.
+            "deterministic": True,
+        }
+    if axis.kind == "longform":
+        # Short text with split_text on must take the untouched single-shot path.
+        # Watermark off: Perth's conv kernels are not bit-reproducible across
+        # processes, which would mask the dispatcher identity we are gating.
+        return {
+            "dtype": "float32",
+            "share": True,
+            "watermark": False,
+            "split_text": side == "on",
+            "chunk_size": None,
+            "seed": LONGFORM_AXIS_SEED,
+            # Disable TF32 so batch-shape-dependent kernel choice cannot add
+            # cross-process noise on top of the dispatcher identity gate.
+            "deterministic": True,
+        }
+    if axis.kind == "determinism":
+        # Both sides are the same chunked request; only the run index differs.
+        return {
+            "dtype": "float32",
+            "share": True,
+            "watermark": False,
+            "split_text": True,
+            "chunk_size": LONGFORM_AXIS_CHUNK_SIZE,
+            "crossfade_ms": 0,
+            "sentence_pause_ms": 0,
+            "seed": LONGFORM_AXIS_SEED,
             "deterministic": True,
         }
     return {"dtype": side, "share": True, "watermark": True}
@@ -950,17 +1089,27 @@ def reference_available(name: str) -> bool:
 
 
 def partition_optional_cases(cases: list[dict], available=None) -> tuple[list[dict], list[dict]]:
-    """Split cases into runnable and skipped-on-missing-optional-fixture.
+    """Split cases into runnable and skipped.
 
-    A case marked ``optional`` whose ``reference`` clip is absent is excluded
-    from the run entirely (it never reaches a worker, so it cannot fail) and
-    reported separately. ``available`` is injectable for tests.
+    A case is skipped when either:
+
+    * it carries an explicit ``skip_reason`` — the case-selection layer proved
+      the case cannot gate anything (e.g. a multi-chunk text on the long-form
+      identity axis), so running it would produce a misleading FAIL; or
+    * it is marked ``optional`` and its ``reference`` clip is absent. It never
+      reaches a worker, so it cannot fail, and it is reported separately.
+
+    ``available`` is injectable for tests.
     """
     available = available or reference_available
     runnable: list[dict] = []
     skipped: list[dict] = []
     for case in cases:
-        if case.get("optional") and case.get("reference") and not available(case["reference"]):
+        if case.get("skip_reason") or (
+            case.get("optional")
+            and case.get("reference")
+            and not available(case["reference"])
+        ):
             skipped.append(case)
         else:
             runnable.append(case)
@@ -1097,7 +1246,7 @@ def _build_batching_request_input(case: dict, request_id: str, text_table: dict,
             options = GenerationOptions(noise_scale=0.0, noise_scale_w=0.0, seed=0)
         request = TextToSpeechRequest(
             model=case["model"],
-            input=text_table[case["text"]],
+            input=_case_text(case, text_table),
             mode=case.get("mode", "single_speaker_tts"),
             input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
             language=case.get("language"),
@@ -1207,6 +1356,42 @@ def _run_batching_worker(job, engine, text_table) -> dict:
     return manifest_cases
 
 
+def _case_text(case: dict, text_table: dict) -> str:
+    """Resolve a case's text, preferring an inline ``text_literal`` (Phase 12-4)."""
+    if "text_literal" in case:
+        return case["text_literal"]
+    return text_table[case["text"]]
+
+
+def _request_generation_options(settings: dict):
+    """Build the request-level ``GenerationOptions`` for a worker side.
+
+    Phase 12-4 adds ``split_text``/``chunk_size`` (and the stitch timings) so the
+    long-form axes can drive the real serving dispatcher. When none of the
+    long-form settings are present this reduces to the pre-12 behaviour: a seed
+    only (the autocast axis) or ``None``.
+    """
+    from harmonyspeech.endpoints.openai.protocol import GenerationOptions
+
+    request_seed = settings.get("seed")
+    split_text = bool(settings.get("split_text", False))
+    chunk_size = settings.get("chunk_size")
+    if request_seed is None and not split_text and chunk_size is None:
+        return None
+    kwargs: dict = {}
+    if request_seed is not None:
+        kwargs["seed"] = request_seed
+    if split_text:
+        kwargs["split_text"] = True
+    if chunk_size is not None:
+        kwargs["chunk_size"] = int(chunk_size)
+    if settings.get("crossfade_ms") is not None:
+        kwargs["crossfade_ms"] = int(settings["crossfade_ms"])
+    if settings.get("sentence_pause_ms") is not None:
+        kwargs["sentence_pause_ms"] = int(settings["sentence_pause_ms"])
+    return GenerationOptions(**kwargs)
+
+
 def run_worker(job_path: str) -> int:
     """Boot one engine for one side of the axis and run the family's cases."""
     import asyncio
@@ -1216,7 +1401,6 @@ def run_worker(job_path: str) -> int:
 
     from harmonyspeech.endpoints.openai.protocol import (
         AudioConversionRequest,
-        GenerationOptions,
         TextToSpeechRequest,
         VoiceConversionRequest,
     )
@@ -1282,15 +1466,16 @@ def run_worker(job_path: str) -> int:
         # Phase 11-2: the autocast axis carries an explicit request seed so the
         # vocode noise is identical on both sides (the sequential TTS loop still
         # uses the global seed above; VC/AR paths honour the request seed).
-        request_seed = job["settings"].get("seed")
-        options = GenerationOptions(seed=request_seed) if request_seed is not None else None
+        # Phase 12-4: the long-form axes additionally drive split_text/chunk_size
+        # through the real serving dispatcher.
+        options = _request_generation_options(job["settings"])
         started = time.time()
         try:
             kind = case["kind"]
             if kind == "tts":
                 request = TextToSpeechRequest(
                     model=case["model"],
-                    input=text_table[case["text"]],
+                    input=_case_text(case, text_table),
                     mode=case.get("mode", "single_speaker_tts"),
                     input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
                     language=case.get("language"),
@@ -1477,6 +1662,52 @@ def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tu
             failures.append(f"corr {metrics['corr']} < {AUTOCAST_CORR_MIN}")
         return (not failures), failures
 
+    if axis.kind in {"longform", "determinism"}:
+        # Phase 12-4. The dispatcher must not alter the single-shot path, and
+        # the seeded chunked path must reproduce its stitched bytes. Length is a
+        # hard invariant; the sample comparison is bit-exact for deterministic
+        # families and bounded by the documented cross-process CUDA noise floor
+        # for stochastic ones (the same limit the sharing axis records).
+        #
+        # A family whose *model* samples on every inference
+        # (:data:`MODEL_SAMPLES_EVERY_RUN`) cannot be sample-compared at all.
+        # Duration stays a hard invariant — it proves the chunk count, pairing
+        # and stitch length did not move — and the spectral/level distribution
+        # must stay inside the stochastic bounds. A crossed or duplicated chunk
+        # changes the stitched length (chunks differ in length) and the LTAS, so
+        # this gate still catches the failure it exists for.
+        failures = []
+        if metrics["duration_pct"] != 0.0:
+            failures.append(
+                f"duration changed ({metrics['duration_pct']}%) — the chunking path altered the frame count"
+            )
+        if metrics["identical"]:
+            return True, []
+        if family and family in MODEL_SAMPLES_EVERY_RUN:
+            stochastic = THRESHOLDS["stochastic"]
+            if metrics["rms_pct"] > stochastic["rms_pct"]:
+                failures.append(f"rms {metrics['rms_pct']:.2f}% > {stochastic['rms_pct']}%")
+            if metrics["ltas_rmse_db"] > stochastic["ltas_rmse_db"]:
+                failures.append(
+                    f"ltas rmse {metrics['ltas_rmse_db']:.2f}dB > {stochastic['ltas_rmse_db']}dB"
+                )
+            return (not failures), failures
+        family_kind = _family_kind(family) if family else "deterministic"
+        if family_kind == "deterministic":
+            failures.append(
+                "not bit-identical (the chunking dispatcher must leave the single-shot / "
+                "seeded chunked path byte-identical)"
+            )
+        else:
+            if metrics["max_abs_diff"] > SHARING_MAX_ABS_DIFF:
+                failures.append(
+                    f"max |Δsample| {metrics['max_abs_diff']} > {SHARING_MAX_ABS_DIFF} "
+                    "(beyond the documented CUDA kernel-noise floor)"
+                )
+            if metrics["logmel_mse"] > SHARING_LOG_MEL_MSE:
+                failures.append(f"logmel mse {metrics['logmel_mse']} > {SHARING_LOG_MEL_MSE}")
+        return (not failures), failures
+
     if axis.kind == "sharing":
         failures = []
         if metrics["duration_pct"] != 0.0:
@@ -1624,6 +1855,14 @@ def _markdown_table(report: dict) -> str:
     ]
     skipped: list[str] = []
     for family, detail in report["families"].items():
+        if detail.get("kind") == "skipped" and not detail.get("cases"):
+            # The gate did not run (dtype-exempt family, or every case was
+            # excluded by the axis' premise check). Show it instead of leaving
+            # an unexplained gap in the table.
+            reason = detail.get("skip_reason") or "skipped"
+            lines.append(
+                f"| {family} | - | skipped | SKIP | - | - | - | - | - | - | - | {reason[:80]} |"
+            )
         for case_name, case in detail.get("cases", {}).items():
             if "metrics" not in case:
                 lines.append(
@@ -1698,12 +1937,34 @@ def run_harness(args) -> int:
 
         kind = _family_kind(family)
         cases, skipped_cases = partition_optional_cases(_cases_for_axis(axis, family))
-        for case in skipped_cases:
+        skipped_entries = [
+            {
+                "name": case["name"],
+                "reason": (
+                    case.get("skip_message")
+                    or case.get("skip_reason")
+                    or "optional fixture missing"
+                ),
+                "label": case.get("label"),
+            }
+            for case in skipped_cases
+        ]
+        for case, entry in zip(skipped_cases, skipped_entries, strict=True):
+            print(f"[harness] {family}/{case['name']}: {entry['reason']}", flush=True)
+        if not cases and skipped_cases:
+            # Every case for this family was excluded. That is not a pass: the
+            # gate did not run, so say so instead of reporting an empty green.
+            report["families"][family] = {
+                "kind": "skipped",
+                "skip_reason": "no runnable case for this axis (see skipped_cases)",
+                "cases": {},
+                "skipped_cases": skipped_entries,
+            }
             print(
-                f"[harness] {family}/{case['name']}: "
-                f"{case.get('skip_message', 'optional fixture missing')}",
+                f"[harness] {family}: SKIP — no runnable case for {axis.label}",
                 flush=True,
             )
+            continue
         print(f"[harness] {family}: side A ({axis.side_a})…", flush=True)
         side_a = _run_side(family, axis.side_a, axis, use_gpu, workdir, cases=cases)
         print(f"[harness] {family}: side B ({axis.side_b})…", flush=True)
@@ -1715,20 +1976,18 @@ def run_harness(args) -> int:
             # vocode noise differs by construction, so its gate stays
             # distributional.
             kind = "stochastic" if family in BATCHING_AXIS_STOCHASTIC else "deterministic"
+        if axis.kind in {"longform", "determinism"} and family in MODEL_SAMPLES_EVERY_RUN:
+            # A model that draws fresh noise per inference cannot be compared
+            # sample-wise: report/score it with the stochastic distribution
+            # metrics (see :data:`MODEL_SAMPLES_EVERY_RUN`).
+            kind = "stochastic"
 
         family_entry = {
             "kind": kind,
             "cases": {},
             "side_a": side_a,
             "side_b": side_b,
-            "skipped_cases": [
-                {
-                    "name": case["name"],
-                    "reason": case.get("skip_message", "optional fixture missing"),
-                    "label": case.get("label"),
-                }
-                for case in skipped_cases
-            ],
+            "skipped_cases": skipped_entries,
         }
         if "error" in side_a or "error" in side_b:
             family_entry["error"] = side_a.get("error") or side_b.get("error")
@@ -1830,6 +2089,80 @@ def _family_kind(family: str) -> str:
     return FAMILY_KIND.get(family, "deterministic")
 
 
+def _chunks_for_axis_text(text: str, language: str | None, chunk_size: int | None) -> list[str]:
+    """Split ``text`` exactly the way the serving layer does (no drift).
+
+    Imported lazily so the harness module stays importable on a bare CPU
+    interpreter, and kept in one place so the case-selection guard and its tests
+    cannot disagree about the splitter.
+    """
+    from harmonyspeech.common.audio_utils import split_text_into_chunks
+
+    return split_text_into_chunks(text, chunk_size=chunk_size, language=language)
+
+
+def _longform_identity_cases(family: str) -> list[dict]:
+    """Cases for ``longform:off-vs-on``, made gate-honest (Phase 12-4).
+
+    The axis asserts that a short text with ``split_text: true`` takes the
+    untouched single-shot path, so the two sides must be the same computation.
+    Two conditions break that premise, and both are handled here instead of
+    producing a misleading FAIL:
+
+    * **A text that splits into more than one chunk.** At the serving layer's
+      default budget (:data:`LONGFORM_IDENTITY_CHUNK_BUDGET`) the ON side then
+      synthesises each chunk separately, and the OFF side one utterance: the
+      outputs legitimately differ at every synthesis boundary. The case is
+      excluded with a recorded ``skip_reason`` (the report lists it) rather than
+      gated.
+    * **A reference clip Silero VAD cannot detect** (the synthetic fixtures —
+      see ``tests.audio_fixtures.VAD_UNDETECTABLE_CLIPS``). The OpenVoice
+      ``vad → embed`` pipelines would get zero segments and error, so on
+      :data:`VAD_CARRIED_FAMILIES` the case is pointed at the real-speech clip
+      of the same role. The axis gates the dispatcher, not the reference bytes.
+    """
+    from tests.audio_fixtures import TEXTS, VAD_UNDETECTABLE_CLIPS
+
+    spec = FAMILY_SPECS[family]
+    tts_cases = [case for case in spec["cases"] if case.get("kind", "tts") == "tts"]
+    if not tts_cases:
+        raise SystemExit(
+            f"family '{family}' has no short TTS case; the long-form identity axis "
+            f"covers {', '.join(LONGFORM_AXIS_FAMILIES)}"
+        )
+
+    selected: list[dict] = []
+    for original in tts_cases:
+        case = dict(original)
+        reference = case.get("reference")
+        if (
+            family in VAD_CARRIED_FAMILIES
+            and reference in VAD_UNDETECTABLE_CLIPS
+            and reference in REAL_SPEECH_REFERENCE
+        ):
+            replacement = REAL_SPEECH_REFERENCE[reference]
+            case["reference"] = replacement
+            note = (
+                f"reference {reference} -> {replacement}: the synthetic clip has no "
+                "VAD-detectable speech"
+            )
+            case["label"] = f"{case['label']} [{note}]" if case.get("label") else note
+
+        text = _case_text(case, TEXTS)
+        chunks = _chunks_for_axis_text(
+            text, case.get("language"), LONGFORM_IDENTITY_CHUNK_BUDGET
+        )
+        if len(chunks) > 1:
+            case["skip_reason"] = (
+                f"identity axis: text splits into {len(chunks)} chunks at the "
+                f"{LONGFORM_IDENTITY_CHUNK_BUDGET}-character serving budget, so "
+                "split_text on/off differ by construction (different synthesis "
+                "boundaries); the byte-identity gate is not meaningful"
+            )
+        selected.append(case)
+    return selected
+
+
 def _cases_for_axis(axis: Axis, family: str) -> list[dict]:
     """Cases to run for this axis: the batching gate uses its own case set.
 
@@ -1840,6 +2173,36 @@ def _cases_for_axis(axis: Axis, family: str) -> list[dict]:
     to the allow-list.
     """
     spec = FAMILY_SPECS[family]
+    if axis.kind == "longform":
+        # Phase 12-4 (a): short-text identity at family breadth. A case only
+        # gates anything when its text yields 0/1 chunks at the serving layer's
+        # budget; see :func:`_longform_identity_cases`.
+        return _longform_identity_cases(family)
+    if axis.kind == "determinism":
+        # Phase 12-4 (b): the same chunked request on both sides. The fixture
+        # text is long enough to split into several chunks at the axis budget.
+        tts_cases = [case for case in spec["cases"] if case.get("kind", "tts") == "tts"]
+        if not tts_cases:
+            raise SystemExit(
+                f"family '{family}' has no TTS case; the seeded-determinism axis "
+                f"covers {', '.join(LONGFORM_AXIS_FAMILIES)}"
+            )
+        base = dict(tts_cases[0])
+        base["name"] = f"chunked_{base['name']}"
+        base["text_literal"] = LONGFORM_CHUNKED_TEXT
+        base.pop("text", None)
+        base["label"] = "chunked determinism (same seed, two runs)"
+        if len(
+            _chunks_for_axis_text(
+                LONGFORM_CHUNKED_TEXT, base.get("language"), LONGFORM_AXIS_CHUNK_SIZE
+            )
+        ) < 2:
+            raise SystemExit(
+                "LONGFORM_CHUNKED_TEXT does not split at LONGFORM_AXIS_CHUNK_SIZE="
+                f"{LONGFORM_AXIS_CHUNK_SIZE}; the determinism axis would only exercise "
+                "the single-shot path"
+            )
+        return [base]
     if axis.kind != "batching":
         return spec["cases"]
     cases = spec.get("batching_cases")
@@ -1871,7 +2234,15 @@ def _write_listening_pack(workdir: str, family: str, case: str, path_a: str, pat
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Audio regression gate (Phase 4-2)")
     parser.add_argument("--families", default="chatterbox", help="comma-separated family ids")
-    parser.add_argument("--axis", default="dtype:float32-vs-float16", help="change axis")
+    parser.add_argument(
+        "--axis",
+        default="dtype:float32-vs-float16",
+        help=(
+            "change axis: dtype:float32-vs-float16, sharing:dedup-vs-dup, "
+            "batching:1-vs-4, longform:off-vs-on, determinism:run1-vs-run2, "
+            "dtype:fp32-vs-autocast or dtype:float32-vs-float32 (identity)"
+        ),
+    )
     parser.add_argument("--gpu", action="store_true", help="require a CUDA host")
     parser.add_argument("--json-out", default="out/audio-regression/latest.json")
     parser.add_argument("--md-out", default=None, help="append the markdown result table here")

@@ -10,16 +10,17 @@
 # moved 0.2-0.8 pp). `whisper_window_batch_size` (default 8) is the memory bound
 # on one formed cross-request window batch.
 # `ar_inference` = the shared autoregressive KV-cache pool (Phase 9-2). The
-# Chatterbox English/Turbo entries are `ar_decode`-class as of Phase 9-6 with an
-# initial admission width of 4 (the same arena maths as config.gpu.yml). On this
-# CPU config the pool is fp32, so the slabs are twice as large: English clamps to
-# 5 slots (2 concurrent requests) and Turbo's arena cannot fit the 1 GiB budget,
-# which degrades that model to the sequential loop (never an error). Pending the
-# benchmark-host `batching:1-vs-N` gate; set `batched_inference: false` to force
-# the proven sequential loop everywhere.
+# Chatterbox English/Turbo/Multilingual entries are `ar_decode`-class as of
+# Phase 12-7/12-8 with an initial admission width of 4 (the same arena maths as
+# config.gpu.yml: 2736 MiB ≤ 2.75 GiB at the contracts' preferred caps — 1152
+# tokens for English/Multilingual, 1536 for Turbo). On this CPU config the pool
+# is fp32, so slabs are twice as large; an arena that cannot fit the budget
+# clamps its slots or degrades that model to the sequential loop (never an
+# error). Pending the benchmark-host `batching:1-vs-N` gate; set
+# `batched_inference: false` to force the proven sequential loop everywhere.
 ar_inference:
-  kv_cache_budget_bytes: 1073741824   # 1 GiB, owner-approved initial value (2026-11-07)
-  default_cap_tokens: 768             # ≈30 s per sequence at 25 Hz
+  kv_cache_budget_bytes: 2952790016   # 2.75 GiB; fits all three AR arenas at their preferred caps
+  default_cap_tokens: 1536            # ceiling; English/Multilingual clamp to 1152
   enabled: true
 
 model_configs:
@@ -307,7 +308,7 @@ model_configs:
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxMultilingualTTS"
     watermark: true
-    max_batch_size: 1
+    max_batch_size: 4        # AR admission width (Phase 12-7: shares English's decode contract)
     dtype: "float32"
     device_config:
       device: "cpu"

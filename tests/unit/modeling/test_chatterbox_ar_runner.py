@@ -27,10 +27,16 @@ from chatterbox.models.t3.modules.t3_config import T3Config
 from chatterbox.tts import Conditionals
 
 from harmonyspeech.engine.ar_cache import ARCachePool
-from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
+from harmonyspeech.modeling.models.chatterbox.t3_ar import (
+    ChatterboxT3AR,
+    _SafeAlignmentStreamAnalyzer,
+)
 from harmonyspeech.task_handler.ar_runner import (
     ARBatchRunner,
     EnglishContract,
+    TurboContract,
+    cast_conditionals,
+    multilingual_text_tokens,
 )
 
 _TINY_LLAMA = {
@@ -495,6 +501,64 @@ def test_arena_is_registered_under_the_scheduler_model_key(english_model):
 
 
 @pytest.mark.unit
+def test_contracts_declare_their_measured_slot_caps():
+    # English/Multilingual resample conditioning to 34 tokens: 34 + ~118 text
+    # + 1000 speech = 1152. Turbo's un-resampled prompt needs the full 1536.
+    assert EnglishContract.preferred_cap_tokens == 1152
+    assert TurboContract.preferred_cap_tokens == 1536
+
+
+@pytest.mark.unit
+def test_production_pool_caps_english_at_its_contract_need(english_model):
+    model, _hp = english_model
+    # No explicit cap -> the pool is at DEFAULT_AR_CACHE_CAP_TOKENS (1536), so
+    # the runner may shrink English's arena to 1152 tokens.
+    pool = ARCachePool(budget_bytes=16 * 1024 * 1024, device="cpu")
+    runner = ARBatchRunner(
+        t3=model,
+        pool=pool,
+        model_key="cb",
+        model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0, max_batch_size=4),
+    )
+
+    assert runner.register()
+    assert pool.capacity("cb")["cap_tokens"] == 1152
+
+
+@pytest.mark.unit
+def test_production_pool_keeps_turbo_at_the_full_slot_cap(turbo_model):
+    model, _hp = turbo_model
+    pool = ARCachePool(budget_bytes=16 * 1024 * 1024, device="cpu")
+    runner = ARBatchRunner(
+        t3=model,
+        pool=pool,
+        model_key="cb-turbo",
+        model_config=SimpleNamespace(
+            model_type="ChatterboxTurboTTS", seed=0, max_batch_size=4
+        ),
+    )
+
+    assert runner.register()
+    assert pool.capacity("cb-turbo")["cap_tokens"] == 1536
+
+
+@pytest.mark.unit
+def test_explicit_test_pool_cap_is_never_clamped(english_model):
+    model, _hp = english_model
+    # A test pool's explicit 64-token cap must survive the contract preference.
+    pool = _pool()
+    runner = ARBatchRunner(
+        t3=model,
+        pool=pool,
+        model_key="cb",
+        model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0, max_batch_size=4),
+    )
+
+    assert runner.register()
+    assert pool.capacity("cb")["cap_tokens"] == 64
+
+
+@pytest.mark.unit
 def test_disabled_pool_keeps_the_sequential_path(english_model):
     model, _hp = english_model
     runner = ARBatchRunner(
@@ -505,3 +569,140 @@ def test_disabled_pool_keeps_the_sequential_path(english_model):
     )
     assert runner.register() is False
     assert runner.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-7: multilingual text tokens, AR runner, and conditional exaggeration
+# ---------------------------------------------------------------------------
+class _MultilingualTokenizer:
+    def __init__(self):
+        self.calls = []
+
+    def text_to_tokens(self, text, language_id=None):
+        self.calls.append((text, language_id))
+        # Deterministic length from the text so different requests prefill
+        # differently; ids stay inside the tiny vocab.
+        return torch.arange(5, 5 + max(1, len(str(text).split())), dtype=torch.long).unsqueeze(0)
+
+
+def _multilingual_hp():
+    hp = T3Config.multilingual()  # text_tokens_dict_size == 2454 -> is_multilingual
+    hp.llama_config_name = "tiny_ar_runner_mtl"
+    hp.speech_tokens_dict_size = 96
+    hp.start_speech_token = 90
+    hp.stop_speech_token = 91
+    hp.max_text_tokens = 64
+    hp.max_speech_tokens = 64
+    hp.use_perceiver_resampler = False
+    hp.emotion_adv = True
+    return hp
+
+
+@pytest.fixture
+def multilingual_model(monkeypatch):
+    monkeypatch.setitem(LLAMA_CONFIGS, "tiny_ar_runner_mtl", dict(_TINY_LLAMA))
+    hp = _multilingual_hp()
+    torch.manual_seed(20261114)
+    model = ChatterboxT3AR(hp).eval()
+    model.requires_grad_(False)
+    model.tokenizer = _MultilingualTokenizer()
+    return model, hp
+
+
+@pytest.mark.unit
+def test_multilingual_text_tokens_matches_the_upstream_shape(multilingual_model):
+    model, hp = multilingual_model
+    wrapper = SimpleNamespace(t3=model, tokenizer=model.tokenizer, device="cpu")
+    tokens = multilingual_text_tokens(wrapper, "Hello there friend", "en")
+
+    assert tokens.shape[0] == 1
+    assert int(tokens[0, 0]) == hp.start_text_token
+    assert int(tokens[0, -1]) == hp.stop_text_token
+    # `punc_norm` runs, and the language id is lower-cased for the tokenizer.
+    assert model.tokenizer.calls[-1][1] == "en"
+
+
+def _forward_hook_count(t3) -> int:
+    return sum(len(layer.self_attn._forward_hooks) for layer in t3.tfmr.layers)
+
+
+@pytest.mark.unit
+def test_multilingual_ar_runner_attaches_per_row_analyzer_and_leaks_no_hooks(
+    multilingual_model, monkeypatch
+):
+    """Phase 12-7: per-row analyzer on the shared ``tfmr``, zero leaked hooks.
+
+    Also proves the per-row analyzer is deterministic across batch composition:
+    a seeded row decodes to the same tokens solo (``B=1``) and co-batched with a
+    second row (``B=2``), because each analyzer is fed from its own conditional
+    CFG slot and KV prefix.
+    """
+    monkeypatch.delenv(ChatterboxT3AR.ANALYZER_ENV, raising=False)
+    model, hp = multilingual_model
+    wrapper = SimpleNamespace(t3=model, tokenizer=model.tokenizer, device="cpu")
+    conds = _english_conds(hp)
+
+    def begin(runner, request_id, words, seed):
+        return runner.begin(
+            request_id,
+            seed=seed,
+            max_new_tokens=8,
+            conds=Conditionals(conds, {}),
+            text_tokens=multilingual_text_tokens(wrapper, words, "en"),
+            cfg_weight=0.5,
+            temperature=0.8,
+            top_p=0.95,
+            min_p=0.05,
+            repetition_penalty=2.0,
+        )
+
+    # -- B=1: the row owns an analyzer, fed by the prefill forward. ----------
+    solo = _runner(model, "ChatterboxMultilingualTTS", key="mtl-solo")
+    solo_row = begin(solo, "solo", "hello world", 7)
+    assert solo_row is not None
+    assert isinstance(solo_row.analyzer, _SafeAlignmentStreamAnalyzer)
+    assert solo_row.analyzer.attach_hooks is False
+    assert solo_row.analyzer._hook_handles == [], "runner analyzers own no hooks"
+    assert all(attn is not None for attn in solo_row.analyzer.last_aligned_attns)
+    assert solo_row.analyzer.curr_frame_pos == 0, "prefill does not step the analyzer"
+    assert _forward_hook_count(model) == 0, "prefill leaves no hook on tfmr"
+    assert model.tfmr.config._attn_implementation == "sdpa", "eager is restored after prefill"
+
+    _run_to_end(solo, "solo")
+    assert solo_row.analyzer.curr_frame_pos >= 1, "the analyzer stepped during decode"
+    assert _forward_hook_count(model) == 0, "decode leaves no hook on tfmr"
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    expected = solo.raw_tokens("solo")
+
+    # -- B=2: co-batching a second row changes neither the analyzer nor its tokens.
+    batched = _runner(model, "ChatterboxMultilingualTTS", key="mtl-batched")
+    row_a = begin(batched, "a", "hello world", 7)
+    row_b = begin(batched, "b", "hello there friend", 8)
+    assert isinstance(row_a.analyzer, _SafeAlignmentStreamAnalyzer)
+    assert isinstance(row_b.analyzer, _SafeAlignmentStreamAnalyzer)
+    assert row_a.analyzer is not row_b.analyzer
+    assert _forward_hook_count(model) == 0, "both prefills leave no hook on tfmr"
+
+    for _ in range(8):
+        outcomes = {o.request_id: o for o in batched.step(["a", "b"])}
+        if all(o.finished for o in outcomes.values()):
+            break
+    assert _forward_hook_count(model) == 0, "batched decode leaves no hook on tfmr"
+    assert model.tfmr.config._attn_implementation == "sdpa"
+    assert row_a.analyzer.curr_frame_pos >= 1 and row_b.analyzer.curr_frame_pos >= 1
+
+    assert torch.equal(batched.raw_tokens("a"), expected), "solo == batched for the seeded row"
+
+
+@pytest.mark.unit
+def test_cast_conditionals_applies_exaggeration_without_mutating(english_model):
+    model, hp = english_model
+    conds = Conditionals(_english_conds(hp), {})
+
+    updated = cast_conditionals(conds, model, exaggeration=0.9)
+
+    assert updated is not conds
+    assert updated.t3 is not conds.t3
+    assert float(conds.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.5)
+    assert float(updated.t3.emotion_adv[0, 0, 0]) == pytest.approx(0.9)
+    assert updated.t3.speaker_emb.dtype == next(model.parameters()).dtype

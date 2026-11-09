@@ -762,6 +762,10 @@ def prepare_chatterbox_tts_inputs(requests_to_batch: list[EngineRequest]):
 
         return request.input_text, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p
 
+    # Phase 12-7/12-8: a one-request prepare is the hottest AR continuation call;
+    # spawning a ThreadPoolExecutor per engine step is pure overhead.
+    if len(requests_to_batch) <= 1:
+        return [prepare(entry) for entry in requests_to_batch]
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
     return inputs
@@ -809,6 +813,8 @@ def prepare_chatterbox_turbo_tts_inputs(requests_to_batch: list[EngineRequest]):
 
         return request.input_text, speaker, temperature, repetition_penalty, top_p, top_k, norm_loudness
 
+    if len(requests_to_batch) <= 1:
+        return [prepare(entry) for entry in requests_to_batch]
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
     return inputs
@@ -856,8 +862,12 @@ def prepare_chatterbox_multilingual_tts_inputs(
         exaggeration = opts.exaggeration if opts is not None and opts.exaggeration is not None else 0.5
         cfg_weight = opts.cfg_weight if opts is not None and opts.cfg_weight is not None else 0.5
         temperature = opts.temperature if opts is not None and opts.temperature is not None else 0.8
+        # Upstream ``ChatterboxMultilingualTTS.generate`` defaults to 2.0
+        # (``chatterbox/mtl_tts.py:241``), unlike English/Turbo's 1.2. Using 1.2
+        # here made the multilingual sampler emit 2-token repeats, which the
+        # alignment analyzer turned into premature EOS cutoffs.
         repetition_penalty = (
-            opts.repetition_penalty if opts is not None and opts.repetition_penalty is not None else 1.2
+            opts.repetition_penalty if opts is not None and opts.repetition_penalty is not None else 2.0
         )
         top_p = opts.top_p if opts is not None and opts.top_p is not None else 1.0
         min_p = opts.min_p if opts is not None and opts.min_p is not None else 0.05
@@ -874,6 +884,8 @@ def prepare_chatterbox_multilingual_tts_inputs(
             min_p,
         )
 
+    if len(requests_to_batch) <= 1:
+        return [prepare(entry) for entry in requests_to_batch]
     with ThreadPoolExecutor() as executor:
         inputs = list(executor.map(prepare, requests_to_batch))
     return inputs

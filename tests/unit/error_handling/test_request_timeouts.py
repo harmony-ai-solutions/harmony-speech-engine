@@ -124,6 +124,68 @@ def test_unexpired_request_is_left_alone():
 
 
 # ---------------------------------------------------------------------------
+# Per-request timeout override (Phase 12-2 follow-up, 2026-11-09)
+#
+# The internal, non-wire ``request_timeout_s`` on the request input wins over
+# the engine-wide timeout. ``None`` means "inherit" (never "no timeout").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_per_request_timeout_override_wins_over_engine_timeout():
+    engine = _engine_shell(timeout_s=120.0)
+    request = _kitten_request("override-1")
+    request.request_timeout_s = 5.0
+    before = time.monotonic()
+
+    engine.add_request("override-1", request)
+
+    queued = engine.scheduler.waiting[0]
+    assert queued.deadline is not None
+    assert before + 4.0 < queued.deadline <= time.monotonic() + 5.0
+
+
+@pytest.mark.unit
+def test_request_timeout_none_inherits_engine_timeout():
+    engine = _engine_shell(timeout_s=120.0)
+    request = _kitten_request("inherit-1")
+    assert request.request_timeout_s is None
+    before = time.monotonic()
+
+    engine.add_request("inherit-1", request)
+
+    queued = engine.scheduler.waiting[0]
+    assert queued.deadline is not None
+    assert before + 119.0 < queued.deadline <= time.monotonic() + 120.0
+
+
+@pytest.mark.unit
+def test_request_timeout_override_zero_disables_deadline():
+    engine = _engine_shell(timeout_s=120.0)
+    request = _kitten_request("override-off")
+    request.request_timeout_s = 0
+
+    engine.add_request("override-off", request)
+
+    assert engine.scheduler.waiting[0].deadline is None
+
+
+@pytest.mark.unit
+def test_timeout_message_reports_effective_per_request_timeout():
+    engine = _engine_shell(timeout_s=120.0)
+    request = _kitten_request("override-msg")
+    request.request_timeout_s = 5.0
+    engine.add_request("override-msg", request)
+    engine.scheduler.waiting[0].deadline = time.monotonic() - 1
+
+    expired = engine._expire_overdue_requests()
+
+    assert len(expired) == 1
+    assert "exceeded timeout of 5s" in expired[0].error
+
+
+
+# ---------------------------------------------------------------------------
 # check_health
 # ---------------------------------------------------------------------------
 

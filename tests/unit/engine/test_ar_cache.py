@@ -59,6 +59,7 @@ def _descriptor(
     dtype: torch.dtype = torch.float32,
     cap_tokens: int | None = 8,
     slots: int | None = 2,
+    rows_per_request: int = 1,
 ) -> ARCacheDescriptor:
     return ARCacheDescriptor(
         model_key=model_key,
@@ -68,6 +69,7 @@ def _descriptor(
         dtype=dtype,
         cap_tokens=cap_tokens,
         slots=slots,
+        rows_per_request=rows_per_request,
     )
 
 
@@ -165,6 +167,12 @@ def test_descriptor_rejects_a_non_torch_dtype():
         ARCacheDescriptor(model_key="m", layers=1, kv_heads=1, head_dim=2, dtype="float16")
 
 
+@pytest.mark.unit
+def test_descriptor_rejects_a_non_positive_rows_per_request():
+    with pytest.raises(ValueError, match="rows_per_request"):
+        ARCacheDescriptor(model_key="m", layers=1, kv_heads=1, head_dim=2, rows_per_request=0)
+
+
 # ---------------------------------------------------------------------------
 # Registration + budget validation
 # ---------------------------------------------------------------------------
@@ -173,8 +181,8 @@ def test_descriptor_rejects_a_non_torch_dtype():
 @pytest.mark.unit
 def test_pool_defaults_match_the_owner_approved_initial_values():
     pool = ARCachePool(device="cpu")
-    assert pool.budget_bytes == DEFAULT_AR_CACHE_BUDGET_BYTES == 1073741824
-    assert pool.default_cap_tokens == DEFAULT_AR_CACHE_CAP_TOKENS == 768
+    assert pool.budget_bytes == DEFAULT_AR_CACHE_BUDGET_BYTES == 2952790016
+    assert pool.default_cap_tokens == DEFAULT_AR_CACHE_CAP_TOKENS == 1536
     assert pool.device.type == "cpu"
 
 
@@ -358,6 +366,7 @@ def test_capacity_reports_active_rows_for_admission():
     assert per_family["slots"] == 2
     assert per_family["slots_active"] == 1
     assert per_family["active_rows"] == 1
+    assert per_family["rows_per_request"] == 1
     assert aggregate["active_rows"] == 1
     assert aggregate["slots_free"] == 1
     assert aggregate["arenas"]["tiny-ar"]["model_key"] == "tiny-ar"

@@ -9,6 +9,18 @@ import soundfile as sf
 
 from harmonyspeech.modeling.models.kittentts.preprocess import TextPreprocessor
 
+# KittenTTS graphs are **stochastic by construction** (verified 2026-11-09).
+#
+# The exported ONNX graphs carry ``RandomNormalLike`` / ``RandomUniformLike``
+# nodes **without a ``seed`` attribute**, so ONNX Runtime draws fresh noise on
+# every ``session.run``. Two runs of the same text are therefore never
+# sample-identical (measured on ``kitten-tts-mini-0.8``: two fresh processes
+# differed by max |Δsample| 0.14 with corr 0.992 and identical duration; the
+# 6-chunk stitched comparison gave log-mel MSE ≈ 3.0 dB², corr 0.992).
+# ONNX Runtime exposes no RNG seed, so the engine cannot make this
+# deterministic: byte-identity gates must treat the family as sampling (see
+# ``scripts/audio_regression.MODEL_SAMPLES_EVERY_RUN`` and the Phase 12-4 log).
+
 #: Serialises espeak phonemisation (Phase 8-5).
 #:
 #: ``phonemizer``'s ``EspeakBackend`` keeps mutable post-processing state

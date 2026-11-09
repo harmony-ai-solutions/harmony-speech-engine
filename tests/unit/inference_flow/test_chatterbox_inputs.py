@@ -244,6 +244,20 @@ def test_multilingual_defaults_to_en():
 
 
 @pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
+def test_multilingual_defaults_repetition_penalty_to_2():
+    """Multilingual defaults ``repetition_penalty`` to upstream's 2.0.
+
+    Phase 12-7: English and Turbo stay at 1.2; passing 1.2 into the multilingual
+    sampler caused 2-token repeats and premature analyzer EOS cutoffs.
+    """
+    req = _make_tts_request()
+    results = prepare_chatterbox_multilingual_tts_inputs([req])
+    # (text, language_id, speaker, exaggeration, cfg_weight, temperature,
+    #  repetition_penalty, top_p, min_p)
+    assert results[0][6] == 2.0
+
+
+@pytest.mark.skipif(not PREPARE_FUNCTIONS_AVAILABLE, reason="prepare functions not yet implemented")
 def test_multilingual_rejects_top_k():
     """ChatterboxMultilingualTTS must raise ValueError when top_k is non-None."""
     opts = GenerationOptions(top_k=500)

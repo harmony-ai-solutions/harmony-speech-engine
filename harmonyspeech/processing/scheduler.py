@@ -35,7 +35,7 @@ WHISPER_WINDOW_SECONDS = 30.0
 #: are deliberately excluded (multilingual is the documented 9-3 skip). 9-6
 #: moves the shipped config entries into the ``ar_decode`` execution class; this
 #: runtime set stays the single source of truth for admission.
-AR_INFERENCE_MODEL_TYPES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+AR_INFERENCE_MODEL_TYPES = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"})
 
 
 def _artifact_duration(request) -> float | None:
@@ -516,11 +516,17 @@ class Scheduler:
             active = int(decision.get("active_rows", decision.get("slots_active", 0)) or 0)
             raw_free = decision.get("slots_free")
             slots_free = int(raw_free) if raw_free is not None else max(0, slots - active)
+            rows_per_request = max(1, int(decision.get("rows_per_request", 1) or 1))
         except (TypeError, ValueError):  # pragma: no cover - defensive on odd hook output
             return None
         if slots <= 0:
             return None
-        return {"slots": slots, "active_rows": active, "slots_free": max(0, slots_free)}
+        return {
+            "slots": slots,
+            "active_rows": active,
+            "slots_free": max(0, slots_free),
+            "rows_per_request": rows_per_request,
+        }
 
     def _ar_admission_width(self, model_name: str, budget: SchedulingBudget) -> int:
         """Rows that may be newly admitted for an AR model this step.
@@ -529,7 +535,9 @@ class Scheduler:
 
         * the per-step request budget left after the continuing rows
           (``max_batch_size - running``), and
-        * the pool's free slots (``slots - active_rows``).
+        * the pool's free **requests**: free slots divided by the contract's
+          ``rows_per_request`` (2 for CFG, 1 for Turbo), so a 2-row request is
+          never admitted when only one slot is free.
 
         With no capacity signal the historical boolean rule applies: a model
         that still has running work admits nothing, otherwise it fills its
@@ -540,7 +548,9 @@ class Scheduler:
             if budget.current_num_requests(model_name) > 0:
                 return 0
             return budget.remaining_request_budget(model_name)
-        return max(0, min(budget.remaining_request_budget(model_name), capacity["slots_free"]))
+        rows_per_request = max(1, int(capacity.get("rows_per_request", 1) or 1))
+        free_requests = int(capacity["slots_free"]) // rows_per_request
+        return max(0, min(budget.remaining_request_budget(model_name), free_requests))
 
     # ------------------------------------------------------------------
     # Whisper lane admission (Phase 10-1)

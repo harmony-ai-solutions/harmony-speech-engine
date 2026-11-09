@@ -192,9 +192,18 @@ requests' ≤30 s windows, `whisper_window_batch_size` per formed batch, default
 The Harmony
 Speech synthesizer keeps a per-item loop (its vendored generator is not
 padding-safe; see [Batching & concurrency](batching.md)). Chatterbox is
-autoregressive and runs one request per step, so its capacity comes from
-replicas. See [Batching & concurrency](batching.md) for the per-family table, the
+autoregressive and decodes on the shared AR KV-cache pool (`ar_decode`, up to 4
+requests per step), with the per-request loop as its fallback. See
+[Batching & concurrency](batching.md) for the per-family table, the
 length-similar sub-batching rules and the measured throughput.
+
+> **Chatterbox long-form fidelity.** Every family uses the unified
+> **300-character** default chunk budget when `split_text` is on and the client
+> leaves `chunk_size` unset. The earlier per-model 150/75 budgets were
+> workarounds for bugs fixed in Phases 12-7/12-8 (Turbo's 768-token KV-slot
+> truncation and Multilingual's premature analyzer EOS), not model limits. An
+> explicit `chunk_size` always wins. See the
+> [API reference](api.md#generationoptions).
 
 #### Measured footprint (RTX 5060 Ti 16 GiB, full `config.gpu.yml` catalogue)
 

@@ -80,8 +80,8 @@ Phase 10 invariants (Whisper serving)
   poisoned request/window errors alone.
 """
 
-import copy
 import contextlib
+import copy
 import io
 import json
 import threading
@@ -124,6 +124,8 @@ from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
 from harmonyspeech.modeling.models.harmonyspeech.encoder.inputs import get_input_frames
 from harmonyspeech.modeling.models.openvoice.mel_processing import spectrogram_torch
 from harmonyspeech.task_handler.batching import (
+    DEFAULT_MEL_FRAME_BATCH_BUDGET,
+    DEFAULT_PHONE_BATCH_BUDGET,
     ar_batching_enabled,
     batched_inference_enabled,
     collapse_per_sample,
@@ -215,6 +217,50 @@ def _audio_artifact_from_tensor(wav: torch.Tensor, sample_rate: int) -> AudioArt
     if tensor.ndim == 1:
         tensor = tensor.unsqueeze(0)
     return AudioArtifact(waveform=tensor, sample_rate=sample_rate)
+
+
+class _NullWatermarker:
+    """Identity watermarker used while a long-form chunk is synthesized.
+
+    The serving layer (Phase 12-2) watermarks the *stitched* buffer exactly
+    once; watermarking each chunk and then crossfading would produce a muddled
+    mark. Only the per-request window of the sequential synthesis call is
+    covered, so a concurrent request in another runner is unaffected.
+    """
+
+    def apply_watermark(self, wav, sample_rate=None):  # noqa: ARG002 - upstream signature
+        return wav
+
+
+class _FilteredS3Gen:
+    """Per-wrapper proxy that drops OOV speech tokens before an S3Gen vocode.
+
+    Phase 12-7: upstream ``ChatterboxMultilingualTTS.generate``
+    (``chatterbox/mtl_tts.py:290-294``) omits the
+    ``speech_tokens = speech_tokens[speech_tokens < 6561]`` filter that English
+    ``generate`` applies, so an OOV token can crash the flow embedding. This
+    proxy is installed on the *multilingual wrapper's* ``s3gen`` attribute only
+    for the sequential call (the shared module is never mutated), and delegates
+    every other attribute to it.
+    """
+
+    def __init__(self, s3gen, max_token: int = 6561):
+        object.__setattr__(self, "_s3gen", s3gen)
+        object.__setattr__(self, "_max_token", int(max_token))
+
+    def __getattr__(self, name):
+        return getattr(self._s3gen, name)
+
+    def inference(self, speech_tokens=None, *args, **kwargs):
+        if speech_tokens is not None:
+            speech_tokens = speech_tokens[speech_tokens < self._max_token]
+        return self._s3gen.inference(*args, speech_tokens=speech_tokens, **kwargs)
+
+
+def _watermark_suppressed(request) -> bool:
+    """True when this request's runner must not watermark its own slice."""
+    request_data = getattr(request, "request_data", request)
+    return bool(getattr(request_data, "suppress_watermark", False))
 
 
 def _pad_mel_batch(mels, device):
@@ -838,7 +884,7 @@ class ModelRunnerBase:
         if runner is not None:
             runner.release_request(request_id)
 
-    def _ar_conditionals(self, params, initial_request, *, turbo: bool):
+    def _ar_conditionals(self, params, initial_request, *, turbo: bool, multilingual: bool = False):
         """Resolve per-request conditionals without leaving them on the model.
 
         Pre-computed conditionals (the embedding-step hop) are used by
@@ -854,6 +900,19 @@ class ModelRunnerBase:
         if turbo:
             _text, speaker, _temperature, _repetition, _top_p, _top_k, norm_loudness = params
             exaggeration = None
+        elif multilingual:
+            (
+                _text,
+                _language_id,
+                speaker,
+                exaggeration,
+                _cfg,
+                _temperature,
+                _repetition,
+                _top_p,
+                _min_p,
+            ) = params
+            norm_loudness = None
         else:
             _text, speaker, exaggeration, _cfg, _temperature, _repetition, _top_p, _min_p = params
             norm_loudness = None
@@ -880,30 +939,50 @@ class ModelRunnerBase:
                 raise ValueError("voice cloning requires input_audio or a precomputed embedding/conditionals")
             source = baseline if baseline is not None else getattr(self.model, "conds", None)
             conditionals = _clone_conditionals(source)
-        return cast_conditionals(conditionals, self.model.t3)
+        # Phase 12-8: clone the T3 half before the dtype move and apply
+        # `exaggeration`, so a cached/shared SpeakerArtifact is never mutated.
+        return cast_conditionals(conditionals, self.model.t3, exaggeration=exaggeration)
 
-    def _execute_chatterbox_tts_ar(self, runner, inputs, requests_to_batch, *, turbo: bool):
+    def _execute_chatterbox_tts_ar(self, runner, inputs, requests_to_batch, *, turbo: bool, multilingual: bool = False):
         """One batched AR decode step for the requests in this partition.
 
-        New rows are prefilled; every active row (including continuations from
-        previous engine steps) samples one token and advances one KV position.
-        Rows that hit EOS/the token cap finalize through the padded S3Gen hop
-        (Phase 9-5; turbo's meanflow hop stays per row) and return a final
-        result; the rest return ``UnfinishedRequestOutput``.
+        New rows are prefilled and then sample exactly one token, so a freshly
+        admitted row returns immediately. A continuation step (no newly admitted
+        rows) decodes up to ``runner.step_tokens`` tokens in this one engine
+        invocation, stopping immediately when any row finishes or errors
+        (Phase 12-8). A row that
+        hits EOS/the token cap releases its KV slots immediately but
+        its S3Gen vocode is **held** until every active row in the batch finishes
+        T3 decoding (Phase 12-8), so staggered-EOS chunks vocode together in one
+        padded ``inference_batched`` call instead of stalling active rows.
         ``len == 1`` for a *new* request and a refused slot fall back to the
         sequential loop for that request only.
         """
-        from harmonyspeech.task_handler.ar_runner import english_text_tokens, turbo_text_tokens
-
-        sequential = (
-            self._execute_chatterbox_turbo_tts_sequential
-            if turbo
-            else self._execute_chatterbox_tts_sequential
+        from harmonyspeech.task_handler.ar_runner import (
+            english_text_tokens,
+            multilingual_text_tokens,
+            turbo_text_tokens,
         )
-        text_tokens_for = turbo_text_tokens if turbo else english_text_tokens
+
+        if turbo:
+            sequential = self._execute_chatterbox_turbo_tts_sequential
+        elif multilingual:
+            sequential = self._execute_chatterbox_multilingual_tts_sequential
+        else:
+            sequential = self._execute_chatterbox_tts_sequential
+
+        def _text_tokens_for(model, params):
+            if multilingual:
+                return multilingual_text_tokens(model, params[0], params[1])
+            if turbo:
+                return turbo_text_tokens(model, params[0])
+            return english_text_tokens(model, params[0])
 
         new_indices = [
-            index for index, request in enumerate(requests_to_batch) if not runner.has_row(request.request_id)
+            index
+            for index, request in enumerate(requests_to_batch)
+            if not runner.has_row(request.request_id)
+            and not runner.has_pending_vocode(request.request_id)
         ]
         # The single-request fast path stays 9-1's cleaned sequential loop.
         if len(inputs) == 1 and new_indices:
@@ -918,8 +997,10 @@ class ModelRunnerBase:
                 # (9-4 already released anything that existed).
                 continue
             try:
-                conditionals = self._ar_conditionals(params, request, turbo=turbo)
-                text_tokens = text_tokens_for(self.model, params[0])
+                conditionals = self._ar_conditionals(
+                    params, request, turbo=turbo, multilingual=multilingual
+                )
+                text_tokens = _text_tokens_for(self.model, params)
                 options = getattr(request.request_data, "generation_options", None)
                 seed = getattr(options, "seed", None)
                 if turbo:
@@ -933,6 +1014,29 @@ class ModelRunnerBase:
                         repetition_penalty=repetition_penalty,
                         top_p=top_p,
                         top_k=top_k,
+                    )
+                elif multilingual:
+                    (
+                        _text,
+                        _language_id,
+                        _speaker,
+                        _exaggeration,
+                        cfg_weight,
+                        temperature,
+                        repetition_penalty,
+                        top_p,
+                        min_p,
+                    ) = params
+                    row = runner.begin(
+                        request.request_id,
+                        conds=conditionals,
+                        text_tokens=text_tokens,
+                        cfg_weight=cfg_weight,
+                        seed=seed,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        top_p=top_p,
+                        min_p=min_p,
                     )
                 else:
                     _text, _speaker, _exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = params
@@ -954,10 +1058,30 @@ class ModelRunnerBase:
                 # Pool refusal / disabled arena: honest sequential fallback.
                 results[index] = sequential([params], [request])[0]
 
-        active = [request.request_id for request in requests_to_batch if runner.has_row(request.request_id)]
-        outcomes = {outcome.request_id: outcome for outcome in runner.step(active)} if active else {}
+        # Phase 12-8: a pure continuation step decodes a burst of tokens per
+        # engine step instead of one token per asyncio round-trip. An admission
+        # step (a row that just ran `_prefill`) stays at exactly one token so
+        # newly admitted rows return immediately, preserving the step-1
+        # admission/abort/deadline/poisoned-row semantics. The burst stops as
+        # soon as any row finishes or errors, so that row's KV-cache slots are
+        # released (via `_take_ar_row`/`runner.pop`) without waiting through
+        # extra token steps.
+        burst = 1 if new_indices else max(1, int(getattr(runner, "step_tokens", 1) or 1))
+        outcomes: dict = {}
+        for _token_step in range(burst):
+            active = [
+                request.request_id
+                for request in requests_to_batch
+                if runner.has_row(request.request_id) and not _request_finished(request)
+            ]
+            if not active:
+                break
+            step_outcomes = runner.step(active)
+            for outcome in step_outcomes:
+                outcomes[outcome.request_id] = outcome
+            if any(outcome.finished or outcome.error is not None for outcome in step_outcomes):
+                break
 
-        finished: list[tuple] = []
         for index, request in enumerate(requests_to_batch):
             if results[index] is not None:
                 continue
@@ -966,10 +1090,23 @@ class ModelRunnerBase:
                 # the row; make sure nothing lingers and emit no client output.
                 if runner.has_row(request.request_id):
                     runner.pop(request.request_id)
+                runner.pop_pending_vocode(request.request_id)
                 continue
             outcome = outcomes.get(request.request_id)
             try:
                 if outcome is None:
+                    pending = runner.peek_pending_vocode(request.request_id)
+                    if pending is not None:
+                        # Already finished T3 in an earlier step; still waiting
+                        # for the batch's active rows before vocoding.
+                        results[index] = ExecutorResult(
+                            request.request_id,
+                            request.request_data,
+                            UnfinishedRequestOutput(
+                                request_id=request.request_id, progress=dict(pending[3])
+                            ),
+                        )
+                        continue
                     raise RuntimeError(f"AR row for request {request.request_id} disappeared")
                 if outcome.error is not None:
                     runner.pop(request.request_id)
@@ -982,7 +1119,18 @@ class ModelRunnerBase:
                             runner.pop(request.request_id)
                         results[index] = self._build_error_result(request, error)
                         continue
-                    finished.append((index, request, tokens, conds, seed, dict(outcome.progress)))
+                    # Hold the vocode; its KV slot is already released by
+                    # `_take_ar_row`, so active rows are never stalled.
+                    runner.put_pending_vocode(
+                        request.request_id, (tokens, conds, seed, dict(outcome.progress))
+                    )
+                    results[index] = ExecutorResult(
+                        request.request_id,
+                        request.request_data,
+                        UnfinishedRequestOutput(
+                            request_id=request.request_id, progress=dict(outcome.progress)
+                        ),
+                    )
                 else:
                     results[index] = ExecutorResult(
                         request.request_id,
@@ -994,9 +1142,23 @@ class ModelRunnerBase:
             except Exception as error:  # noqa: BLE001 - errors this request alone
                 runner.pop(request.request_id)
                 results[index] = self._build_error_result(request, error)
-        # Phase 9-5: vocode this step's finished rows together (padded S3Gen hop).
-        if finished:
-            self._finalize_ar_rows(finished, results, turbo=turbo)
+
+        # Phase 12-8: defer S3Gen until the batch's active rows finish decoding,
+        # then vocode every held row together (one padded `inference_batched`).
+        still_decoding = any(
+            runner.has_row(request.request_id) and not _request_finished(request)
+            for request in requests_to_batch
+        )
+        if not still_decoding:
+            finished: list[tuple] = []
+            for index, request in enumerate(requests_to_batch):
+                pending = runner.pop_pending_vocode(request.request_id)
+                if pending is None:
+                    continue
+                tokens, conds, seed, progress = pending
+                finished.append((index, request, tokens, conds, seed, progress))
+            if finished:
+                self._finalize_ar_rows(finished, results, turbo=turbo)
         # A request aborted between scheduling and execution produces no result.
         return [result for result in results if result is not None]
 
@@ -1064,7 +1226,9 @@ class ModelRunnerBase:
             for row, waveform in zip(group_rows, waveforms, strict=True):
                 index, request, _tokens, _conds, _seed, progress = row
                 try:
-                    artifact = self._artifact_from_waveform(waveform)
+                    artifact = self._artifact_from_waveform(
+                        waveform, watermark=not _watermark_suppressed(request)
+                    )
                     result = self._build_result(request, "", TextToSpeechRequestOutput)
                     result.result_data.audio_artifact = artifact
                     result.result_data.progress = progress
@@ -1075,7 +1239,9 @@ class ModelRunnerBase:
     def _finish_ar_row(self, results, index, request, tokens, conds, seed, progress, *, turbo):
         """Per-row upstream vocode: the fast path and the fallback."""
         try:
-            artifact = self._vocode_ar_row(tokens, conds, seed, turbo=turbo)
+            artifact = self._vocode_ar_row(
+                tokens, conds, seed, turbo=turbo, watermark=not _watermark_suppressed(request)
+            )
             result = self._build_result(request, "", TextToSpeechRequestOutput)
             result.result_data.audio_artifact = artifact
             result.result_data.progress = progress
@@ -1105,7 +1271,7 @@ class ModelRunnerBase:
             if cuda_states is not None:
                 torch.cuda.set_rng_state_all(cuda_states)
 
-    def _vocode_ar_row(self, tokens, conds, seed, *, turbo: bool):
+    def _vocode_ar_row(self, tokens, conds, seed, *, turbo: bool, watermark: bool = True):
         """Turn one row's token stream into audio through the upstream S3Gen."""
         from harmonyspeech.modeling.models.chatterbox.s3gen_precision import s3gen_autocast
 
@@ -1130,13 +1296,42 @@ class ModelRunnerBase:
             # the artifact/watermark path as float32.
             if autocast is not None:
                 wav = wav.float()
-        return self._artifact_from_waveform(wav)
+        return self._artifact_from_waveform(wav, watermark=watermark)
 
-    def _artifact_from_waveform(self, wav):
-        """Watermark a waveform and wrap it in an ``AudioArtifact``."""
+    def _artifact_from_waveform(self, wav, *, watermark: bool = True):
+        """Watermark a waveform and wrap it in an ``AudioArtifact``.
+
+        ``watermark=False`` is the Phase 12-2 long-form chunk path: the serving
+        layer watermarks the stitched buffer exactly once instead of every
+        chunk (which would be crossfaded into a muddled mark).
+        """
         wav = wav.squeeze(0).detach().cpu().numpy()
-        wav = self.model.watermarker.apply_watermark(wav, sample_rate=self.model.sr)
+        if watermark:
+            watermarker = getattr(self.model, "watermarker", None)
+            if watermarker is not None:
+                wav = watermarker.apply_watermark(wav, sample_rate=self.model.sr)
         return _audio_artifact_from_tensor(torch.from_numpy(wav).unsqueeze(0), self.model.sr)
+
+    @contextlib.contextmanager
+    def _without_watermark(self):
+        """Temporarily replace the model's watermarker with an identity one.
+
+        Used only for a sequential (non-AR) long-form chunk request: upstream
+        ``generate()`` applies the watermark itself, so the serving layer cannot
+        suppress it otherwise. The swap covers one synthesis call and is
+        restored in ``finally``; the runner executes one request at a time on
+        this path, so no other request observes it.
+        """
+        model = getattr(self, "model", None)
+        original = getattr(model, "watermarker", None) if model is not None else None
+        if original is None:
+            yield
+            return
+        model.watermarker = _NullWatermarker()
+        try:
+            yield
+        finally:
+            model.watermarker = original
 
     @torch.inference_mode()
     def execute_model(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
@@ -1179,19 +1374,55 @@ class ModelRunnerBase:
         return partitions
 
     def _execute_partition(self, requests_to_batch: list[EngineRequest]) -> list[ExecutorResult]:
-        """Prepare inputs for one type-homogeneous batch and dispatch it."""
+        """Prepare inputs for one type-homogeneous batch and dispatch it.
+
+        Phase 12-8: continuing AR rows skip ``prepare_inputs`` entirely (their
+        prefill is already on the runner) — the handler reads only the newly
+        admitted inputs. On the decode steady state this avoids re-tokenising and
+        a per-step ``ThreadPoolExecutor`` for every continuing request.
+        """
+        runner = getattr(self, "_ar_runner", None)
+        ar_active = runner is not None and getattr(runner, "enabled", False)
+
+        def _continuing_ar(request) -> bool:
+            if not ar_active:
+                return False
+            request_id = request.request_id
+            return runner.has_row(request_id) or runner.has_pending_vocode(request_id)
+
         # Wrap prepare_inputs so that input-validation failures (e.g. wrong
         # request type, bad payload encoding, unsupported option) are converted to
         # per-request error results instead of raising an unhandled exception
         # that kills the async engine's background loop.
-        try:
-            inputs = prepare_inputs(self.model_config, requests_to_batch)
-        except Exception as e:
-            logger.opt(exception=e).error(
-                f"Failed to prepare inputs for model "
-                f"{getattr(self.model_config, 'model_type', '?')}: {e}"
-            )
-            return [self._build_error_result(req, e) for req in requests_to_batch]
+        if ar_active:
+            new_requests = [req for req in requests_to_batch if not _continuing_ar(req)]
+            if new_requests:
+                try:
+                    new_inputs = prepare_inputs(self.model_config, new_requests)
+                except Exception as e:
+                    logger.opt(exception=e).error(
+                        f"Failed to prepare inputs for model "
+                        f"{getattr(self.model_config, 'model_type', '?')}: {e}"
+                    )
+                    return [self._build_error_result(req, e) for req in requests_to_batch]
+            else:
+                # Every request in the partition is a continuing AR row: do not
+                # call prepare_inputs at all (the decode steady state).
+                new_inputs = []
+            new_iter = iter(new_inputs)
+            inputs = [
+                None if _continuing_ar(request) else next(new_iter)
+                for request in requests_to_batch
+            ]
+        else:
+            try:
+                inputs = prepare_inputs(self.model_config, requests_to_batch)
+            except Exception as e:
+                logger.opt(exception=e).error(
+                    f"Failed to prepare inputs for model "
+                    f"{getattr(self.model_config, 'model_type', '?')}: {e}"
+                )
+                return [self._build_error_result(req, e) for req in requests_to_batch]
 
         try:
             assert_batch_aligned(
@@ -1629,7 +1860,20 @@ class ModelRunnerBase:
             ).to(self.device)
 
         def run_converter_encoder(vad_audio_segments, initial_request):
-            """Per-item loop: the ``len == 1`` fast path and the fallback."""
+            """Per-item loop: the ``len == 1`` fast path and the fallback.
+
+            A reference clip the VAD could not detect as speech yields **zero**
+            segments (a synthetic tone, a silent clip, a wrong sample rate). The
+            encoder cannot condition on nothing: without this guard
+            ``torch.stack([])`` raised ``RuntimeError: stack expects a
+            non-empty TensorList``, an opaque 500 that told the client nothing.
+            Raise a diagnosable message instead, which the serving layer turns
+            into a 400 (Phase 12-4 finding, 2026-11-09).
+            """
+            if not vad_audio_segments:
+                raise ValueError(
+                    "reference clip contains no detectable speech (VAD segments empty)"
+                )
             gs = []
             for segment in vad_audio_segments:
                 y = segment_spectrogram(segment)
@@ -1698,7 +1942,8 @@ class ModelRunnerBase:
                     for index in misses:
                         if not segment_gs[index]:
                             # No segment survived the VAD filters: the loop below
-                            # raises exactly as it did before batching existed.
+                            # raises the honest "no detectable speech" ValueError
+                            # (Phase 12-4) exactly as it did before batching existed.
                             continue
                         gs = torch.stack(segment_gs[index]).mean(0)
                         artifact = SpeakerArtifact(embedding=gs.cpu(), backend="openvoice")
@@ -1828,7 +2073,7 @@ class ModelRunnerBase:
                 frame_lengths = [int(spec.size(-1)) for _index, spec in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
                 budget = self.model_config.batch_token_budget or default_token_budget(
-                    frame_lengths, batch_size
+                    frame_lengths, batch_size, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
                 )
                 groups = plan_batches(frame_lengths, batch_size, budget)
                 forwarded = 0
@@ -2098,7 +2343,9 @@ class ModelRunnerBase:
                     segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
                     lengths = [int(row[1].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(lengths, batch_size)
+                    budget = self.model_config.batch_token_budget or default_token_budget(
+                        lengths, batch_size, max_budget=DEFAULT_PHONE_BATCH_BUDGET
+                    )
                     groups = plan_batches(lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
@@ -2241,7 +2488,9 @@ class ModelRunnerBase:
                     segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
                     lengths = [int(row[1][2].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(lengths, batch_size)
+                    budget = self.model_config.batch_token_budget or default_token_budget(
+                        lengths, batch_size, max_budget=DEFAULT_PHONE_BATCH_BUDGET
+                    )
                     groups = plan_batches(lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
@@ -2727,15 +2976,21 @@ class ModelRunnerBase:
             # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
             self._align_chatterbox_conditionals(exaggeration)
 
-            wav = self.model.generate(
-                text,
-                exaggeration=exaggeration,
-                cfg_weight=cfg_weight,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                min_p=min_p,
+            suppression = (
+                self._without_watermark()
+                if _watermark_suppressed(initial_request)
+                else contextlib.nullcontext()
             )
+            with suppression:
+                wav = self.model.generate(
+                    text,
+                    exaggeration=exaggeration,
+                    cfg_weight=cfg_weight,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    top_p=top_p,
+                    min_p=min_p,
+                )
 
             return _audio_artifact_from_tensor(wav, self.model.sr)
 
@@ -2784,14 +3039,20 @@ class ModelRunnerBase:
             # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
             self._align_chatterbox_conditionals()
 
-            wav = self.model.generate(
-                text,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                top_k=top_k,
-                norm_loudness=norm_loudness,
+            suppression = (
+                self._without_watermark()
+                if _watermark_suppressed(initial_request)
+                else contextlib.nullcontext()
             )
+            with suppression:
+                wav = self.model.generate(
+                    text,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    top_p=top_p,
+                    top_k=top_k,
+                    norm_loudness=norm_loudness,
+                )
 
             return _audio_artifact_from_tensor(wav, self.model.sr)
 
@@ -2810,8 +3071,18 @@ class ModelRunnerBase:
         return outputs
 
     def _execute_chatterbox_multilingual_tts(self, inputs, requests_to_batch):
-        """Execute ChatterboxMultilingualTTS to generate speech audio from text."""
+        """Execute ChatterboxMultilingualTTS: AR runner when eligible, else the loop."""
         assert_batch_aligned("_execute_chatterbox_multilingual_tts", inputs, requests_to_batch)
+        runner = self._get_ar_runner()
+        if runner is None or not runner.enabled:
+            return self._execute_chatterbox_multilingual_tts_sequential(inputs, requests_to_batch)
+        return self._execute_chatterbox_tts_ar(
+            runner, inputs, requests_to_batch, turbo=False, multilingual=True
+        )
+
+    def _execute_chatterbox_multilingual_tts_sequential(self, inputs, requests_to_batch):
+        """Per-request loop: the ``len == 1`` fast path and the fallback."""
+        assert_batch_aligned("_execute_chatterbox_multilingual_tts_sequential", inputs, requests_to_batch)
 
         def synthesize(input_params, initial_request):
             text, language_id, speaker, exaggeration, cfg_weight, temperature, repetition_penalty, top_p, min_p = (
@@ -2834,16 +3105,33 @@ class ModelRunnerBase:
             # Phase 4-1: match conditional tensors to the T3 dtype (fp16 rollout).
             self._align_chatterbox_conditionals(exaggeration)
 
-            wav = self.model.generate(
-                text,
-                language_id=language_id,
-                exaggeration=exaggeration,
-                cfg_weight=cfg_weight,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                min_p=min_p,
+            suppression = (
+                self._without_watermark()
+                if _watermark_suppressed(initial_request)
+                else contextlib.nullcontext()
             )
+            # Phase 12-7: upstream's multilingual `generate` forgets the OOV
+            # filter English applies (`speech_tokens < 6561`). Wrap only this
+            # wrapper's S3Gen seam; the shared module is restored in `finally`.
+            s3gen = getattr(self.model, "s3gen", None)
+            filtered = _FilteredS3Gen(s3gen) if s3gen is not None else None
+            if filtered is not None:
+                self.model.s3gen = filtered
+            try:
+                with suppression:
+                    wav = self.model.generate(
+                        text,
+                        language_id=language_id,
+                        exaggeration=exaggeration,
+                        cfg_weight=cfg_weight,
+                        temperature=temperature,
+                        repetition_penalty=repetition_penalty,
+                        top_p=top_p,
+                        min_p=min_p,
+                    )
+            finally:
+                if filtered is not None:
+                    self.model.s3gen = s3gen
 
             return _audio_artifact_from_tensor(wav, self.model.sr)
 
@@ -3113,7 +3401,10 @@ class ModelRunnerBase:
             for position, waveform in zip(group, waveforms, strict=True):
                 index = prepared[position][0]
                 try:
-                    artifact = self._artifact_from_waveform(waveform)
+                    artifact = self._artifact_from_waveform(
+                        waveform,
+                        watermark=not _watermark_suppressed(requests_to_batch[index]),
+                    )
                     result = self._build_result(
                         requests_to_batch[index], "", VoiceConversionRequestOutput
                     )

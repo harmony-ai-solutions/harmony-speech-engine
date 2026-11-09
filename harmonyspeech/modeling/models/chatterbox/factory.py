@@ -129,17 +129,19 @@ ROLE_VC = "vc"
 ROLE_MULTILINGUAL = "multilingual"
 ROLE_TURBO = "turbo"
 
-#: Roles whose T3 decodes with HSE's cleaned AR loop (Phase 9-1). The embedding
-#: role shares the TTS T3 object, so it is covered by loading that role as TTS.
-_AR_T3_ROLES = frozenset({ROLE_TTS})
+#: Roles whose T3 decodes with HSE's cleaned AR loop (Phase 9-1; multilingual
+#: joined in Phase 12-7). The embedding role shares the TTS T3 object, so it is
+#: covered by loading that role as TTS.
+_AR_T3_ROLES = frozenset({ROLE_TTS, ROLE_MULTILINGUAL})
 
 
 def _t3_class_for_role(role: str) -> type[T3]:
     """Return the T3 implementation to instantiate for ``role``.
 
-    Only the English TTS decode path gets :class:`ChatterboxT3AR`; multilingual
-    keeps the upstream class (per-request analyzer state on the shared Llama) and
-    turbo keeps ``T3.inference_turbo`` (a different loop, deferred to 9-3).
+    English TTS and Multilingual both get :class:`ChatterboxT3AR`: they share the
+    same ``Llama_520M`` architecture and decode contract, and the cleaned loop is
+    what keeps multilingual on SDPA with zero leaked analyzer hooks. Turbo keeps
+    ``T3.inference_turbo`` (a different loop, deferred to 9-3).
     """
     return ChatterboxT3AR if role in _AR_T3_ROLES else T3
 
@@ -526,8 +528,9 @@ def assemble_role(
             device=device,
             conds=_load_conditionals(repo, revision, device, role=ROLE_MULTILINGUAL),
         )
-        if hasattr(model.t3, "tfmr") and hasattr(model.t3.tfmr, "config"):
-            model.t3.tfmr.config._attn_implementation = "eager"
+        # Phase 12-7: keep Llama_520M's native SDPA. The alignment analyzer is
+        # opt-in (``HSE_CHATTERBOX_MTL_ANALYZER``) and switches to eager only for
+        # the call that needs it, restoring the config afterwards.
         apply_model_dtype(model, backbone.dtype, s3gen_precision)
         return model
 

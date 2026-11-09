@@ -327,6 +327,16 @@ class TextToSpeechGenerationOptions:
     noise_scale: float | None = None
     noise_scale_w: float | None = None
     sdp_ratio: float | None = None
+    # Long-form audio (Phase 12-1 fields, wired by the serving layer in 12-2).
+    # Defaults keep every existing caller on the single-shot path.
+    split_text: bool = False
+    chunk_size: int | None = None
+    crossfade_ms: int | None = None
+    sentence_pause_ms: int | None = None
+    # Phase B output filters (Phase 12-3). Default off = byte-identical output.
+    remove_dc_offset: bool = False
+    trim_silence: bool = False
+    fix_internal_silence: bool = False
 
 
 class TextToSpeechAudioOutputOptions:
@@ -456,6 +466,19 @@ class TextToSpeechRequestInput(RequestInput):
         output_options: TextToSpeechAudioOutputOptions | None = None,
         post_generation_filters: list[AudioConversionRequestInput] | None = None,
         metrics: RequestMetrics | None = None,
+        # Internal, non-wire flag (Phase 12-2): a long-form chunk sub-request
+        # asks the runner not to watermark its own slice, because the serving
+        # layer watermarks the stitched buffer exactly once. Never set from the
+        # wire; only the serving chunker sets it on the requests it builds.
+        suppress_watermark: bool = False,
+        # Internal, non-wire per-request deadline override (Phase 12-2
+        # follow-up, 2026-11-09). ``None`` means "inherit the engine's
+        # configured ``request_timeout_s``"; it does NOT mean "no timeout". A
+        # value > 0 replaces the engine-wide timeout for this request; ``0``
+        # disables the deadline exactly like an engine-wide 0. Only the serving
+        # chunker sets it (a chunk may legitimately wait in the queue for its
+        # siblings ahead of it, which is not a synthesis failure).
+        request_timeout_s: float | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_text = input_text
@@ -469,6 +492,8 @@ class TextToSpeechRequestInput(RequestInput):
         self.generation_options = generation_options
         self.output_options = output_options
         self.post_generation_filters = post_generation_filters
+        self.suppress_watermark = bool(suppress_watermark)
+        self.request_timeout_s = request_timeout_s
 
     @classmethod
     def from_openai(cls, request_id: str, request: "TextToSpeechRequest"):
@@ -503,12 +528,26 @@ class SpeechEmbeddingRequestInput(RequestInput):
         input_audio: str | None = None,
         input_vad_mode: str | None = None,
         input_vad_data: str | None = None,
+        generation_options: TextToSpeechGenerationOptions | None = None,
         metrics: RequestMetrics | None = None,
+        # Internal, non-wire per-request deadline override (Phase 12-2
+        # follow-up): the one-time reference-embedding sub-request of a
+        # long-form clone request queues behind other admitted work too, so the
+        # serving layer stamps the same extended deadline on it. ``None`` means
+        # "inherit the engine's ``request_timeout_s``" (not "no timeout").
+        request_timeout_s: float | None = None,
     ):
         super().__init__(request_id=request_id, requested_model=requested_model, model=model, metrics=metrics)
         self.input_audio = input_audio
         self.input_vad_mode = input_vad_mode
         self.input_vad_data = input_vad_data
+        # Optional carrier for the originating TTS request's options (Phase
+        # 12-2): the serving layer's one-time reference-embedding sub-request
+        # passes them so family-specific embedding parameters (e.g. Chatterbox
+        # ``exaggeration``) stay identical to the non-chunked pipeline. Not a
+        # wire field; external embed requests leave it unset.
+        self.generation_options = generation_options
+        self.request_timeout_s = request_timeout_s
 
     @classmethod
     def from_openai(cls, request_id: str, request: "EmbedSpeakerRequest"):

@@ -93,14 +93,19 @@ __all__ = [
     "DEFAULT_AR_CACHE_CAP_TOKENS",
 ]
 
-#: Device-wide pool budget, owner-approved 2026-11-07 as the initial value
-#: (tune on data the way Phase 8-6 tuned its "initial 8").
-DEFAULT_AR_CACHE_BUDGET_BYTES = 1073741824
+#: Device-wide pool budget (Phase 12-8: 2.75 GiB, re-sized 2026-11-09). Sized so
+#: all three shipped AR arenas fit at their contracts' preferred caps on fp16:
+#: ``chatterbox`` 8 × 135 MiB + ``chatterbox_multilingual`` 8 × 135 MiB +
+#: ``chatterbox_turbo`` 4 × 144 MiB = 2736 MiB ≤ 2816 MiB. ``EnglishContract``
+#: only needs 1152 tokens (Perceiver-resampled conditioning), so 768 MiB of the
+#: old 3.5 GiB budget is freed back to Dedicated GPU VRAM.
+DEFAULT_AR_CACHE_BUDGET_BYTES = 2952790016
 
-#: Default token capacity per slot: 768 tokens ≈ 30 s of speech at 25 Hz
-#: (2 mel frames/token, derived in study #14; re-derive from the vendored token
-#: rate when the first consumer lands).
-DEFAULT_AR_CACHE_CAP_TOKENS = 768
+#: Default token capacity per slot: 1536 tokens. Upstream's speech budget is
+#: 1000 tokens (~40 s at 25 Hz); the rest covers conditioning (Turbo's
+#: un-resampled prompt is up to 376 tokens) plus text. The old 768-token slot
+#: silently truncated Turbo mid-sentence (`max_new_tokens = 768 - prefill`).
+DEFAULT_AR_CACHE_CAP_TOKENS = 1536
 
 #: Two tensors per layer: keys and values.
 _KINDS = 2
@@ -142,6 +147,10 @@ class ARCacheDescriptor:
         Slot count. ``None`` means "as many whole slabs as the remaining budget
         fits" (at least one; a slab that cannot fit is a boot error). This is a
         pool-availability number, never an admission width.
+    rows_per_request:
+        KV rows one request occupies (2 for the CFG contracts, 1 for Turbo).
+        Reported by :meth:`ARCacheArena.capacity` so admission divides free
+        slots by it and never admits a 2-row request when only 1 slot is free.
     """
 
     model_key: str
@@ -151,6 +160,7 @@ class ARCacheDescriptor:
     dtype: torch.dtype = torch.float16
     cap_tokens: int | None = None
     slots: int | None = None
+    rows_per_request: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_key, str) or not self.model_key:
@@ -171,6 +181,10 @@ class ARCacheDescriptor:
             isinstance(self.slots, bool) or not isinstance(self.slots, int) or self.slots < 1
         ):
             raise ValueError(f"slots must be a positive int or None, got {self.slots!r}")
+        if isinstance(self.rows_per_request, bool) or not isinstance(self.rows_per_request, int) or self.rows_per_request < 1:
+            raise ValueError(
+                f"rows_per_request must be a positive int, got {self.rows_per_request!r}"
+            )
 
     @property
     def element_size(self) -> int:
@@ -303,6 +317,7 @@ class ARCacheArena:
             "slots": self.slots,
             "slots_active": self.active_count,
             "slots_free": self.free_count,
+            "rows_per_request": self.descriptor.rows_per_request,
             "active_rows": self.active_count,
             "slab_bytes": self.slab_bytes,
             "arena_bytes": self.arena_bytes,

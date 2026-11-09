@@ -14,6 +14,8 @@ import pytest
 import torch
 
 from harmonyspeech.task_handler.batching import (
+    DEFAULT_MEL_FRAME_BATCH_BUDGET,
+    DEFAULT_PHONE_BATCH_BUDGET,
     LENGTH_SIMILARITY_RATIO,
     default_token_budget,
     pad_feature_batch,
@@ -232,3 +234,30 @@ def test_default_token_budget_applies_on_the_frame_axis():
     assert budget == 200
     assert groups == [[0, 1], [2]]
     _assert_grouping(groups, lengths, max_batch_size=2, budget=budget)
+
+
+@pytest.mark.unit
+def test_default_token_budget_caps_the_frame_area():
+    lengths = [3660] * 8
+    assert default_token_budget(lengths, max_batch_size=8) == 8 * 3660
+    budget = default_token_budget(
+        lengths, max_batch_size=8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
+    )
+
+    assert budget == DEFAULT_MEL_FRAME_BATCH_BUDGET == 7500
+    groups = plan_batches(lengths, max_batch_size=8, token_budget=budget)
+    assert groups == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    _assert_grouping(groups, lengths, max_batch_size=8, budget=budget)
+
+
+@pytest.mark.unit
+def test_default_token_budget_phone_cap_keeps_short_chunk_width():
+    lengths = [128] * 8
+    budget = default_token_budget(
+        lengths, max_batch_size=8, max_budget=DEFAULT_PHONE_BATCH_BUDGET
+    )
+
+    assert budget == 8 * 128 <= DEFAULT_PHONE_BATCH_BUDGET
+    groups = plan_batches(lengths, max_batch_size=8, token_budget=budget)
+    assert groups == [list(range(8))]
+    _assert_grouping(groups, lengths, max_batch_size=8, budget=budget)

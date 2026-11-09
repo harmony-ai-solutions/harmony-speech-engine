@@ -19,6 +19,20 @@ Provenance
 * Texts are short, punctuation-normalised English sentences (plus one German
   sentence for the multilingual family) so tokenisation is stable across runs.
 
+VAD detectability of the synthetic clips (2026-11-09)
+-----------------------------------------------------
+``voice_a`` / ``voice_b`` are voiced, formant-shaped *tones*, not speech:
+Silero VAD at its 16 kHz rate returns **zero** speech segments for both
+(measured with ``get_speech_timestamps``), while ``repo_voice_a`` /
+``repo_voice_b`` return 1–2. Any pipeline whose clone conditioning is carried
+through the VAD step — the OpenVoice ``vad → embed`` pipelines — therefore
+cannot use a synthetic clip as the reference: the tone-converter encoder is
+handed an empty segment list and fails. Use ``repo_voice_a`` /
+``repo_voice_b`` for those paths (see :data:`VAD_UNDETECTABLE_CLIPS`). The
+synthetic clips stay valid for non-VAD conditioners (Chatterbox
+``prepare_conditionals``) and for VoiceFixer restoration, and their bytes must
+not change: other axes pin their output.
+
 The harness compares *two configurations of the current build* (fp32 vs fp16,
 deduplicated vs duplicated); it never stores golden audio, because bit-exact
 output across torch versions is unrealistic.
@@ -53,6 +67,22 @@ REFERENCE_CLIPS = {
     # the native-accent German case while this file is absent.
     "repo_voice_de": os.path.join(FIXTURE_DIR, "ref_voice_de.wav"),
 }
+
+#: Reference clips Silero VAD cannot detect as speech (verified 2026-11-09).
+#:
+#: The two synthetic clips are voiced tones with formant shaping, which is
+#: enough for a direct embedding conditioner but **not** speech for the VAD: at
+#: 16 kHz ``get_speech_timestamps`` returns ``[]`` for both, while the real
+#: repository clips return one or two segments. A pipeline that routes the
+#: reference through its VAD step (OpenVoice ``vad → embed``) then hands the
+#: tone-converter encoder an empty segment list; the engine now raises
+#: ``ValueError: reference clip contains no detectable speech (VAD segments
+#: empty)`` instead of ``stack expects a non-empty TensorList``. Case authors
+#: must use ``repo_voice_a`` / ``repo_voice_b`` for those paths.
+#:
+#: Do **not** regenerate these clips to "fix" detectability: other axes
+#: (VoiceFixer restoration, Chatterbox timbre porting) pin their bytes.
+VAD_UNDETECTABLE_CLIPS = frozenset({"voice_a", "voice_b"})
 
 #: Fixed texts per family. Keep them short (a few seconds of speech) so a full
 #: fp32-vs-fp16 sweep stays a coffee break rather than an afternoon.
@@ -102,6 +132,11 @@ def reference_available(name: str) -> bool:
     return bool(path) and os.path.isfile(path)
 
 
+def vad_detectable_reference(name: str) -> bool:
+    """Whether Silero VAD detects speech in ``name`` (see :data:`VAD_UNDETECTABLE_CLIPS`)."""
+    return name not in VAD_UNDETECTABLE_CLIPS
+
+
 def reference_wav_b64(name: str = "voice_a") -> str:
     """Return a reference clip as base64 (the API's JSON audio encoding)."""
     with open(REFERENCE_CLIPS[name], "rb") as handle:
@@ -133,9 +168,11 @@ __all__ = [
     "FIXTURE_DIR",
     "REFERENCE_CLIPS",
     "TEXTS",
+    "VAD_UNDETECTABLE_CLIPS",
     "reference_available",
     "reference_duration_seconds",
     "reference_wav_b64",
     "tiny_wav_b64",
     "tiny_wav_bytes",
+    "vad_detectable_reference",
 ]

@@ -602,9 +602,15 @@ class HarmonySpeechEngine:
                 deadline = getattr(request, "deadline", None)
                 if deadline is None or deadline > now:
                     continue
+                # Report the timeout that actually applied to this request: a
+                # chunk sub-request may carry its own extended override.
+                request_data = getattr(request, "request_data", None)
+                effective_timeout_s = getattr(request_data, "request_timeout_s", None)
+                if effective_timeout_s is None:
+                    effective_timeout_s = timeout_s
                 message = (
-                    f"request exceeded timeout of {timeout_s:g}s"
-                    if timeout_s
+                    f"request exceeded timeout of {effective_timeout_s:g}s"
+                    if effective_timeout_s
                     else "request exceeded its deadline"
                 )
                 logger.error(f"Request {request.request_id} timed out: {message}")
@@ -684,6 +690,17 @@ class HarmonySpeechEngine:
         artifact_store = prefill_audio_artifacts(request_data, artifact_store)
 
         timeout_s = getattr(self, "request_timeout_s", None)
+        # Per-request override (Phase 12-2 follow-up, 2026-11-09). A long-form
+        # chunk sub-request can legitimately wait in the queue for its siblings
+        # ahead of it, which is queueing delay, not synthesis failure; the
+        # serving layer therefore stamps a deadline that covers that wait.
+        # Semantics: ``None`` on the request means "inherit the engine-wide
+        # timeout" (NOT "no timeout"); a value replaces the engine-wide one and
+        # ``0`` disables the deadline exactly like an engine-wide ``0``. Requests
+        # that never set the field keep the pre-existing behaviour unchanged.
+        request_timeout_s = getattr(request_data, "request_timeout_s", None)
+        if request_timeout_s is not None:
+            timeout_s = request_timeout_s
         deadline = time.monotonic() + timeout_s if timeout_s else None
 
         # Add the request to the scheduler.

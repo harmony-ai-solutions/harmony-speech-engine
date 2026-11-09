@@ -107,6 +107,64 @@ class GenerationOptions(BaseModel):
         None,
         description="(OpenVoice V1 / MeloTTS) Weight of the stochastic duration predictor vs the deterministic one. Default: 0.2.",
     )
+    # Long-form audio (Phase 12-2): sentence-aware splitting, concurrent chunk
+    # synthesis and ordered stitching. Defaults keep the single-shot path.
+    split_text: bool = Field(
+        False,
+        description=(
+            "Split long input text into sentence-aware chunks before synthesis and stitch the "
+            "result. A request that yields 0 or 1 chunk takes the single-shot path unchanged."
+        ),
+    )
+    chunk_size: int | None = Field(
+        None,
+        description=(
+            "Character budget per synthesis chunk when `split_text` is enabled (also enables "
+            "chunking on its own). When `split_text` is true and this is null, the server "
+            "budget is 300 characters, except for Chatterbox Turbo (150) and Chatterbox "
+            "Multilingual (75), which use tighter budgets so their long-form output stays "
+            "faithful to the text (measured 2026-11-09). An explicit value always wins."
+        ),
+    )
+    crossfade_ms: int | None = Field(
+        None,
+        description=(
+            "Equal-power crossfade length between stitched chunks in milliseconds (default 0). "
+            "The fade consumes part of `sentence_pause_ms` rather than adding to it."
+        ),
+    )
+    sentence_pause_ms: int | None = Field(
+        None,
+        description=(
+            "Silence inserted between stitched sentence chunks in milliseconds (default 0). "
+            "The audible gap is `sentence_pause_ms - crossfade_ms` (clamped at zero)."
+        ),
+    )
+    # Phase B output filters (Phase 12-3). All default off: with every flag
+    # false the serving layer does not touch the samples, so output is
+    # byte-identical to the pre-12 path.
+    remove_dc_offset: bool = Field(
+        False,
+        description=(
+            "Remove the constant (DC) offset from the generated audio. In the chunked path the "
+            "mean is removed per chunk before stitching. Default: false."
+        ),
+    )
+    trim_silence: bool = Field(
+        False,
+        description=(
+            "Trim leading and trailing silence (energy-gated at 40 dB below the loudest frame, "
+            "keeping 50 ms of padding). Applied to the final stitched buffer. Default: false."
+        ),
+    )
+    fix_internal_silence: bool = Field(
+        False,
+        description=(
+            "Collapse internal pauses longer than 700 ms to at most 300 ms. Leading/trailing "
+            "silence is not touched (see `trim_silence`). Applied to the final stitched buffer. "
+            "Default: false."
+        ),
+    )
 
 
 class AudioOutputOptions(BaseModel):

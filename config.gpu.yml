@@ -6,15 +6,19 @@
 # transcribes on the shared weights. Phase 10-1 initial values, pending the
 # Phase 10-5 benchmark: turbo 2 / tiny 4; unset means 1 (today's behaviour).
 # `ar_inference` = the shared autoregressive KV-cache pool (Phase 9-2). The
-# Chatterbox English/Turbo entries are `ar_decode`-class as of Phase 9-6 with an
-# initial admission width of 4, justified from this budget: 4 English requests
-# (2 CFG rows each = 8 slabs × 90 MiB) + 4 Turbo requests (4 slabs × 72 MiB) =
-# 1008 MiB ≤ 1 GiB at the default 768-token slot. Pending the benchmark-host
-# `batching:1-vs-N` gate; set `batched_inference: false` (or width 1) to force
-# the proven sequential loop.
+# Chatterbox English/Turbo/Multilingual entries are `ar_decode`-class as of
+# Phase 12-7/12-8 with an initial admission width of 4, justified from this
+# budget at each contract's preferred slot cap: English 8 slabs × 135 MiB (1152
+# tokens) + Multilingual 8 slabs × 135 MiB + Turbo 4 slabs × 144 MiB (1536
+# tokens) = 2736 MiB ≤ 2.75 GiB. English/Multilingual's Perceiver resampling
+# keeps `len_cond` at 34 tokens, so 1152 covers 34 cond + ~118 text + 1000
+# speech; Turbo's un-resampled 376-token prompt still gets the full 1536, so no
+# AR row truncates mid-sentence. Pending the benchmark-host `batching:1-vs-N`
+# gate; set `batched_inference: false` (or width 1) to force the proven
+# sequential loop.
 ar_inference:
-  kv_cache_budget_bytes: 1073741824   # 1 GiB, owner-approved initial value (2026-11-07)
-  default_cap_tokens: 768             # ≈30 s per sequence at 25 Hz
+  kv_cache_budget_bytes: 2952790016   # 2.75 GiB; fits all three AR arenas at their preferred caps
+  default_cap_tokens: 1536            # ceiling; English/Multilingual clamp to 1152
   enabled: true
 
 model_configs:
@@ -290,7 +294,7 @@ model_configs:
     model: "resemble-ai/chatterbox"
     model_type: "ChatterboxMultilingualTTS"
     watermark: true
-    max_batch_size: 1
+    max_batch_size: 4        # AR admission width (Phase 12-7: shares English's decode contract)
     dtype: "float16"
     s3gen_precision: "float16"  # Phase 11-3 flip (2026-11-08): shared S3Gen runs fp16 autocast
     # Joins the base group on checkpoint-hash evidence (see

@@ -70,6 +70,17 @@ lines (Phase 5-2 / 8-2..8-5 handlers log ``... forwarded in N padded
 sub-batch(es)``) for the lines emitted during each concurrency level and reports
 how many padded forwards one engine step needed, next to end-to-end p50/p95 and
 req/s.
+
+Text fidelity (``--scenario longform --fidelity``, added 2026-11-09)
+--------------------------------------------------------------------
+The throughput matrix measures duration, not whether the audio says the text —
+the gap that let Chatterbox Turbo's word-dropping ship unnoticed. Fidelity mode
+renders each family's fixture once per variant (default ON at the server's
+per-model chunk budget; ``--longform-split both`` also scores OFF), saves the
+WAVs under ``out/bench/fidelity-12/``, transcribes them with faster-whisper
+``large-v3-turbo`` (``--gpu`` or CPU int8, language ``en``, beam 5) and scores
+word edit distance plus words heard / reference. The transcription noise floor
+on this fixture is ~2–6 edit distance ("Karina/Carina", "weaves/leaves").
 """
 
 from __future__ import annotations
@@ -77,6 +88,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import json
 import os
 import platform
@@ -93,6 +105,12 @@ if _REPO_ROOT not in sys.path:
 
 #: Per-family request payload templates. ``model`` may be overridden from the
 #: command line when the deployment names its entries differently.
+
+#: The default family list for the ordinary throughput matrix; ``--scenario
+#: longform`` substitutes :data:`LONGFORM_FAMILIES` when the user leaves it at
+#: this default.
+DEFAULT_FAMILIES = "melo,openvoice_v2,openvoice_v1,harmonyspeech,voicefixer,kitten,chatterbox,whisper"
+
 FAMILY_SPECS: dict[str, dict] = {
     "melo": {
         "path": "/v1/audio/speech",
@@ -178,6 +196,20 @@ FAMILY_SPECS: dict[str, dict] = {
             "input": "The quick brown fox jumps over the lazy dog near the river bank.",
         },
     },
+    "chatterbox_multilingual": {
+        # Phase 12-4: the loop-class control for the long-form matrix. It is a
+        # real TTS family but keeps `max_batch_size: 1`, so chunk sub-requests
+        # queue instead of co-batching — the honest contrast to the AR/padded
+        # families.
+        "path": "/v1/audio/speech",
+        "kind": "tts",
+        "model": "chatterbox_multilingual",
+        "payload": {
+            "mode": "single_speaker_tts",
+            "language": "en",
+            "input": "The quick brown fox jumps over the lazy dog near the river bank.",
+        },
+    },
     # Phase 11-2: clone-flood variants of the two AR families. Same model/path as
     # the entries above, but every request carries a reference clip in
     # `voice_cloning` mode, so the clone pipeline (embed step + AR decode +
@@ -236,6 +268,9 @@ class LevelResult:
     steps: dict[str, dict] = field(default_factory=dict)
     #: ``/metrics`` AR pool + decode samples taken during this level (Phase 9-6).
     ar_trace: list[dict] = field(default_factory=list)
+    #: Duration of the first successful response at this level (Phase 12-4).
+    #: ``None`` when the response carried no decodable audio.
+    audio_seconds: float | None = None
 
     @property
     def throughput(self) -> float:
@@ -258,6 +293,7 @@ class LevelResult:
             "p50_ms": round(self.percentile(0.50) * 1000, 1),
             "p95_ms": round(self.percentile(0.95) * 1000, 1),
             "mean_ms": round(statistics.fmean(self.latencies_s) * 1000, 1) if self.latencies_s else 0.0,
+            "audio_seconds": self.audio_seconds,
             "steps": self.steps,
             "ar_trace": self.ar_trace,
         }
@@ -1229,6 +1265,992 @@ def ar_scenario_matrix(
         }
     )
     return cells
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-4 — long-form scenarios (chunking on/off, single request + flood)
+# ---------------------------------------------------------------------------
+
+#: Historical seed of the Phase 12-4 generator. The fixture is now a fixed
+#: literal (see :data:`LONGFORM_FIXTURE_TEXT`), so the seed no longer influences
+#: the text; it stays in reports for continuity with the earlier runs.
+LONGFORM_SEED = 20261109
+
+#: Global character budget used when a long-form scenario turns chunking on
+#: without naming a budget. Mirrors
+#: ``serving_text_to_speech.DEFAULT_CHUNK_SIZE`` (300) without importing the
+#: serving module (which pulls in torch). Phase 12-7/12-8 restored the unified
+#: 300-char default for every family; the old Turbo 150 / Multilingual 75
+#: workarounds are gone. The unit test asserts the splitter yields more than one
+#: chunk for every family fixture.
+LONGFORM_DEFAULT_CHUNK_SIZE = 300
+
+
+def longform_default_chunk_size(family: str | None) -> int:
+    """Return the serving layer's default chunk budget for ``family``.
+
+    Every family (including ``None``/unknown) uses the global 300-char default.
+    """
+    return LONGFORM_DEFAULT_CHUNK_SIZE
+
+#: Requests per concurrency level for the long-form flood. Eight keeps a
+#: c={1,4,8,20} sweep bounded on the benchmark host while still filling c=8;
+#: pass ``--longform-requests`` to change it.
+LONGFORM_REQUESTS = 8
+
+#: The concurrency sweep the Phase 12-4 spec names.
+LONGFORM_CONCURRENCY: tuple[int, ...] = (1, 4, 8, 20)
+
+#: Execution-model classes under measurement. ``chatterbox_multilingual`` is
+#: the loop-class control; ``melo`` is the padded-batch path; ``openvoice_v2``
+#: is the clone pipeline; ``kitten`` is the lanes path.
+LONGFORM_FAMILIES: tuple[str, ...] = (
+    "chatterbox",
+    "chatterbox_turbo",
+    "chatterbox_multilingual",
+    "melo",
+    "openvoice_v2",
+    "kitten",
+)
+
+LONGFORM_CLASS: dict[str, str] = {
+    "chatterbox": "AR decode, admission width 4",
+    "chatterbox_turbo": "AR decode, admission width 4",
+    "chatterbox_multilingual": "AR decode, admission width 4",
+    "melo": "padded batch",
+    "openvoice_v2": "clone pipeline (VAD -> embed -> synth -> tone convert)",
+    "kitten": "lanes",
+}
+
+#: Real-prose long-form fixture (owner-provided, 2026-11-09 listening verdict).
+#:
+#: The Phase 12-4 generator emitted word-index gibberish ("word-salad fixtures
+#: are unlistenable"); this is the owner's extract from *The Villainess Malfoy*,
+#: hard line-wraps normalised to single spaces and em-dashes/quotes/apostrophes
+#: kept exactly. It exercises multi-sentence structure and the em-dash narrative
+#: rule (450de15). A literal is even more deterministic than arithmetic
+#: generation — identical bytes on every host and Python version — and every
+#: family shares it, so ON/OFF and family comparisons differ only in the engine.
+LONGFORM_FIXTURE_TEXT = (
+    "Always destined to stand out, and always destined to shine the brightest—her name is "
+    "Carina Malfoy. One could easily call her the true protagonist of today's Hogwarts. Even "
+    "the Gryffindors, who normally bare their teeth at the mere sight of Slytherin, "
+    "momentarily retract their fangs whenever she appears. When she offers an angelic smile, "
+    "even the most notoriously difficult professors bend over backward to accommodate her. "
+    "She doesn't even need to lift a finger. Hogwarts is crawling with fools desperate to "
+    "touch so much as the tip of a Malfoy's sleeve. Her sycophants flock around her like "
+    "decorative leaves adorn a flower, while ordinary pests hover about, hoping to catch even "
+    "a passing whiff of her scent. Tiresome chores are handed off to the pests, and filthy "
+    "matters are swept away by the leaves."
+)
+
+#: Provenance label carried into the benchmark report.
+LONGFORM_FIXTURE_SOURCE = (
+    "real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09)"
+)
+
+
+def longform_fixture(family: str) -> str:  # noqa: ARG001 - shared fixture
+    """Return the fixed real-prose paragraph shared by every family.
+
+    807 characters and 8 sentences. At the serving layer's unified 300-character
+    default it is **4 chunks** for every family (the unit tests pin the SHA-256
+    and the per-family chunk counts). Deterministic by construction: a literal,
+    not a generator.
+    """
+    return LONGFORM_FIXTURE_TEXT
+
+
+def longform_chunk_count(
+    text: str,
+    chunk_size: int | None = None,
+    language: str | None = None,
+    family: str | None = None,
+) -> int:
+    """Number of chunks the engine will synthesize for ``text``.
+
+    The response carries no chunk metadata, so the harness computes the
+    expected count client-side with the *same* splitter the serving layer uses
+    (``harmonyspeech.common.audio_utils.split_text_into_chunks``). This is the
+    honest proxy; the engine DEBUG log's per-step composition is the observed
+    side.
+
+    ``chunk_size=None`` means the request leaves the budget unset, so the
+    serving layer's unified 300-character default applies to every family
+    (Phases 12-7/12-8). An explicit ``chunk_size`` always wins.
+    """
+    from harmonyspeech.common.audio_utils import split_text_into_chunks
+
+    budget = (
+        int(chunk_size)
+        if chunk_size is not None
+        else longform_default_chunk_size(family)
+    )
+    return len(split_text_into_chunks(text, chunk_size=budget, language=language))
+
+
+def longform_fixture_metadata(family: str, chunk_size: int | None = None) -> dict:
+    """Fixture/budget metadata for ``family`` (shared by both bench modes).
+
+    ``chunk_size=None`` resolves the server's unified 300-character default; the
+    returned ``expected_chunks_per_request`` is computed with the serving
+    splitter. Both
+    ``--scenario longform`` and ``--fidelity`` report this same block, so the
+    fidelity rows cannot silently disagree with the throughput matrix.
+    """
+    spec = FAMILY_SPECS[family]
+    text = longform_fixture(family)
+    language = spec["payload"].get("language")
+    budget = (
+        int(chunk_size)
+        if chunk_size is not None
+        else longform_default_chunk_size(family)
+    )
+    return {
+        "class": LONGFORM_CLASS.get(family, family),
+        "fixture": "real_prose",
+        "source": LONGFORM_FIXTURE_SOURCE,
+        "characters": len(text),
+        "words_ref": len(normalize_fidelity_words(text)),
+        "sentences": text.count("."),
+        "default_chunk_size": budget,
+        "expected_chunks_per_request": longform_chunk_count(
+            text, chunk_size, language, family=family
+        ),
+        "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    }
+
+
+def build_longform_payload(
+    family: str,
+    reference_audio_b64: str,
+    text: str,
+    split_text: bool,
+    *,
+    chunk_size: int | None = None,
+    crossfade_ms: int | None = None,
+    sentence_pause_ms: int | None = None,
+    filters: tuple[bool, bool, bool] = (False, False, False),
+) -> dict:
+    """One long-form TTS payload; ON/OFF differ only in chunking fields.
+
+    The ``generation_options`` block is always present and always carries the
+    three Phase 12-3 filter booleans (off in the core matrix), so the ON and OFF
+    payloads are identical outside ``split_text``/``chunk_size``/
+    ``crossfade_ms``/``sentence_pause_ms``. The unit self-check asserts that.
+
+    ``chunk_size`` is omitted when ``None`` (its default), so the serving
+    layer's **per-model** default applies — 300 characters, 150 for Chatterbox
+    Turbo and 75 for Chatterbox Multilingual (Phase 12-5). ``crossfade_ms``/
+    ``sentence_pause_ms`` are likewise omitted when ``None``, so a bench run
+    measures the serving layer's Phase 12-5 defaults (40 ms / 120 ms) rather
+    than pinning 0/0 from the harness. An explicit CLI value is still sent
+    verbatim.
+    """
+    payload = _build_payload(family, reference_audio_b64, text_override=text)
+    options: dict = {"split_text": bool(split_text)}
+    if split_text:
+        # Omitted when None so the serving layer's per-model default applies
+        # (300 chars; 150 for Chatterbox Turbo, Phase 12-5). An explicit CLI
+        # value is still sent verbatim.
+        if chunk_size is not None:
+            options["chunk_size"] = int(chunk_size)
+        if crossfade_ms is not None:
+            options["crossfade_ms"] = int(crossfade_ms)
+        if sentence_pause_ms is not None:
+            options["sentence_pause_ms"] = int(sentence_pause_ms)
+    remove_dc, trim, fix_internal = filters
+    options.update(
+        remove_dc_offset=bool(remove_dc),
+        trim_silence=bool(trim),
+        fix_internal_silence=bool(fix_internal),
+    )
+    payload["generation_options"] = options
+    return payload
+
+
+def longform_payload_pair(
+    family: str,
+    reference_audio_b64: str,
+    text: str,
+    *,
+    chunk_size: int | None = None,
+    crossfade_ms: int | None = None,
+    sentence_pause_ms: int | None = None,
+    filters: tuple[bool, bool, bool] = (False, False, False),
+) -> dict[str, dict]:
+    """``{"off": payload, "on": payload}`` for the same text/voice/mode."""
+    return {
+        split: build_longform_payload(
+            family,
+            reference_audio_b64,
+            text,
+            split == "on",
+            chunk_size=chunk_size,
+            crossfade_ms=crossfade_ms,
+            sentence_pause_ms=sentence_pause_ms,
+            filters=filters,
+        )
+        for split in ("off", "on")
+    }
+
+
+def longform_scenario_matrix(
+    concurrencies: tuple[int, ...] = LONGFORM_CONCURRENCY,
+    families: tuple[str, ...] = LONGFORM_FAMILIES,
+) -> list[dict]:
+    """The Phase 12-4 benchmark cells (config-side, so the script prints them).
+
+    Every family gets a ``split_text`` ON and OFF cell at each concurrency
+    level. Each cell is one bench run; ``--longform-split both`` runs the pair
+    back to back on the same boot.
+    """
+    cells: list[dict] = []
+    for family in families:
+        for split in ("off", "on"):
+            for concurrency in concurrencies:
+                cells.append(
+                    {
+                        "label": f"phase12-{family}-split-{split}-c{concurrency}",
+                        "scenario": "longform",
+                        "family": family,
+                        "split_text": split == "on",
+                        "concurrency": concurrency,
+                        "config_note": f"{LONGFORM_CLASS.get(family, family)}, split_text={split}",
+                    }
+                )
+    return cells
+
+
+def longform_families_from_args(args) -> list[str]:
+    """Resolve ``--families`` for ``--scenario longform``.
+
+    Leaving ``--families`` at its ordinary default means the long-form set, so
+    ``--scenario longform`` works on its own; an explicit list is validated
+    against the six measured families.
+    """
+    families = [name.strip() for name in args.families.split(",") if name.strip()]
+    if args.families == DEFAULT_FAMILIES:
+        families = list(LONGFORM_FAMILIES)
+    unknown = [name for name in families if name not in LONGFORM_FAMILIES]
+    if unknown:
+        raise SystemExit(f"unknown long-form families: {', '.join(unknown)}")
+    return families
+
+
+def _wav_seconds(audio_b64: str) -> float | None:
+    """Duration of a base64 WAV response, or ``None`` if it is not decodable."""
+    import base64
+    import io
+
+    import soundfile as sf
+
+    try:
+        raw = base64.b64decode(audio_b64)
+        info = sf.info(io.BytesIO(raw))
+        return round(info.frames / float(info.samplerate), 3)
+    except Exception:  # noqa: BLE001 - a missing duration is not a request failure
+        return None
+
+
+async def _run_longform_level(
+    client,
+    base_url: str,
+    family: str,
+    payload: dict,
+    concurrency: int,
+    total: int,
+    timeout: float,
+    log_tail=None,
+) -> LevelResult:
+    """Run one long-form level, keeping the first successful response duration.
+
+    The HTTP response has no chunk metadata, so the observed side of the
+    chunking question is (a) the engine DEBUG log's per-step composition and
+    (b) the decoded audio duration of the first success. Expected chunk counts
+    are computed client-side by the caller.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    for index in range(total):
+        queue.put_nowait(index)
+    latencies: list[float] = []
+    failures = 0
+    first_audio: float | None = None
+    claim_audio = True
+    lock = asyncio.Lock()
+
+    async def worker() -> None:
+        nonlocal failures, first_audio, claim_audio
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            started = time.perf_counter()
+            elapsed = 0.0
+            ok = False
+            audio_seconds = None
+            try:
+                response = await client.post(
+                    base_url + FAMILY_SPECS[family]["path"], json=payload, timeout=timeout
+                )
+                elapsed = time.perf_counter() - started
+                ok = response.status_code == 200
+                if ok:
+                    body = response.json()
+                    ok = bool(body.get("data") or body.get("text"))
+                    if ok and body.get("data"):
+                        # Decode at most one response per level: the duration is
+                        # informational and a per-response decode would add
+                        # client CPU time to the measured wall clock.
+                        take = False
+                        async with lock:
+                            if claim_audio and first_audio is None:
+                                claim_audio = False
+                                take = True
+                        if take:
+                            audio_seconds = _wav_seconds(body["data"])
+            except Exception:  # noqa: BLE001 - a client timeout/failure is data
+                elapsed = time.perf_counter() - started
+                ok = False
+            async with lock:
+                if ok:
+                    latencies.append(elapsed)
+                    if first_audio is None and audio_seconds is not None:
+                        first_audio = audio_seconds
+                else:
+                    failures += 1
+
+    if log_tail is not None:
+        log_tail.flush()
+    started = time.perf_counter()
+    await asyncio.gather(*(worker() for _ in range(max(1, int(concurrency)))))
+    wall = time.perf_counter() - started
+    steps = parse_step_composition(log_tail.drain()) if log_tail is not None else {}
+    return LevelResult(
+        concurrency=concurrency,
+        requests=total,
+        failures=failures,
+        wall_s=wall,
+        latencies_s=latencies,
+        steps=steps,
+        audio_seconds=first_audio,
+    )
+
+
+async def run_longform_benchmark(args) -> dict:
+    """Run the Phase 12-4 long-form matrix (chunking on/off, flood)."""
+    import httpx
+
+    from tests.audio_fixtures import reference_wav_b64
+
+    reference = reference_wav_b64(args.reference)
+    families = longform_families_from_args(args)
+    levels = list(args.concurrency)
+    split_modes = longform_split_modes(args.longform_split)
+    filters = (
+        bool(args.longform_remove_dc_offset),
+        bool(args.longform_trim_silence),
+        bool(args.longform_fix_internal_silence),
+    )
+
+    max_connections, max_keepalive = http_client_limits(levels, args.http_max_connections)
+    log_tail = EngineLogTail(args.engine_log) if args.engine_log else None
+    runs: dict[str, list[dict]] = {}
+    skipped: dict[str, str] = {}
+    fixture_report: dict[str, dict] = {}
+
+    limits = httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive)
+    async with httpx.AsyncClient(limits=limits) as client:
+        available = await _discover_models(client, args.base_url) if not args.force else set()
+        if available:
+            print(f"[bench] advertised models: {', '.join(sorted(available))}", flush=True)
+
+        for family in families:
+            spec = FAMILY_SPECS[family]
+            model = args.model.get(family) or spec["model"]
+            if available and model not in available:
+                skipped[family] = f"model '{model}' is not configured on the target engine"
+                print(f"[bench] {family}: SKIP — {skipped[family]}", flush=True)
+                continue
+            text = longform_fixture(family)
+            # ``--longform-chunk-size`` defaults to None, so the ON payload
+            # leaves the budget unset and the server resolves it per model
+            # (300; 150 for turbo; 75 for multilingual). The expected count must
+            # mirror that.
+            fixture_report[family] = longform_fixture_metadata(
+                family, args.longform_chunk_size
+            )
+            chunks = fixture_report[family]["expected_chunks_per_request"]
+            budget = fixture_report[family]["default_chunk_size"]
+            print(
+                f"[bench] {family}: real-prose fixture, {len(text)} chars, "
+                f"{text.count('.')} sentence(s), {chunks} expected chunk(s)/request "
+                f"at {budget} chars",
+                flush=True,
+            )
+            for split in split_modes:
+                payload = build_longform_payload(
+                    family,
+                    reference,
+                    text,
+                    split == "on",
+                    chunk_size=args.longform_chunk_size,
+                    crossfade_ms=args.longform_crossfade_ms,
+                    sentence_pause_ms=args.longform_sentence_pause_ms,
+                    filters=filters,
+                )
+                payload["model"] = model
+                for _ in range(args.warmup):
+                    await _one_request(client, args.base_url, family, payload, args.timeout)
+
+                results = []
+                for level in levels:
+                    result = await _run_longform_level(
+                        client,
+                        args.base_url,
+                        family,
+                        payload,
+                        level,
+                        args.longform_requests,
+                        args.timeout,
+                        log_tail=log_tail,
+                    )
+                    results.append(result)
+                    print(
+                        f"[bench] {family} split={split} c={level}: "
+                        f"{result.throughput:.2f} req/s "
+                        f"p50={result.percentile(0.5) * 1000:.0f}ms "
+                        f"p95={result.percentile(0.95) * 1000:.0f}ms "
+                        f"audio={result.audio_seconds}s failures={result.failures}",
+                        flush=True,
+                    )
+                    for step, stats in sorted(result.steps.items()):
+                        print(
+                            f"[bench]   {step}: {stats['steps']} step(s), "
+                            f"{stats['sub_batches']} sub-batch(es), "
+                            f"avg {stats['avg_sub_batches_per_step']}/step",
+                            flush=True,
+                        )
+                runs[f"{family}-split-{split}"] = [result.as_dict() for result in results]
+
+    return {
+        "scenario": "longform",
+        "label": args.label,
+        "config": args.config_note,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "commit": _git_commit(),
+        "env": _gpu_description(),
+        "base_url": args.base_url,
+        "requests_per_level": args.longform_requests,
+        "concurrency_levels": levels,
+        "clone_reference": args.clone_reference,
+        "longform": {
+            "seed": LONGFORM_SEED,
+            "fixture": LONGFORM_FIXTURE_SOURCE,
+            "chunk_size": args.longform_chunk_size,
+            "crossfade_ms": args.longform_crossfade_ms,
+            "sentence_pause_ms": args.longform_sentence_pause_ms,
+            "filters": {
+                "remove_dc_offset": filters[0],
+                "trim_silence": filters[1],
+                "fix_internal_silence": filters[2],
+            },
+            "fixtures": fixture_report,
+        },
+        "runs": runs,
+        "skipped": skipped,
+    }
+
+
+def _longform_markdown(report: dict) -> str:
+    """Markdown block for one long-form run (rows map 1:1 to the docs matrix)."""
+    env = report.get("env") or {}
+    longform = report.get("longform") or {}
+    filters = longform.get("filters") or {}
+    levels = report.get("concurrency_levels") or []
+    crossfade = longform.get("crossfade_ms")
+    pause = longform.get("sentence_pause_ms")
+    chunk_size = longform.get("chunk_size")
+    crossfade_cell = f"{crossfade} ms" if crossfade is not None else "server default (40 ms)"
+    pause_cell = f"{pause} ms" if pause is not None else "server default (120 ms)"
+    chunk_cell = (
+        f"{chunk_size} chars"
+        if chunk_size is not None
+        else "server default (300) chars"
+    )
+    fixture_note = longform.get("fixture") or "long-form fixture"
+    lines = [
+        f"### {report['label']} — {report['timestamp_utc']}",
+        "",
+        f"* commit `{report.get('commit') or 'dirty'}` · torch {env.get('torch')} · "
+        f"{env.get('gpu') or 'CPU'} · driver {env.get('driver') or 'n/a'} · "
+        f"CUDA_VISIBLE_DEVICES={env.get('cuda_visible_devices') or 'all'}",
+        f"* config: {report.get('config') or 'n/a'}",
+        f"* fixture: {fixture_note} · chunk budget {chunk_cell} · "
+        f"crossfade {crossfade_cell} · pause {pause_cell} · "
+        f"filters dc={filters.get('remove_dc_offset')} trim={filters.get('trim_silence')} "
+        f"internal={filters.get('fix_internal_silence')}",
+        f"* {report.get('requests_per_level')} requests per concurrency level, HTTP against "
+        f"{report.get('base_url')}",
+        "",
+    ]
+
+    # Wide matrix: one row per (family, chunking), one pair of columns per level.
+    header = ["| Family | Class | Chunking | Chars | Chunks/req |"]
+    divider = ["|---|---|---|---|---|"]
+    for level in levels:
+        header.append(f" c={level} req/s | c={level} p50 (ms) |")
+        divider.append("---|---|")
+    lines.append("".join(header))
+    lines.append("".join(divider))
+    fixtures = longform.get("fixtures") or {}
+    for run_name, results in (report.get("runs") or {}).items():
+        family, _, split = run_name.partition("-split-")
+        fixture = fixtures.get(family) or {}
+        # With chunking off the serving layer takes the single-shot path, so the
+        # observed chunk count is 1; the fixture's expected count is the ON row.
+        chunks_cell = str(fixture.get("expected_chunks_per_request", "n/a")) if split == "on" else "1"
+        cells = [
+            family,
+            fixture.get("class", "n/a"),
+            split,
+            str(fixture.get("characters", "n/a")),
+            chunks_cell,
+        ]
+        by_level = {result["concurrency"]: result for result in results}
+        for level in levels:
+            result = by_level.get(level)
+            if result is None:
+                cells.extend(["_tbd_", "_tbd_"])
+            else:
+                cells.extend([str(result["throughput_rps"]), str(result["p50_ms"])])
+        lines.append("| " + " | ".join(cells) + " |")
+
+    composition = [
+        (run_name, result["concurrency"], step, stats)
+        for run_name, results in (report.get("runs") or {}).items()
+        for result in results
+        for step, stats in sorted((result.get("steps") or {}).items())
+    ]
+    if composition:
+        lines += [
+            "",
+            "Per-step sub-batch composition (engine DEBUG log; Phase 12-4):",
+            "",
+            "| Run | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        for run_name, concurrency, step, stats in composition:
+            lines.append(
+                f"| {run_name} | {concurrency} | {step} | {stats['steps']} | "
+                f"{stats['sub_batches']} | {stats['avg_sub_batches_per_step']} | "
+                f"{stats['rows']} | {stats['requests']} | {stats.get('lanes', '—')} |"
+            )
+    if report.get("skipped"):
+        lines.append("")
+        for family, reason in report["skipped"].items():
+            lines.append(f"* {family}: skipped — {reason}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def longform_scenario_recipe(args) -> str:
+    """Shell recipe for the Phase 12-4 long-form matrix + regression gates."""
+    port = args.base_url.rsplit(":", 1)[-1]
+    engine_log = args.engine_log or "out/bench/engine-phase12-info.log"
+    debug_log = "out/bench/engine-phase12-debug.log"
+    md_flag = " --md-out docs/benchmarks/throughput.md"
+    gate_families = (
+        "chatterbox,chatterbox_turbo,chatterbox_multilingual,openvoice_v1,"
+        "openvoice_v2,melotts,harmonyspeech,kittentts"
+    )
+    lines = [
+        "# Phase 12-4 long-form matrix. One idle benchmark host (RTX 5060 Ti,",
+        "# CUDA_VISIBLE_DEVICES=1). The results are _tbd_ in",
+        "# docs/benchmarks/throughput.md §Phase 12 until this session fills them.",
+        "#",
+        "# Fixture: one fixed real-prose paragraph shared by every family",
+        "# (owner-provided extract from The Villainess Malfoy, 2026-11-09):",
+        "# 807 characters, 8 sentences; 4 chunks at the unified",
+        "# 300-character default for every family.",
+        "# ON runs omit chunk_size (unless --longform-chunk-size is set) so the",
+        "# serving layer applies that unified default, and omit",
+        "# crossfade_ms/sentence_pause_ms unless the flags below set them, so they",
+        "# measure the Phase 12-5 defaults (40 ms fade / 120 ms pause).",
+        "",
+        "# Boot A - headline numbers. INFO logging: DEBUG depresses the clone",
+        "# pipeline ~3x (see the Method host note).",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=INFO \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path config.gpu.yml \\",
+        f"    --port {port} > {engine_log} 2>&1",
+        "",
+        "# Wait for health (bounded), then run one family at a time. Each run emits",
+        "# both the split_text OFF and ON rows at c=1,4,8,20 (single-request",
+        "# latency is the c=1 level).",
+    ]
+    for family in LONGFORM_FAMILIES:
+        lines.append(
+            f"python scripts/bench_throughput.py --scenario longform --families {family} \\\n"
+            f"    --longform-split both --concurrency 1,4,8,20 --longform-requests "
+            f"{LONGFORM_REQUESTS} --label phase12-{family} \\\n"
+            f"    --json-out out/bench/throughput-phase12-{family}.json{md_flag}"
+        )
+    lines += [
+        "",
+        "# Boot B - composition cells only (DEBUG + --engine-log). Each command is",
+        "# the ON row for one family; the markdown block then carries the per-step",
+        "# sub-batch table.",
+        "CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \\",
+        "    python -m harmonyspeech.endpoints.openai.api_server --config-file-path config.gpu.yml \\",
+        f"    --port {port} > {debug_log} 2>&1",
+        "",
+    ]
+    for family in LONGFORM_FAMILIES:
+        lines.append(
+            f"python scripts/bench_throughput.py --scenario longform --families {family} \\\n"
+            f"    --longform-split on --concurrency 1,4,8,20 --longform-requests "
+            f"{LONGFORM_REQUESTS} --engine-log {debug_log} \\\n"
+            f"    --label phase12-{family}-debug "
+            f"--json-out out/bench/throughput-phase12-{family}-debug.json{md_flag}"
+        )
+    lines += [
+        "",
+        "# Regression gate (a): short-text split_text:true is byte-identical to off",
+        "# at family breadth. The in-process 12-2 gate is bit-exact; this cross-",
+        "# process re-run disables the watermark (Perth's conv kernels are not",
+        "# bit-reproducible across processes) and requires identical length + a",
+        "# bit-identical WAV for deterministic families (documented CUDA noise",
+        "# floor for stochastic ones).",
+        f"python scripts/audio_regression.py --families {gate_families} \\",
+        "    --axis longform:off-vs-on --gpu \\",
+        "    --json-out out/bench/gate-12-4-identity.json",
+        "",
+        "# Regression gate (b): seeded chunked determinism. Both sides run the same",
+        "# chunked request with seed 1234; same seed must give the same stitched",
+        "# bytes (identical WAV).",
+        f"python scripts/audio_regression.py --families {gate_families} \\",
+        "    --axis determinism:run1-vs-run2 --gpu \\",
+        "    --json-out out/bench/gate-12-4-determinism.json",
+        "",
+        "# H3 crossfade-cost probe: one ON family, c=1, crossfade 0 vs 50 ms.",
+        "python scripts/bench_throughput.py --scenario longform --families chatterbox \\",
+        "    --longform-split on --concurrency 1 --longform-requests 4 \\",
+        "    --longform-crossfade-ms 50 --longform-sentence-pause-ms 50 \\",
+        "    --label phase12-crossfade-50 --json-out out/bench/throughput-phase12-crossfade.json",
+        "",
+        "# H4 filter-cost probe: one ON family with all three Phase 12-3 filters.",
+        "python scripts/bench_throughput.py --scenario longform --families melo \\",
+        "    --longform-split on --concurrency 1,4 --longform-requests 8 \\",
+        "    --longform-remove-dc-offset --longform-trim-silence \\",
+        "    --longform-fix-internal-silence --label phase12-filters-on \\",
+        "    --json-out out/bench/throughput-phase12-filters.json",
+        "",
+        "# Print this recipe",
+        "python scripts/bench_throughput.py --print-longform-scenarios",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-5 follow-up — Whisper text-fidelity gate (owner decision 2026-11-09)
+# ---------------------------------------------------------------------------
+#
+# The gap that let Turbo's word-dropping ship unnoticed: the throughput matrix
+# measured durations, never whether the audio said the text. ``--fidelity``
+# renders each family's fixture once per variant, transcribes the WAV with
+# faster-whisper and scores word edit distance against the fixture. The
+# transcription noise floor on this fixture is ~2–6 edit distance
+# ("Karina/Carina", "weaves/leaves"); values near that are not model errors.
+
+#: Default directory for fidelity renders (WAVs) and transcripts.
+FIDELITY_OUT_DIR = "out/bench/fidelity-12"
+#: The transcription model the fidelity gate uses (the same large-v3-turbo the
+#: Phase 12-5 investigation used).
+FIDELITY_WHISPER_MODEL = "large-v3-turbo"
+FIDELITY_LANGUAGE = "en"
+FIDELITY_BEAM_SIZE = 5
+#: Documented noise floor: edit distances at or below this are transcription
+#: noise on the real-prose fixture, not a fidelity failure.
+FIDELITY_NOISE_FLOOR = 6
+
+_FIDELITY_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def normalize_fidelity_words(text: str) -> list[str]:
+    """Case/punctuation-insensitive word tokens.
+
+    Punctuation (including apostrophes) becomes a separator, matching the
+    Phase 12-5 orchestrator probes: the real-prose fixture is **138 words**
+    under this normalisation, so the sweep table's ``73/138`` / ``139/138``
+    figures are directly comparable.
+    """
+    return _FIDELITY_PUNCT_RE.sub(" ", (text or "").lower()).split()
+
+
+def word_edit_distance(reference: str, hypothesis: str) -> int:
+    """Word edit distance (delete + insert; substitutions cost two).
+
+    This is the LCS-based distance the Phase 12-5 orchestrator probes used:
+    ``len(ref) + len(hyp) - 2 * LCS``. A hypothesis that silently skips words
+    therefore scores exactly the number of skipped words plus insertion noise,
+    which is what makes the budget sweep legible.
+    """
+    ref = normalize_fidelity_words(reference)
+    hyp = normalize_fidelity_words(hypothesis)
+    if not ref or not hyp:
+        return len(ref) + len(hyp)
+    previous = [0] * (len(hyp) + 1)
+    for ref_token in ref:
+        current = [0]
+        for index, hyp_token in enumerate(hyp, start=1):
+            if ref_token == hyp_token:
+                current.append(previous[index - 1] + 1)
+            else:
+                current.append(max(previous[index], current[index - 1]))
+        previous = current
+    longest_common = previous[-1]
+    return len(ref) + len(hyp) - 2 * longest_common
+
+
+def score_fidelity(reference_text: str, transcript: str) -> dict:
+    """Score one transcript against the fixture text (the report row shape)."""
+    return {
+        "edit_distance": word_edit_distance(reference_text, transcript),
+        "words_heard": len(normalize_fidelity_words(transcript)),
+        "words_ref": len(normalize_fidelity_words(reference_text)),
+        "transcript": transcript,
+    }
+
+
+def transcribe_and_score(reference_text: str, wav_path: str, transcriber) -> dict:
+    """Transcribe ``wav_path`` with an injected ``transcriber`` and score it.
+
+    ``transcriber`` is ``path -> text``; unit tests pass a stub so no Whisper
+    install or model weights are needed.
+    """
+    return score_fidelity(reference_text, transcriber(wav_path))
+
+
+def load_fidelity_transcriber(
+    gpu: bool = False,
+    model_id: str = FIDELITY_WHISPER_MODEL,
+    language: str = FIDELITY_LANGUAGE,
+    beam_size: int = FIDELITY_BEAM_SIZE,
+):
+    """Load faster-whisper lazily and return ``path -> transcript``.
+
+    A missing install fails with a clear, actionable message instead of a bare
+    traceback, because the flag is optional.
+    """
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as error:  # pragma: no cover - exercised via monkeypatch in unit tests
+        raise SystemExit(
+            "--fidelity needs faster-whisper to transcribe the renders. Install it "
+            "(pip install faster-whisper) or run the throughput matrix without "
+            f"--fidelity. Import error: {error}"
+        ) from error
+    device = "cuda" if gpu else "cpu"
+    compute_type = "float16" if gpu else "int8"
+    model = WhisperModel(model_id, device=device, compute_type=compute_type)
+
+    def transcribe(path: str) -> str:
+        segments, _info = model.transcribe(
+            path,
+            language=language,
+            beam_size=int(beam_size),
+            condition_on_previous_text=False,
+        )
+        return " ".join(segment.text.strip() for segment in segments).strip()
+
+    return transcribe
+
+
+def longform_split_modes(value: str | None, *, fidelity: bool = False) -> list[str]:
+    """Resolve ``--longform-split`` for the throughput vs fidelity mode.
+
+    Unset means "both" for the throughput matrix and "on" for the fidelity gate
+    (the ON variant at the server's per-model budget is the shipped default;
+    pass ``--longform-split both`` to score the OFF baseline too).
+    """
+    if value is None:
+        value = "on" if fidelity else "both"
+    return ["off", "on"] if value == "both" else [value]
+
+
+async def _render_fidelity_wav(client, base_url: str, family: str, payload: dict, timeout: float, out_path: str):
+    """Render one request, save its WAV and return ``(path, audio_seconds)``."""
+    import base64
+
+    response = await client.post(
+        base_url + FAMILY_SPECS[family]["path"], json=payload, timeout=timeout
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"{family}: HTTP {response.status_code}: {(response.text or '')[:300]}"
+        )
+    body = response.json()
+    data = body.get("data")
+    if not data:
+        raise RuntimeError(f"{family}: response carried no audio")
+    raw = base64.b64decode(data)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "wb") as handle:
+        handle.write(raw)
+    return out_path, _wav_seconds(data)
+
+
+async def run_fidelity_benchmark(args, transcriber=None) -> dict:
+    """Render each family's fixture once per variant and score its transcript."""
+    import httpx
+
+    from tests.audio_fixtures import reference_wav_b64
+
+    gpu = bool(getattr(args, "gpu", False))
+    if transcriber is None:
+        transcriber = load_fidelity_transcriber(
+            gpu=gpu,
+            model_id=getattr(args, "fidelity_model", FIDELITY_WHISPER_MODEL),
+            language=getattr(args, "fidelity_language", FIDELITY_LANGUAGE),
+            beam_size=getattr(args, "fidelity_beam", FIDELITY_BEAM_SIZE),
+        )
+
+    reference = reference_wav_b64(args.reference)
+    families = longform_families_from_args(args)
+    variants = longform_split_modes(args.longform_split, fidelity=True)
+    out_dir = getattr(args, "fidelity_out", FIDELITY_OUT_DIR)
+    os.makedirs(out_dir, exist_ok=True)
+    filters = (
+        bool(args.longform_remove_dc_offset),
+        bool(args.longform_trim_silence),
+        bool(args.longform_fix_internal_silence),
+    )
+
+    families_report: dict[str, dict] = {}
+    skipped: dict[str, str] = {}
+    async with httpx.AsyncClient() as client:
+        available = await _discover_models(client, args.base_url) if not args.force else set()
+        if available:
+            print(f"[bench] advertised models: {', '.join(sorted(available))}", flush=True)
+
+        for family in families:
+            spec = FAMILY_SPECS[family]
+            model = args.model.get(family) or spec["model"]
+            if available and model not in available:
+                skipped[family] = f"model '{model}' is not configured on the target engine"
+                print(f"[bench] {family}: SKIP — {skipped[family]}", flush=True)
+                continue
+
+            text = longform_fixture(family)
+            metadata = longform_fixture_metadata(family, args.longform_chunk_size)
+            row = {"model": model, **metadata, "variants": {}}
+            for split in variants:
+                payload = build_longform_payload(
+                    family,
+                    reference,
+                    text,
+                    split == "on",
+                    chunk_size=args.longform_chunk_size,
+                    crossfade_ms=args.longform_crossfade_ms,
+                    sentence_pause_ms=args.longform_sentence_pause_ms,
+                    filters=filters,
+                )
+                payload["model"] = model
+                wav_path = os.path.join(out_dir, f"{family}-split-{split}.wav")
+                try:
+                    path, audio_seconds = await _render_fidelity_wav(
+                        client, args.base_url, family, payload, args.timeout, wav_path
+                    )
+                    scored = transcribe_and_score(text, path, transcriber)
+                except Exception as error:  # noqa: BLE001 - a failed render is report data
+                    row["variants"][split] = {"error": str(error), "wav": wav_path}
+                    print(f"[bench] {family} split={split}: ERROR {error}", flush=True)
+                    continue
+                row["variants"][split] = {
+                    "wav": path,
+                    "audio_seconds": audio_seconds,
+                    "chunks": metadata["expected_chunks_per_request"] if split == "on" else 1,
+                    **scored,
+                }
+                print(
+                    f"[bench] {family} split={split}: edit distance "
+                    f"{scored['edit_distance']} · words {scored['words_heard']}/"
+                    f"{scored['words_ref']} · audio {audio_seconds}s",
+                    flush=True,
+                )
+            families_report[family] = row
+
+    return {
+        "scenario": "longform-fidelity",
+        "label": args.label,
+        "config": args.config_note,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "commit": _git_commit(),
+        "env": _gpu_description(),
+        "base_url": args.base_url,
+        "out_dir": out_dir,
+        "clone_reference": args.clone_reference,
+        "method": {
+            "transcriber": getattr(args, "fidelity_model", FIDELITY_WHISPER_MODEL),
+            "device": "cuda" if gpu else "cpu",
+            "compute_type": "float16" if gpu else "int8",
+            "language": getattr(args, "fidelity_language", FIDELITY_LANGUAGE),
+            "beam_size": getattr(args, "fidelity_beam", FIDELITY_BEAM_SIZE),
+            "normalization": (
+                "lowercase, punctuation stripped (apostrophes split); word edit "
+                "distance = len(ref) + len(hyp) - 2 * LCS (delete + insert)"
+            ),
+            "noise_floor_edit_distance": FIDELITY_NOISE_FLOOR,
+            "noise_floor_examples": "Karina/Carina, weaves/leaves",
+            "variants": variants,
+            "chunk_budget": args.longform_chunk_size,
+        },
+        "families": families_report,
+        "skipped": skipped,
+    }
+
+
+def _fidelity_markdown(report: dict) -> str:
+    """Markdown block for one fidelity run (rows map 1:1 to the docs table)."""
+    env = report.get("env") or {}
+    method = report.get("method") or {}
+    lines = [
+        f"### {report['label']} — {report['timestamp_utc']}",
+        "",
+        f"* commit `{report.get('commit') or 'dirty'}` · torch {env.get('torch')} · "
+        f"{env.get('gpu') or 'CPU'} · driver {env.get('driver') or 'n/a'} · "
+        f"CUDA_VISIBLE_DEVICES={env.get('cuda_visible_devices') or 'all'}",
+        f"* config: {report.get('config') or 'n/a'}",
+        f"* method: Whisper `{method.get('transcriber')}` "
+        f"({method.get('device')}/{method.get('compute_type')}), language "
+        f"`{method.get('language')}`, beam {method.get('beam_size')}; "
+        f"{method.get('normalization')}. Transcription noise floor ≈ "
+        f"{method.get('noise_floor_edit_distance')} edit distance "
+        f"({method.get('noise_floor_examples')}).",
+        f"* renders: `{report.get('out_dir')}` · variants: "
+        f"{', '.join(method.get('variants') or [])} · chunk budget: "
+        f"{method.get('chunk_budget') if method.get('chunk_budget') is not None else 'server per-model default'}",
+        "",
+        "| family | variant | edit distance | words heard / ref |",
+        "|---|---|---|---|",
+    ]
+    for family, row in (report.get("families") or {}).items():
+        for split, variant in (row.get("variants") or {}).items():
+            if variant.get("error"):
+                lines.append(f"| {family} | {split} | error | — |")
+            else:
+                lines.append(
+                    f"| {family} | {split} | {variant['edit_distance']} | "
+                    f"{variant['words_heard']} / {variant['words_ref']} |"
+                )
+    if report.get("skipped"):
+        lines.append("")
+        for family, reason in report["skipped"].items():
+            lines.append(f"* {family}: skipped — {reason}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 async def run_chatterbox_exhaustion(args) -> dict:
@@ -2212,7 +3234,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default="http://127.0.0.1:2242")
     parser.add_argument(
         "--families",
-        default="melo,openvoice_v2,openvoice_v1,harmonyspeech,voicefixer,kitten,chatterbox,whisper",
+        default=DEFAULT_FAMILIES,
     )
     parser.add_argument(
         "--concurrency",
@@ -2271,13 +3293,15 @@ def build_parser() -> argparse.ArgumentParser:
             "whisper-budget-trip",
             "chatterbox-ar",
             "chatterbox-exhaustion",
+            "longform",
         ),
         default="throughput",
         help=(
             "throughput (default) runs the family matrix; whisper-flood / whisper-fairness / "
             "whisper-budget-trip run the Phase 10-5 exhaustion scenarios; chatterbox-ar runs "
             "the Phase 9-6 AR three-way comparison with pool-metrics sampling; "
-            "chatterbox-exhaustion runs the tight-pool 100-request trace"
+            "chatterbox-exhaustion runs the tight-pool 100-request trace; longform runs "
+            "the Phase 12-4 chunking on/off matrix"
         ),
     )
     parser.add_argument(
@@ -2373,6 +3397,107 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="rotate CHATTERBOX_TEXTS across AR payloads so rows leave the batch at different steps",
     )
+    # Phase 12-4 — long-form scenarios.
+    parser.add_argument(
+        "--longform-split",
+        choices=("off", "on", "both"),
+        default=None,
+        help=(
+            "chunking variant(s) for --scenario longform: 'off' (single-shot), 'on' "
+            "(split_text: true) or 'both' (the ON/OFF pair on the same boot). Default: "
+            "'both' for the throughput matrix, 'on' for --fidelity"
+        ),
+    )
+    parser.add_argument(
+        "--longform-requests",
+        type=int,
+        default=LONGFORM_REQUESTS,
+        help=f"requests per concurrency level in the long-form matrix (default {LONGFORM_REQUESTS})",
+    )
+    parser.add_argument(
+        "--longform-chunk-size",
+        type=int,
+        default=None,
+        help=(
+            "explicit character budget sent in the ON payload and used for the expected "
+            "chunks/request count. Default: omitted, so the serving layer resolves its "
+            f"unified default ({LONGFORM_DEFAULT_CHUNK_SIZE} characters for every family)"
+        ),
+    )
+    parser.add_argument(
+        "--longform-crossfade-ms",
+        type=int,
+        default=None,
+        help=(
+            "crossfade_ms in the ON payload (default: omitted, so the serving "
+            "layer's Phase 12-5 default of 40 ms applies; the H3 probe uses 50)"
+        ),
+    )
+    parser.add_argument(
+        "--longform-sentence-pause-ms",
+        type=int,
+        default=None,
+        help=(
+            "sentence_pause_ms in the ON payload (default: omitted, so the serving "
+            "layer's Phase 12-5 default of 120 ms applies; the H3 probe uses 50)"
+        ),
+    )
+    parser.add_argument(
+        "--longform-remove-dc-offset",
+        action="store_true",
+        help="set remove_dc_offset on the long-form payload (H4 filter probe)",
+    )
+    parser.add_argument(
+        "--longform-trim-silence",
+        action="store_true",
+        help="set trim_silence on the long-form payload (H4 filter probe)",
+    )
+    parser.add_argument(
+        "--longform-fix-internal-silence",
+        action="store_true",
+        help="set fix_internal_silence on the long-form payload (H4 filter probe)",
+    )
+    parser.add_argument(
+        "--print-longform-scenarios",
+        action="store_true",
+        help="print the Phase 12-4 long-form recipe (matrix, composition boot, gates) and exit",
+    )
+    # Phase 12-5 follow-up — Whisper text-fidelity gate.
+    parser.add_argument(
+        "--fidelity",
+        action="store_true",
+        help=(
+            "with --scenario longform: render each family's fixture once per variant, "
+            "transcribe the WAVs with faster-whisper and score word edit distance "
+            "against the fixture (writes out/bench/fidelity-12/ by default)"
+        ),
+    )
+    parser.add_argument(
+        "--fidelity-out",
+        default=FIDELITY_OUT_DIR,
+        help=f"directory for fidelity renders/transcripts (default {FIDELITY_OUT_DIR})",
+    )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="run the fidelity transcriber on CUDA (default CPU int8)",
+    )
+    parser.add_argument(
+        "--fidelity-model",
+        default=FIDELITY_WHISPER_MODEL,
+        help=f"faster-whisper model for --fidelity (default {FIDELITY_WHISPER_MODEL})",
+    )
+    parser.add_argument(
+        "--fidelity-language",
+        default=FIDELITY_LANGUAGE,
+        help=f"transcription language for --fidelity (default {FIDELITY_LANGUAGE})",
+    )
+    parser.add_argument(
+        "--fidelity-beam",
+        type=int,
+        default=FIDELITY_BEAM_SIZE,
+        help=f"transcription beam size for --fidelity (default {FIDELITY_BEAM_SIZE})",
+    )
     parser.add_argument(
         "--print-scenarios",
         action="store_true",
@@ -2406,6 +3531,48 @@ def main(argv=None) -> int:
     if args.print_ar_scenarios:
         print(ar_scenario_recipe(args))
         return 0
+    if args.print_longform_scenarios:
+        print(longform_scenario_recipe(args))
+        return 0
+
+    if args.fidelity:
+        if args.scenario != "longform":
+            parser.error("--fidelity requires --scenario longform")
+        report = asyncio.run(run_fidelity_benchmark(args))
+        if args.json_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2)
+        table = _fidelity_markdown(report)
+        if args.md_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.md_out)), exist_ok=True)
+            with open(args.md_out, "a", encoding="utf-8") as handle:
+                handle.write(table)
+        print(table)
+        failures = sum(
+            1
+            for row in report["families"].values()
+            for variant in row["variants"].values()
+            if variant.get("error")
+        )
+        return 0 if failures == 0 else 1
+
+    if args.scenario == "longform":
+        report = asyncio.run(run_longform_benchmark(args))
+        if args.json_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.json_out)), exist_ok=True)
+            with open(args.json_out, "w", encoding="utf-8") as handle:
+                json.dump(report, handle, indent=2)
+        table = _longform_markdown(report)
+        if args.md_out:
+            os.makedirs(os.path.dirname(os.path.abspath(args.md_out)), exist_ok=True)
+            with open(args.md_out, "a", encoding="utf-8") as handle:
+                handle.write(table)
+        print(table)
+        failures = sum(
+            level["failures"] for levels in report["runs"].values() for level in levels
+        )
+        return 0 if failures == 0 else 1
 
     if args.scenario == "chatterbox-exhaustion":
         report = asyncio.run(run_chatterbox_exhaustion(args))

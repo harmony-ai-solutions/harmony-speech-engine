@@ -246,29 +246,30 @@ EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
 #: ONNX graphs have a static batch dimension of 1; Phase 8-5).
 LANE_ONLY_MEMBERS = {"KittenTTSSynthesizer": 4}
 
-#: The English/Turbo Chatterbox roles are Phase 9's AR-runner members. Phase 9-6
-#: flipped them into `ar_decode`; the assertion below keeps the class map and the
-#: shipped configs in sync.
-AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS"})
+#: The English/Turbo/Multilingual Chatterbox roles are Phase 9's AR-runner
+#: members. Phase 9-6 flipped English/Turbo into `ar_decode`; Phase 12-7 added
+#: Multilingual once its analyzer became opt-in. The assertion below keeps the
+#: class map and the shipped configs in sync.
+AR_DECODE_MEMBERS = frozenset({"ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"})
 
 #: Every registered model type → exactly one class. `padded_batch` is derived
 #: from the handler's own set so the two cannot drift; the rest are explicit.
 EXECUTION_MODEL_CLASSES: dict[str, str] = {
     **dict.fromkeys(BATCHED_INFERENCE_FAMILIES, "padded_batch"),
-    # Per-request loops. hs1-synthesizer is a measured padding skip (8-4);
-    # Chatterbox multilingual stays a loop (9-3's documented skip). VC is a
-    # `padded_batch` member since Phase 11-1 (batched source tokenize + S3Gen
-    # vocode), so it is derived from the handler's own set above.
+    # Per-request loops. hs1-synthesizer is a measured padding skip (8-4).
+    # Multilingual moved to `ar_decode` in Phase 12-7. VC is a `padded_batch`
+    # member since Phase 11-1 (batched source tokenize + S3Gen vocode), so it is
+    # derived from the handler's own set above.
     "HarmonySpeechSynthesizer": "loop",
-    "ChatterboxMultilingualTTS": "loop",
     # Phase 11-0: the embedder executes serially (one `prepare_conditionals` at
     # a time) but is admitted at depth 4 so the clone pipeline can hand four
     # requests to the TTS AR step in one engine step.
     "ChatterboxEmbedding": "loop_admission",
-    # Token-level AR decode on the shared KV pool (Phase 9-3/9-6). The number is
-    # an admission depth; the pool's slot count is a separate capacity signal.
+    # Token-level AR decode on the shared KV pool (Phase 9-3/9-6/12-7). The
+    # number is an admission depth; the pool's slot count is a separate signal.
     "ChatterboxTTS": "ar_decode",
     "ChatterboxTurboTTS": "ar_decode",
+    "ChatterboxMultilingualTTS": "ar_decode",
     # Single-stream VAD: the number is queue depth only (8-5).
     "SileroVAD": "queue_depth",
     # Parallel lanes. Whisper adds opt-in cross-request window batches on top of
@@ -388,8 +389,8 @@ def test_execution_model_class_table_is_complete_and_declarative():
 
 
 @pytest.mark.unit
-def test_ar_decode_members_are_the_chatterbox_en_and_turbo_roles():
-    """Phase 9-6: the English/Turbo Chatterbox roles are the `ar_decode` members.
+def test_ar_decode_members_are_the_chatterbox_en_turbo_and_multilingual_roles():
+    """Phase 9-6/12-7: all three Chatterbox TTS roles are `ar_decode` members.
 
     The class is live (9-3's runner + 9-2's pool), and the shipped configs declare
     the initial admission width justified from the arena table. The flag stays an
@@ -405,9 +406,9 @@ def test_ar_decode_members_are_the_chatterbox_en_and_turbo_roles():
         ]
         assert entries, config_name
         for entry in entries:
-            # Initial pending-measurement admission width (Phase 9-6 decision):
-            # 4 English requests (8 rows) + 4 Turbo requests (4 rows) fit the
-            # 1 GiB pool at the default 768-token slot on fp16 slabs.
+            # Initial pending-measurement admission width (Phase 9-6/12-7):
+            # 4 requests per role; the 2.75 GiB pool fits 8 English + 8
+            # Multilingual + 4 Turbo slabs at the contracts' preferred caps.
             assert entry["max_batch_size"] == 4, f"{config_name}: {entry['name']} admission depth"
             assert entry.get("batched_inference") is not False, f"{config_name}: {entry['name']} opt-out only"
 
@@ -417,8 +418,8 @@ def test_ar_decode_members_are_the_chatterbox_en_and_turbo_roles():
 def test_ar_decode_config_carries_the_shared_pool_knobs(config_name):
     """AR decode needs the 9-2 pool; the shipped config must declare it."""
     ar = _shipped_config(config_name)["ar_inference"]
-    assert ar["kv_cache_budget_bytes"] == 1073741824, f"{config_name}: owner-approved initial budget"
-    assert ar["default_cap_tokens"] == 768, f"{config_name}: owner-approved initial token cap"
+    assert ar["kv_cache_budget_bytes"] == 2952790016, f"{config_name}: 2.75 GiB pool budget"
+    assert ar["default_cap_tokens"] == 1536, f"{config_name}: full 1000-token speech decode"
     assert ar.get("enabled", True) is True
 
 

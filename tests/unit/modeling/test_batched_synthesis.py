@@ -398,6 +398,39 @@ def test_default_token_budget_scales_with_the_step_median():
 
 
 @pytest.mark.unit
+def test_default_token_budget_caps_the_padded_area():
+    # A homogeneous batch of huge rows keeps its full B x median area unless a
+    # measured cap is supplied (the WDDM-shared-memory case on GPU 2).
+    assert default_token_budget([3660] * 8, max_batch_size=8) == 8 * 3660
+    assert (
+        default_token_budget([3660] * 8, max_batch_size=8, max_budget=7500) == 7500
+    )
+    # Short/chunked rows fit under the cap and keep their full width.
+    assert default_token_budget([128] * 8, max_batch_size=8, max_budget=1024) == 8 * 128
+    # Empty step stays None; the clamp never returns 0.
+    assert default_token_budget([], max_batch_size=8, max_budget=1024) is None
+    assert default_token_budget([10], max_batch_size=1, max_budget=0) == 1
+
+
+@pytest.mark.unit
+def test_plan_batches_admits_one_oversize_item_at_batch_one():
+    # An item longer than the budget starts an empty group (`current`), so the
+    # `current and not _fits(...)` guard admits it alone instead of looping.
+    assert plan_batches([5000], max_batch_size=8, token_budget=1024) == [[0]]
+    assert plan_batches([5000, 5000], max_batch_size=8, token_budget=1024) == [[0], [1]]
+
+
+@pytest.mark.unit
+def test_plan_batches_uses_the_capped_budget_on_homogeneous_long_rows():
+    lengths = [3660] * 8
+    budget = default_token_budget(lengths, max_batch_size=8, max_budget=7500)
+    groups = plan_batches(lengths, max_batch_size=8, token_budget=budget)
+
+    assert groups == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    assert all(len(group) * 3660 <= budget for group in groups)
+
+
+@pytest.mark.unit
 def test_collapse_per_sample_returns_a_scalar_for_uniform_values():
     assert collapse_per_sample([1.0, 1.0, 1.0]) == 1.0
     assert collapse_per_sample([1.0, 2.0]) == [1.0, 2.0]

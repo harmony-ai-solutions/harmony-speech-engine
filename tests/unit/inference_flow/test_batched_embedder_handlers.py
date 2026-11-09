@@ -320,12 +320,34 @@ def test_openvoice_encoder_request_with_no_segment_errors_alone():
 
     results = _run_ov_encoder(runner, segments, requests)
 
-    # Historical behaviour: a request with no surviving VAD segment cannot be
-    # embedded (`torch.stack([])`) and gets its own error result.
+    # A request with no surviving VAD segment cannot be embedded. The error is
+    # the honest Phase 12-4 message, not ``torch.stack([])``'s opaque
+    # "stack expects a non-empty TensorList".
     assert results[0].result_data.finish_reason == "error"
+    assert "no detectable speech" in results[0].result_data.error
+    assert "VAD segments empty" in results[0].result_data.error
     assert results[1].result_data.finish_reason == "stop"
     # The empty request contributed no row, so the batch held one segment.
     assert calls == [[600]]
+
+
+@pytest.mark.unit
+def test_openvoice_encoder_single_request_with_no_segment_raises_the_honest_error():
+    """The ``len == 1`` loop path (no batching) reports the same message."""
+    encoder, calls = _recording_reference_encoder()
+    runner = _runner(
+        types.SimpleNamespace(ref_enc=encoder),
+        "OpenVoiceV2ToneConverterEncoder",
+        batched_inference=False,
+    )
+
+    results = _run_ov_encoder(runner, [[]], [_ov_request("ov-empty-solo", _clip(2000))])
+
+    assert results[0].result_data.finish_reason == "error"
+    assert results[0].result_data.error == (
+        "reference clip contains no detectable speech (VAD segments empty)"
+    )
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

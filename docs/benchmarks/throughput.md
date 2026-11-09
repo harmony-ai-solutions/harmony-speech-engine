@@ -1710,3 +1710,466 @@ python scripts/bench_throughput.py --families chatterbox_clone,chatterbox_turbo_
     --concurrency 8 --requests 8 --reference repo_voice_a --label en-fp16
 ```
 
+## Phase 12 — Long-form audio (chunking, stitching, filters)
+
+Evidence for Phase 12: what sentence-aware chunking actually buys on long-form
+text, measured as `split_text` **on vs off** on the same text, voice and mode,
+across the execution-model classes — plus the determinism/identity regression
+gates and the opt-in Phase B filter cost.
+
+**Status: post-fix re-measurement, 2026-11-09 on the benchmark host (GPU 1,
+17:57–19:05Z).** The fidelity table, long-form matrix and per-run blocks below
+are the Phase 12-9 host re-run of the tree carrying the Phase 12-6..12-8 audit
+fixes plus the Phase 12-9 paging-budget fix (fidelity:
+`out/bench/fidelity-12-9.json`; throughput: `out/bench/phase12-9-*.json`). The
+fixture is the 807-character real-prose extract, the budget the unified
+**300-character** default (**4 chunks/request** for every family), and every
+family ran with the shipped **40 ms** crossfade / **120 ms** sentence pause.
+Runbook: `.current_work/engine-modernization/12-4-LongFormBenchmarks.md`;
+commands in the Reproduce block below. OV2 off-mode levels use `--timeout 900`
+and the host ran with `HARMONYSPEECH_ENGINE_ITERATION_TIMEOUT_S=600`.
+
+> **Pre-fix baseline (2026-11-09, before 12-6..12-8) — historical only.** The
+> previous revision of this page recorded those numbers: Turbo dropping 15–23
+> words at 300 chars, Multilingual speaking 73/138 words (edit distance 67) and
+> needing the now-removed 75-char workaround, `chunks/req` 7/16 for Turbo /
+> Multilingual, and `split=off` melo / OpenVoice V2 flood stalls of 92 s / 402 s
+> that could not finish at all. Those were symptoms of the four audit bugs
+> (KV-slot truncation, premature EOS, deferred-vocode bypass, per-token
+> overhead) and of the WDDM Shared Memory paging cliff fixed in 12-9 — **not**
+> model long-context limits. Every table below supersedes them.
+
+### Method
+
+* **Tooling.** `scripts/bench_throughput.py --scenario longform` (a fixed,
+  seeded paragraph fixture per family, `split_text` ON/OFF, single request and
+  floods at c={1,4,8}, with melo/openvoice_v2 also at c=2) and the new
+  `scripts/audio_regression.py` axes
+  `longform:off-vs-on` (short-text byte identity) and
+  `determinism:run1-vs-run2` (seeded chunked determinism).
+* **Fixture.** One fixed **real-prose** paragraph shared by every family
+  (owner-provided extract from *The Villainess Malfoy*, 2026-11-09): 807
+  characters, 8 sentences, **4 chunks** at the server's unified 300-character
+  default for **every** family (Phases 12-7/12-8 removed the earlier per-model
+  Turbo 150 / Multilingual 75 budgets) — so a single long-form request can fill
+  a 4-row AR admission batch by itself (H2). It is a module literal, not a
+  generator — identical bytes on every host — and the pinned unit test carries
+  its SHA-256 and the per-family chunk counts. The owner rejected the earlier
+  word-index generator as unlistenable; the real sentences also exercise the
+  em-dash narrative rule. The `audio_regression.py` axes keep their synthetic
+  literals deliberately: those texts exist to exercise numeric identity/
+  determinism gates and are never listened to.
+* **Variants.** ON = `generation_options.split_text: true` with the budget left
+  unset, so the server applies the unified **300-character** default for every
+  family (Phase 12-9); OFF = `split_text: false`. Everything else (text, voice,
+  mode, reference, seed, filters) is identical — the unit self-check asserts
+  that. ON runs leave `crossfade_ms`/`sentence_pause_ms` unset unless a probe
+  overrides them, so they measure the serving layer's Phase 12-5 defaults
+  (**40 ms** equal-power crossfade / **120 ms** sentence pause; the pause is a
+  two-sided fade in/out per Phase 12-6) and the stitcher's edge conditioning.
+* **Fidelity gate (added 2026-11-09).** Throughput and latency alone cannot
+  catch a model that speaks only part of the text — the gap that let Turbo's
+  word-dropping ship unnoticed. `scripts/bench_throughput.py --scenario
+  longform --fidelity` renders each family's fixture **once per variant**
+  (default ON at the server's unified 300-character budget; add
+  `--longform-split both` to score the OFF baseline), saves the WAVs under `out/bench/fidelity-12/`,
+  transcribes them with faster-whisper **large-v3-turbo** (`--gpu` selects
+  CUDA; otherwise CPU int8), `language="en"`, beam 5, and reports word edit
+  distance plus words heard / reference. Normalisation is case- and
+  punctuation-insensitive (apostrophes split), and the distance is the
+  LCS-based `len(ref) + len(hyp) − 2 × LCS`, so a skipped word costs exactly
+  one. **Transcription noise floor on this fixture: ~2–6 edit distance**
+  ("Karina/Carina", "weaves/leaves"); values in that band are not model
+  errors. A missing faster-whisper install fails with a clear message instead
+  of a traceback.
+* **Phase 12-5/12-9 note (2026-11-09).** The rows below were measured with the
+  shipped join defaults — 40 ms equal-power crossfade and 120 ms two-sided
+  sentence pause (Phase 12-6) plus stitcher edge conditioning — so they are
+  directly comparable to a production boot. The earlier butt-splice (0/0) rows
+  were retired with the pre-fix baseline.
+* **Phase 12-6..12-9 note (2026-11-09).** The rows below postdate the audit
+  fixes: two-sided pause fade, parenthetical-safe sentence splitting,
+  Multilingual's restored `repetition_penalty = 2.0` + `AlignmentStreamAnalyzer`
+  hook/EOS fix, `ARBatchRunner`'s raised KV-slot cap, deferred batched vocode,
+  multi-token continuation steps, the unified 300-character budget, and the
+  Phase 12-9 padded-batch memory budget (paging cliff — see below). `chunks/req`
+  is 4 for every family, and these fidelity/throughput figures **are** the
+  definitive post-fix record.
+* **Load.** The post-fix sweep ran **4 requests per level** for the AR families
+  and kitten at c={1,4,8}, and **8 requests per level** for melo and
+  openvoice_v2 at c={1,2,4,8}; c=1 is the single-request latency. 2 warmups per
+  variant. Four/five levels keep a long-form sweep bounded (each request is
+  30–60 s of audio); pass `--longform-requests 20` to match the short-text flood
+  convention exactly.
+* **Host.** Idle benchmark host (RTX 5060 Ti 16 GiB, `CUDA_VISIBLE_DEVICES=1`).
+  Headline rows use `INFO` logging; the per-step composition rows use a
+  separate `DEBUG` boot with `--engine-log` (DEBUG depresses the clone pipeline
+  ~3× — see the Method host note).
+* **Observed vs expected chunks.** The HTTP response carries no chunk metadata,
+  so chunks/request is computed client-side with the same splitter the serving
+  layer uses, and the observed side is the engine DEBUG log's per-step
+  composition (`parse_step_composition`). Recorded as a limitation, not hidden.
+
+### Long-form matrix — chunking on vs off (post-fix)
+
+Each row is one `--scenario longform` run (2026-11-09, GPU 1). AR families and
+kitten ran **4 requests** per level at `c={1,4,8}`; melo and openvoice_v2 ran
+**8 requests** per level at `c={1,2,4,8}` (no c=2 cell for the others, marked
+`—`). `split=off` is the single-shot path (1 chunk); `split=on` uses the
+unified 300-character budget (4 chunks).
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=2 req/s | c=2 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | AR decode, width 4 | off | 807 | 1 | 0.07 | 15203.9 | — | — | 0.13 | 31424.4 | 0.13 | 30040.6 |
+| chatterbox | AR decode, width 4 | on | 807 | 4 | **0.10** | **10295.6** | — | — | 0.10 | 30995.5 | 0.09 | 33374.4 |
+| chatterbox_turbo | AR decode, width 4 | off | 807 | 1 | 0.16 | 6527.0 | — | — | 0.22 | 18277.9 | 0.24 | 16683.0 |
+| chatterbox_turbo | AR decode, width 4 | on | 807 | 4 | 0.14 | 7027.8 | — | — | 0.14 | 20873.6 | 0.14 | 21127.5 |
+| chatterbox_multilingual | AR decode, width 4 | off | 807 | 1 | 0.06 | 18831.2 | — | — | 0.11 | 37207.7 | 0.10 | 40858.5 |
+| chatterbox_multilingual | AR decode, width 4 | on | 807 | 4 | **0.10** | **10494.6** | — | — | 0.08 | 36460.4 | 0.09 | 33558.0 |
+| melo | padded batch | off | 807 | 1 | 0.88 | 1134.9 | 0.89 | 2248.0 | 1.16 | 3425.2 | **1.35** | 5890.2 |
+| melo | padded batch | on | 807 | 4 | **1.09** | **916.8** | 1.11 | 1802.4 | 1.19 | 3215.2 | 1.19 | 4296.0 |
+| openvoice_v2 | clone pipeline | off | 807 | 1 | 0.65 | 1525.1 | 0.66 | 3025.8 | 0.79 | 4998.0 | **0.89** | 8964.6 |
+| openvoice_v2 | clone pipeline | on | 807 | 4 | **0.68** | **1478.2** | 0.69 | 2906.7 | 0.73 | 5459.4 | 0.76 | 8174.5 |
+| kitten | lanes | off | 807 | 1 | 0.06 | 17856.7 | — | — | 0.10 | 38336.8 | 0.10 | 39314.9 |
+| kitten | lanes | on | 807 | 4 | **0.13** | **7748.2** | — | — | 0.13 | 23120.9 | 0.13 | 23087.3 |
+
+Post-fix headline deltas (2026-11-09):
+
+* **No padded-class flood cliff remains.** `split=off` melo reaches 1.35 req/s
+  at c=8 (p50 5.9 s) and openvoice_v2 0.89 req/s (p50 9.0 s), versus 0.09 /
+  0.02 req/s and 92 s / 402 s pre-fix. The paging-budget fix, not chunking, is
+  what removed those stalls — so chunking's remaining value on these two
+  families is fidelity and long-text coherence, not flood throughput.
+* **Chunked single requests are faster on five of six families** because the
+  four chunks co-fill the admission batch: melo 1,135 → 917 ms (1.24×),
+  openvoice_v2 1,525 → 1,478 ms (1.03×), kitten 17,857 → 7,748 ms (2.3×),
+  chatterbox 15,204 → 10,296 ms (1.48×), multilingual 18,831 → 10,495 ms
+  (1.79×). Turbo pays a small c=1 cost (6,527 → 7,028 ms) because its chunks
+  get the full 1,001-token decode instead of the pre-fix truncation.
+* **AR floods still convoy.** ON vs OFF at c=8: chatterbox 0.13 → 0.09,
+  turbo 0.24 → 0.14, multilingual 0.10 → 0.09 req/s — the admission queue, not
+  the vocoder, is the limit; what changed is the *latency* (Turbo c=8 p50
+  16.7 s → 21.1 s at full coverage; multilingual c=8 p50 40.9 s → 33.6 s and
+  from 227.6 s pre-fix).
+
+### Padded-batch memory budget — the WDDM Shared Memory paging cliff (Phase 12-9)
+
+The pre-fix `split=off` melo / openvoice_v2 rolls were not CPU or model cost.
+An unchunked paragraph is one very long row; `plan_batches` padded it against
+its neighbours, so one c=8 step reserved 6.5–9.8 GiB in a single forward. On
+this host that crossed the Windows WDDM driver's dedicated-VRAM limit and paged
+into **Shared GPU Memory**, turning a ~2 s step into a 120–402 s stall — melo
+c=8 p50 92 s, openvoice_v2 c=8 p50 402 s (watchdog trip). Phase 12-9 adds a
+padded-area `default_token_budget` in
+`harmonyspeech/task_handler/batching.py`:
+
+* **`DEFAULT_PHONE_BATCH_BUDGET = 1024` phones** for the phone/token-axis
+  synthesizers (MeloTTS, OpenVoice V1). Keeps `B=8` of ~128-phone chunks or
+  `B=2` of ~500-phone sentences. Measured on GPU 2 (2026-11-09): 0.180 s/item
+  at `B=2` (906 phones) vs 0.654 s/item at `B=1`; `B=8` (3,624 phones) was no
+  faster while reserving 6,512 MiB. Peak reserved VRAM stays ≤ 1.8 GiB.
+* **`DEFAULT_MEL_FRAME_BATCH_BUDGET = 7500` mel frames** for the mel-frame-axis
+  tone converters (OpenVoice V2). Keeps `B=2` of a ~43 s paragraph (3,660
+  frames each) or `B=8` of ~10.8 s chunks. Measured on GPU 2: 0.403 s/item at
+  `B=2` (7,320 frames) vs 0.698 s/item at `B=1`; `B=8` (29,280 frames)
+  reserved 9,796 MiB and stalled ~400 s. Peak reserved VRAM stays ≤ 2.6 GiB.
+* **Per-contract AR KV-slot caps** (`ARBatchRunner` `preferred_cap_tokens`):
+  **1152** for the Perceiver-resampled English/Multilingual contract (34 cond
+  + ~118 text + 1,000 speech) and **1536** for `TurboContract` (376
+  un-resampled cond + text + 1,000 speech). This replaces the single 1536-token
+  default so the two 8-slot arenas stop over-reserving 720 MiB that the
+  resident catalogue needs.
+
+With the budgets in place, `split=off` melo reaches **1.35 req/s at c=8**
+(p50 5,890 ms) and `split=off` openvoice_v2 **0.89 req/s at c=8** (p50
+8,965 ms): no stall, no watchdog trip, and the c=1 single-shot latency is
+unchanged (1,135 ms / 1,525 ms).
+
+### Per-chunk step composition (engine DEBUG log; pre-fix 2026-11-09)
+
+Observed batch composition for the ON rows: steps logged, padded sub-batches per
+step, rows and requests covered — measured on the pre-fix DEBUG boot
+(2026-11-09). Not re-captured in the 12-9 re-run (the headline re-run used INFO
+logging so DEBUG did not depress the clone pipeline); the numbers are kept as
+the batching-width reference and the recipe below re-collects them.
+
+| Run | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| melo | c=4 | synth | 5 | 8 | 1.6 | 32 | 32 | - |
+| melo | c=8 | synth | 5 | 8 | 1.6 | 32 | 32 | - |
+| openvoice_v2 | c=4 | synth | 6 | 8 | 1.3 | 32 | 32 | - |
+| openvoice_v2 | c=4 | tc | 6 | 8 | 1.3 | 0 | 32 | - |
+| openvoice_v2 | c=8 | synth | 4 | 8 | 2.0 | 32 | 32 | - |
+| openvoice_v2 | c=8 | tc | 4 | 8 | 2.0 | 0 | 32 | - |
+| kitten | c=4 | lanes | 8 | 0 | 0.0 | 0 | 32 | - |
+| kitten | c=8 | lanes | 8 | 0 | 0.0 | 0 | 32 | - |
+
+### Regression gates
+
+| Gate | Axis | Families | Verdict | Notes | Cross-process / seed note |
+|---|---|---|---|---|---|
+| Short-text `split_text: true` is byte-identical to off (12-2 gate) | `longform:off-vs-on` | chatterbox, chatterbox_turbo, chatterbox_multilingual, openvoice_v1, openvoice_v2, melotts, harmonyspeech, kittentts | **PASS** (2026-11-09, GPU 1) | Deterministic families bit-identical; stochastic within the documented noise floor; kitten scored distributionally (F5: the ONNX graph samples every run) | In-process gate is bit-exact; cross-process re-run disables the watermark and requires identical length (bit-identical for deterministic families, documented CUDA noise floor for stochastic ones) |
+| Seeded chunked determinism (same seed ⇒ same stitched bytes) | `determinism:run1-vs-run2` | same eight TTS families | **PASS** (2026-11-09, GPU 1) | Stochastic families within noise floor, harmonyspeech bit-identical; kitten scored distributionally (F5) | chunk seeds are `seed + chunk_index`; kitten ignores seeds (ONNX RNG is unseeded — F5) |
+
+### Hypothesis verdicts
+
+| Hypothesis | Measurement | Verdict |
+|---|---|---|
+| **H1** chunked long-form floods gain more than single requests | ON vs OFF req/s at c=4/8 across classes (post-fix) | **FALSIFIED post-fix, was SPLIT pre-fix.** The paging-budget fix removed the padded-class cliffs: melo OFF c=8 is now **1.35** req/s (was 0.09) and openvoice_v2 OFF c=8 **0.89** (was 0.02), so ON (1.19 / 0.76) no longer wins floods — chunking's value there is fidelity/coherence. AR classes still lose flood throughput to the admission convoy: chatterbox 0.13→0.09, turbo 0.24→0.14, multilingual 0.10→0.09 |
+| **H2** a single long-form request approaches batched-step speed on batched families | ON c=1 p50 vs OFF c=1 p50; 4 chunks co-fill the admission batch (post-fix) | **CONFIRMED for five of six families:** chatterbox 15.2→10.3 s (1.48×), multilingual 18.8→10.5 s (1.79×), kitten 17.9→7.7 s (2.3×), melo 1.13→0.92 s, openvoice_v2 1.53→1.48 s. Turbo pays a small c=1 cost (6.53→7.03 s) because its chunks now get the full 1,001-token decode instead of the pre-fix truncation |
+| **H3** stitcher + filter CPU cost is noise vs GPU synthesis | ON with `--longform-crossfade-ms 50 --longform-sentence-pause-ms 50` vs 0 (c=1) | **Recorded, not isolated** (pre-fix probe, unchanged design): chatterbox c=1 p50 11.7 s vs 10.1 s baseline — within AR run-to-run variance; CPU stitch cost stays bounded by the 12-3 microbenches (~ms per audio-minute) |
+| **H4** Phase B filters cost < ~5 % wall time | ON with `--longform-remove-dc-offset --longform-trim-silence --longform-fix-internal-silence` vs off | **CONFIRMED** (pre-fix probe): melo c=1/4 +2–3 % wall, within run noise (12-3 CPU profile: ~0.06 % real time) |
+
+### Listening pass (owner gate)
+
+**Owner listened 2026-11-09** to the first pairs under `out/bench/listening-12/`
+(crossfade 20 ms / pause 80 ms, deliberately audible). Verdict: chunked length
+is **correct** — the unchunked baseline degrades ("loses it towards the end and
+blabbles before breaking up") on long text, so chunking is a coherence win as
+well as a throughput lever; but the **joins stuttered**, and the generated
+fixtures were unlistenable word salad. Follow-up **Phase 12-5** fixed the joins
+(stitcher-internal edge conditioning + 40 ms/120 ms defaults) and switched the
+fixture to real prose.
+
+**Post-fix pairs are ready for the owner's sign-off.** The 12-9 fidelity renders
+under `out/bench/fidelity-12/` (created 2026-11-09 18:53–18:57Z, after the
+12-6..12-8 fixes) are the same real-prose fixture at the shipped 300-character
+budget / 40 ms fade / 120 ms two-sided pause: `{chatterbox, chatterbox_turbo,
+chatterbox_multilingual, melo, openvoice_v2, kitten}-split-{off,on}.wav`. The
+transcripts above prove text coverage; they do **not** prove seam quality, so
+this page still does not claim "seamless" until the owner listens to these
+pairs. (Files in `out/bench/listening-12/` other than the 14:53Z Multilingual
+re-render predate the 12-8 AR fixes and are historical.)
+
+### Text fidelity (post-fix, Phase 12-9 — 2026-11-09)
+
+The owner reported that Chatterbox Turbo's output "isn't true to the text —
+missing a word or two, or saying something slightly different". A controlled
+investigation transcribed renders of the real-prose fixture with Whisper
+large-v3-turbo (CPU int8, beam 5) and measured edit distance against the
+fixture text. "Karina/Carina"-style spelling noise is ≈2, so values near 2 are
+transcription noise, not model error.
+
+**Post-fix table** — `out/bench/fidelity-12-9.json` (2026-11-09T17:57:08Z,
+commit `8c400fc` + the uncommitted 12-6..12-9 fixes). Unified
+`chunk_size=300`, **4 chunks** on the 807-character / 138-word *Villainess
+Malfoy* fixture, one render per family and variant, shipped 40 ms/120 ms join
+defaults:
+
+| Model | Mode | Edit distance | Words heard / ref | Audio (s) | Notes |
+|---|---|---|---|---|---|
+| chatterbox (base) | off | 12 | 136 / 138 | 33.12 | unchunked still loses the final clause |
+| chatterbox (base) | **on** @300 | **2** | **138 / 138** | 35.96 | noise floor only — faithful |
+| chatterbox_turbo | off | 108 | 114 / 138 | 34.12 | unchunked still skips the middle + hallucinates (long-context weakness) |
+| chatterbox_turbo | **on** @300 | **4** | **138 / 138** | 46.70 | **was 15–23 pre-fix**; KV-slot fix removed the truncation |
+| chatterbox_multilingual | **off** | **0** | **138 / 138** | 40.00 | **was 140 / 73-of-138 words pre-fix**; analyzer/EOS fix + SDPA |
+| chatterbox_multilingual | **on** @300 | **4** | **138 / 138** | 35.89 | **was 67 / 73-of-138 words pre-fix**; 75-char workaround gone |
+| melo | off | 2 | 138 / 138 | 42.65 | noise floor only |
+| melo | **on** @300 | **2** | **138 / 138** | 42.08 | noise floor only |
+| openvoice_v2 | off | 2 | 138 / 138 | 42.69 | noise floor only |
+| openvoice_v2 | **on** @300 | **0** | **138 / 138** | 42.07 | faithful |
+| kitten | off | 8 | 138 / 138 | 48.78 | all words present; just over the ~6 floor |
+| kitten | **on** @300 | **6** | **138 / 138** | 47.82 | all words present; at the floor |
+
+Every family now speaks **all 138 reference words with chunking on** (base
+Chatterbox's unchunked row is the only short one at 136/138); every Chatterbox
+ON row sits at or below the ~6-edit transcription floor. The
+`split=off` Turbo row (108) and the `split=off` base row (12) confirm that the
+residual long-context weakness is real for unchunked speech — chunking is what
+makes them faithful, not a model change.
+
+What the Phase 12-6..12-8 audit established — now confirmed on the host:
+
+* **Base Chatterbox chunked at 300 is faithful** (edit distance 2) and keeps the
+  unified 300-character budget: fewer chunks means better throughput.
+* **Turbo's 300-character losses were engine truncation, not a model limit.**
+  The shared autoregressive KV-cache slot was capped at **768 tokens** while
+  Turbo's un-resampled conditioning prompt alone can be **376 tokens**, so the
+  speech budget clamped to `768 − prefill` and the chunk was cut mid-sentence.
+  Solo sentences bypassed that path entirely (upstream's solo loop gets the full
+  1000-token budget), which is why they were perfect. Phase 12-8 raised the slot
+  capacity so a 300-character chunk gets its full generation budget; the
+  150-character per-model workaround is gone. **Post-fix: 4 at 300 chars.**
+* **Multilingual's 300-character losses were a premature EOS, not budget
+  sensitivity.** The engine passed `repetition_penalty = 1.2` instead of
+  upstream's **2.0** into `AlignmentStreamAnalyzer`'s repeat detector, and leaked
+  three attention hooks per call (forcing slow eager attention). Phase 12-7
+  restored the upstream penalty and fixed the hook/EOS path, which also enables
+  fast attention plus batched decoding and batched vocoding. **Post-fix: 0
+  unchunked and 4 chunked, full coverage; the 75-character workaround is gone.**
+* **Melo and OpenVoice V2 were unaffected** (edit distance 0–2 in both modes).
+* **Kitten is within/at the floor** (6–8, 138/138 words in both modes).
+* **The earlier "+35 % audio length when chunked" for Turbo was an artifact** of
+  comparing against the word-dropping unchunked baseline: per-word pacing is
+  equal (2.13 MB / 137 words vs 1.48 MB / 88 words); there is no pacing problem.
+
+The pre-fix budget sweep measured the **symptom**, not a model property. The
+fidelity gate below is the cheap way to confirm text coverage after any change.
+
+```bash
+# Fidelity gate: one render per family per variant, transcribed and scored
+# (needs the engine on 2242; `pip install faster-whisper` for the transcriber)
+python scripts/bench_throughput.py --scenario longform --fidelity \
+    --longform-split both --gpu \
+    --families chatterbox,chatterbox_turbo,chatterbox_multilingual,melo,openvoice_v2,kitten \
+    --json-out out/bench/fidelity-12-9.json \
+    --md-out docs/benchmarks/throughput.md
+# CPU instead of CUDA: drop --gpu (the transcriber defaults to int8 on CPU)
+# Renders land in out/bench/fidelity-12/; override with --fidelity-out DIR
+```
+
+### Reproduce
+
+```bash
+# Print every boot and command for this section
+python scripts/bench_throughput.py --print-longform-scenarios
+
+# Headline (INFO): one run per family, both variants.
+# AR families + kitten: c=1,4,8 with 4 requests/level.
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=INFO \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path config.gpu.yml --port 2242 \
+    > out/bench/engine-phase12-info.log 2>&1
+python scripts/bench_throughput.py --scenario longform --families chatterbox \
+    --longform-split both --concurrency 1,4,8 --longform-requests 4 \
+    --label phase12-9-chatterbox --json-out out/bench/phase12-9-chatterbox.json \
+    --md-out docs/benchmarks/throughput.md
+# repeat for chatterbox_turbo, chatterbox_multilingual, kitten
+# padded/clone families ran at 8 requests/level, adding c=2:
+python scripts/bench_throughput.py --scenario longform --families melo \
+    --longform-split both --concurrency 1,2,4,8 --longform-requests 8 \
+    --label phase12-9-melo --json-out out/bench/phase12-9-melo.json \
+    --md-out docs/benchmarks/throughput.md
+# repeat for openvoice_v2 (OV2 split=off: add --timeout 900)
+
+# Composition (DEBUG + --engine-log): re-run the ON rows
+CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=DEBUG \
+    python -m harmonyspeech.endpoints.openai.api_server \
+    --config-file-path config.gpu.yml --port 2242 \
+    > out/bench/engine-phase12-debug.log 2>&1
+python scripts/bench_throughput.py --scenario longform --families chatterbox \
+    --longform-split on --concurrency 1,4,8 --longform-requests 8 \
+    --engine-log out/bench/engine-phase12-debug.log --label phase12-chatterbox-debug
+
+# Regression gates
+python scripts/audio_regression.py \
+    --families chatterbox,chatterbox_turbo,chatterbox_multilingual,openvoice_v1,openvoice_v2,melotts,harmonyspeech,kittentts \
+    --axis longform:off-vs-on --gpu --json-out out/bench/gate-12-4-identity.json
+python scripts/audio_regression.py \
+    --families chatterbox,chatterbox_turbo,chatterbox_multilingual,openvoice_v1,openvoice_v2,melotts,harmonyspeech,kittentts \
+    --axis determinism:run1-vs-run2 --gpu --json-out out/bench/gate-12-4-determinism.json
+
+# H3 / H4 probes
+python scripts/bench_throughput.py --scenario longform --families chatterbox \
+    --longform-split on --concurrency 1 --longform-requests 4 \
+    --longform-crossfade-ms 50 --longform-sentence-pause-ms 50 \
+    --label phase12-crossfade-50 --json-out out/bench/throughput-phase12-crossfade.json
+python scripts/bench_throughput.py --scenario longform --families melo \
+    --longform-split on --concurrency 1,4 --longform-requests 8 \
+    --longform-remove-dc-offset --longform-trim-silence --longform-fix-internal-silence \
+    --label phase12-filters-on --json-out out/bench/throughput-phase12-filters.json
+```
+
+> **Post-fix per-run blocks (Phase 12-9, 2026-11-09).** These blocks are the
+> `out/bench/phase12-9-*.json` runs that produced the matrix above: same
+> 807-character real-prose fixture, unified `server default (300) chars`
+> budget, 4 chunks/request, shipped 40 ms crossfade / 120 ms pause. The commit
+> line records the git HEAD (`8c400fc`); the run tree also carried the
+> uncommitted Phase 12-6..12-9 audit fixes. AR families and kitten ran 4
+> requests/level at c={1,4,8}; melo and openvoice_v2 ran 8 requests/level at
+> c={1,2,4,8}. No DEBUG composition was captured in this pass (see the
+> pre-fix composition table above).
+
+### phase12-9-melo — 2026-11-09T18:36:48Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 8 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=2 req/s | c=2 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| melo | padded batch | off | 807 | 1 | 0.88 | 1134.9 | 0.89 | 2248.0 | 1.16 | 3425.2 | 1.35 | 5890.2 |
+| melo | padded batch | on | 807 | 4 | 1.09 | 916.8 | 1.11 | 1802.4 | 1.19 | 3215.2 | 1.19 | 4296.0 |
+
+### phase12-9-openvoice_v2 — 2026-11-09T18:38:25Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 8 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=2 req/s | c=2 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | off | 807 | 1 | 0.65 | 1525.1 | 0.66 | 3025.8 | 0.79 | 4998.0 | 0.89 | 8964.6 |
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | on | 807 | 4 | 0.68 | 1478.2 | 0.69 | 2906.7 | 0.73 | 5459.4 | 0.76 | 8174.5 |
+
+### phase12-9-kitten — 2026-11-09T18:51:24Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kitten | lanes | off | 807 | 1 | 0.06 | 17856.7 | 0.1 | 38336.8 | 0.1 | 39314.9 |
+| kitten | lanes | on | 807 | 4 | 0.13 | 7748.2 | 0.13 | 23120.9 | 0.13 | 23087.3 |
+
+### phase12-9-chatterbox_turbo — 2026-11-09T18:54:19Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox_turbo | AR decode, admission width 4 | off | 807 | 1 | 0.16 | 6527.0 | 0.22 | 18277.9 | 0.24 | 16683.0 |
+| chatterbox_turbo | AR decode, admission width 4 | on | 807 | 4 | 0.14 | 7027.8 | 0.14 | 20873.6 | 0.14 | 21127.5 |
+
+### phase12-9-chatterbox — 2026-11-09T18:59:43Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | AR decode, admission width 4 | off | 807 | 1 | 0.07 | 15203.9 | 0.13 | 31424.4 | 0.13 | 30040.6 |
+| chatterbox | AR decode, admission width 4 | on | 807 | 4 | 0.1 | 10295.6 | 0.1 | 30995.5 | 0.09 | 33374.4 |
+
+### phase12-9-chatterbox_multilingual — 2026-11-09T19:05:31Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox_multilingual | AR decode, admission width 4 | off | 807 | 1 | 0.06 | 18831.2 | 0.11 | 37207.7 | 0.1 | 40858.5 |
+| chatterbox_multilingual | AR decode, admission width 4 | on | 807 | 4 | 0.1 | 10494.6 | 0.08 | 36460.4 | 0.09 | 33558.0 |
+
+### phase12-9-fidelity — 2026-11-09T17:57:08Z
+
+* commit `8c400fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1,2
+* config: n/a
+* method: Whisper `large-v3-turbo` (cpu/int8), language `en`, beam 5; lowercase, punctuation stripped (apostrophes split); word edit distance = len(ref) + len(hyp) - 2 * LCS (delete + insert). Transcription noise floor ≈ 6 edit distance (Karina/Carina, weaves/leaves).
+* renders: `out/bench/fidelity-12` · variants: off, on · chunk budget: server default (300) chars (4 chunks/request)
+
+| family | variant | edit distance | words heard / ref |
+|---|---|---|---|
+| chatterbox | off | 12 | 136 / 138 |
+| chatterbox | on | 2 | 138 / 138 |
+| chatterbox_turbo | off | 108 | 114 / 138 |
+| chatterbox_turbo | on | 4 | 138 / 138 |
+| chatterbox_multilingual | off | 0 | 138 / 138 |
+| chatterbox_multilingual | on | 4 | 138 / 138 |
+| melo | off | 2 | 138 / 138 |
+| melo | on | 2 | 138 / 138 |
+| openvoice_v2 | off | 2 | 138 / 138 |
+| openvoice_v2 | on | 0 | 138 / 138 |
+| kitten | off | 8 | 138 / 138 |
+| kitten | on | 6 | 138 / 138 |

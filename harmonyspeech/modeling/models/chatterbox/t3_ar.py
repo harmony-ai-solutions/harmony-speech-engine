@@ -59,18 +59,21 @@ materialise attention weights.
 
 Scope
 -----
-* **TTS role only.** Turbo uses a structurally different loop
+* **TTS + Multilingual roles (Phase 12-7).** Both share the same ``Llama_520M``
+  contract and now decode through this cleaned loop. Multilingual runs
+  :class:`_SafeAlignmentStreamAnalyzer` by default (its post-completion
+  ``long_tail`` trigger is what stops a chunk that never emits EOS naturally —
+  GPU-2 verified), switching to eager only for the call and always removing the
+  hooks; ``HSE_CHATTERBOX_MTL_ANALYZER=0`` is the kill switch (native SDPA).
+* **Turbo is separate.** Turbo uses a structurally different loop
   (``T3.inference_turbo``, ``t3.py:415-490``: raw ``self.tfmr``, a
   ``LogitsProcessorList``, no CFG, no ``T3HuggingfaceBackend``) whose only
   hygiene issue is its own ``tqdm`` (``t3.py:457``); it is left to 9-3.
-* **Multilingual untouched.** Its analyzer needs attention, and per-request
-  analyzer state on a shared Llama is exactly what 9-3 documents as a skip. This
-  class still supports it faithfully if ever used (attention stays on when an
-  analyzer is attached).
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -92,7 +95,18 @@ from transformers.generation.logits_process import (
 #: stderr hook in the hottest loop and has no place in serving.
 PROGRESS_ENV = "HSE_CHATTERBOX_T3_PROGRESS"
 
+#: Kill switch for the multilingual ``_SafeAlignmentStreamAnalyzer`` (Phase 12-7).
+#: Default ON: on the real ``t3_mtl23ls_v2`` checkpoint the analyzer's post-
+#: completion ``long_tail`` heuristic is what stops a chunk that never emits
+#: ``stop_speech_token`` naturally from babbling until ``max_new_tokens``.
+#: Set to ``0``/``false``/``no``/``off`` to disable it (native SDPA, no hooks).
+ANALYZER_ENV = "HSE_CHATTERBOX_MTL_ANALYZER"
+
 _TRUTHY = {"1", "true", "yes", "on"}
+
+#: Values of :data:`ANALYZER_ENV` that turn the analyzer off (anything else,
+#: including unset, leaves it on).
+_FALSY = {"0", "false", "no", "off"}
 
 
 def _ensure_bot_eot(text_tokens: Tensor, hp) -> None:
@@ -169,6 +183,185 @@ class T3ARSampler:
         return torch.multinomial(probs, num_samples=1, generator=generator)  # (1, 1)
 
 
+class _SafeAlignmentStreamAnalyzer(AlignmentStreamAnalyzer):
+    """Upstream analyzer with removable hooks and a fixed repeat trigger.
+
+    Phase 12-7 path (default ON for multilingual since the GPU-2 verification).
+    Upstream registers three ``forward_hook``s and discards the handles, so every
+    call permanently leaks GPU→CPU attention hooks onto the shared Llama (the
+    55 s → 91 s → 227 s latency collapse). This subclass records them and removes
+    all of them on :meth:`close`, and requires three identical tokens after
+    ``complete`` before forcing EOS (upstream checks only two, which fires
+    constantly mid-sentence).
+
+    Two construction modes:
+
+    * ``attach_hooks=True`` (sequential :meth:`ChatterboxT3AR.inference`) —
+      temporally forces ``_attn_implementation="eager"`` (the ``output_attentions``
+      setter rejects SDPA) and registers the attention hooks on ``tfmr``;
+      :meth:`close` removes them and restores both config attributes.
+    * ``attach_hooks=False`` (batched :class:`ARBatchRunner`) — only initialises
+      the decode state. The runner owns the temporary hooks, fills
+      ``last_aligned_attns`` from its one batched forward, and guarantees their
+      removal, so no hook ever lives on the shared ``tfmr``.
+    """
+
+    def __init__(
+        self,
+        tfmr,
+        queue,
+        text_tokens_slice,
+        alignment_layer_idx=9,
+        eos_idx=0,
+        *,
+        attach_hooks: bool = True,
+    ):
+        # Head table is resolved here (not at import) so a test can monkeypatch it
+        # and so tiny models (2 layers / 4 heads) never raise ``IndexError``.
+        import chatterbox.models.t3.inference.alignment_stream_analyzer as analyzer_module
+
+        num_layers = len(tfmr.layers)
+        num_heads = int(getattr(getattr(tfmr, "config", None), "num_attention_heads", 16) or 16)
+        aligned_heads = [
+            (layer_idx % num_layers, head_idx % num_heads)
+            for layer_idx, head_idx in analyzer_module.LLAMA_ALIGNED_HEADS
+        ]
+
+        # Mirror upstream's state without calling its leaky ``__init__``.
+        self.text_tokens_slice = (i, j) = text_tokens_slice
+        self.eos_idx = eos_idx
+        self.alignment = torch.zeros(0, j - i)
+        self.curr_frame_pos = 0
+        self.text_position = 0
+        self.started = False
+        self.started_at = None
+        self.complete = False
+        self.completed_at = None
+        self.generated_tokens = []
+        self.last_aligned_attns = [None for _ in aligned_heads]
+        self._hook_handles = []
+        self.alignment_layer_idx = alignment_layer_idx
+
+        self.attach_hooks = bool(attach_hooks)
+        config = getattr(tfmr, "config", None)
+        self._tfmr_config = config if self.attach_hooks else None
+        self._previous_attn_implementation = None
+        self.original_output_attentions = bool(getattr(config, "output_attentions", False)) if config is not None else False
+
+        if self.attach_hooks:
+            # ``config.output_attentions = True`` raises when the implementation
+            # is SDPA, so force eager *before* the spies set that flag. This also
+            # keeps ``build_ar_backend()`` (which constructs the HF backend from
+            # this config) from raising the ``output_attentions`` ValueError.
+            if config is not None:
+                self._previous_attn_implementation = getattr(config, "_attn_implementation", None)
+                config._attn_implementation = "eager"
+            for buffer_idx, (layer_idx, head_idx) in enumerate(aligned_heads):
+                self._add_attention_spy(tfmr, buffer_idx, layer_idx, head_idx)
+
+    def _add_attention_spy(self, tfmr, buffer_idx, layer_idx, head_idx):
+        """Same hook as upstream, but keep the handle so it can be removed."""
+
+        def attention_forward_hook(module, input, output):
+            if isinstance(output, tuple) and len(output) > 1 and output[1] is not None:
+                step_attention = output[1].cpu()  # (B, n_heads, T0, Ti)
+                self.last_aligned_attns[buffer_idx] = step_attention[0, head_idx]  # (T0, Ti)
+
+        target_layer = tfmr.layers[layer_idx].self_attn
+        handle = target_layer.register_forward_hook(attention_forward_hook)
+        handles = getattr(self, "_hook_handles", None)
+        if handles is None:
+            handles = []
+            self._hook_handles = handles
+        handles.append(handle)
+        if hasattr(tfmr, "config") and hasattr(tfmr.config, "output_attentions"):
+            tfmr.config.output_attentions = True
+
+    def close(self) -> None:
+        """Remove every forward hook and restore the config (idempotent).
+
+        Only :meth:`__init__`'s ``attach_hooks=True`` mode mutates ``tfmr``, so
+        the runner-created analyzers (``attach_hooks=False``) are a no-op here.
+        """
+        handles = getattr(self, "_hook_handles", None) or []
+        self._hook_handles = []
+        for handle in handles:
+            # Removal must never mask the decode result.
+            with contextlib.suppress(Exception):
+                handle.remove()
+
+        config = getattr(self, "_tfmr_config", None)
+        if config is not None:
+            with contextlib.suppress(Exception):
+                config.output_attentions = bool(getattr(self, "original_output_attentions", False))
+            with contextlib.suppress(Exception):
+                if self._previous_attn_implementation is None:
+                    delattr(config, "_attn_implementation")
+                else:
+                    config._attn_implementation = self._previous_attn_implementation
+
+    def step(self, logits, next_token=None):
+        """Upstream ``step`` with the 2-token repeat bug fixed to 3 tokens."""
+        aligned_attn = torch.stack(self.last_aligned_attns).mean(dim=0)  # (N, N)
+        i, j = self.text_tokens_slice
+        if self.curr_frame_pos == 0:
+            a_chunk = aligned_attn[j:, i:j].clone().cpu()  # (T, S)
+        else:
+            a_chunk = aligned_attn[:, i:j].clone().cpu()  # (1, S)
+
+        a_chunk[:, self.curr_frame_pos + 1 :] = 0
+        self.alignment = torch.cat((self.alignment, a_chunk), dim=0)
+
+        a = self.alignment
+        t, s = a.shape
+
+        cur_text_posn = a_chunk[-1].argmax()
+        discontinuity = not (-4 < cur_text_posn - self.text_position < 7)
+        if not discontinuity:
+            self.text_position = cur_text_posn
+
+        false_start = (not self.started) and (a[-2:, -2:].max() > 0.1 or a[:, :4].max() < 0.5)
+        self.started = not false_start
+        if self.started and self.started_at is None:
+            self.started_at = t
+
+        self.complete = self.complete or self.text_position >= s - 3
+        if self.complete and self.completed_at is None:
+            self.completed_at = t
+
+        long_tail = self.complete and (a[self.completed_at :, -3:].sum(dim=0).max() >= 5)
+        alignment_repetition = self.complete and (a[self.completed_at :, :-5].max(dim=1).values.sum() > 5)
+
+        if next_token is not None:
+            if isinstance(next_token, torch.Tensor):
+                token_id = next_token.item() if next_token.numel() == 1 else next_token.view(-1)[0].item()
+            else:
+                token_id = next_token
+            self.generated_tokens.append(token_id)
+            if len(self.generated_tokens) > 8:
+                self.generated_tokens = self.generated_tokens[-8:]
+
+        # Phase 12-7: require completion AND three identical trailing tokens.
+        token_repetition = (
+            self.complete and len(self.generated_tokens) >= 3 and len(set(self.generated_tokens[-3:])) == 1
+        )
+        if token_repetition:
+            logger.warning(f"Detected 3x repetition of token {self.generated_tokens[-1]}")
+
+        if cur_text_posn < s - 3 and s > 5:
+            logits[..., self.eos_idx] = -(2**15)
+
+        if long_tail or alignment_repetition or token_repetition:
+            logger.warning(
+                f"forcing EOS token, {long_tail=}, {alignment_repetition=}, {token_repetition=}"
+            )
+            logits = -(2**15) * torch.ones_like(logits)
+            logits[..., self.eos_idx] = 2**15
+
+        self.curr_frame_pos += 1
+        return logits
+
+
 class ChatterboxT3AR(T3):
     """Upstream ``T3`` with the AR-0 decode-loop hygiene applied.
 
@@ -181,6 +374,9 @@ class ChatterboxT3AR(T3):
     #: See :data:`PROGRESS_ENV`.
     PROGRESS_ENV = PROGRESS_ENV
 
+    #: See :data:`ANALYZER_ENV`.
+    ANALYZER_ENV = ANALYZER_ENV
+
     # ------------------------------------------------------------------
     # Loop plumbing
     # ------------------------------------------------------------------
@@ -188,6 +384,18 @@ class ChatterboxT3AR(T3):
     def progress_enabled(cls) -> bool:
         """True only when the operator opted into the debug progress bar."""
         return str(os.environ.get(cls.PROGRESS_ENV, "")).strip().lower() in _TRUTHY
+
+    @classmethod
+    def analyzer_enabled(cls) -> bool:
+        """True unless the operator disabled the multilingual analyzer.
+
+        Phase 12-7 (GPU-2 verified 2026-11-09): ``t3_mtl23ls_v2`` rarely emits
+        ``stop_speech_token`` naturally at a chunk's end, so without the
+        analyzer's post-completion ``long_tail`` EOS trigger a chunk keeps
+        babbling until ``max_new_tokens``. The analyzer is therefore on by
+        default; :data:`ANALYZER_ENV` is the kill switch.
+        """
+        return str(os.environ.get(cls.ANALYZER_ENV, "")).strip().lower() not in _FALSY
 
     def ar_progress(self, iterable: Iterable) -> Iterable:
         """Return ``iterable`` unchanged unless the debug progress bar is enabled."""
@@ -216,9 +424,9 @@ class ChatterboxT3AR(T3):
         slice, so ``len_cond``/``text_len`` are required for them.
         """
         analyzer = None
-        if self.hp.is_multilingual:
+        if self.hp.is_multilingual and self.analyzer_enabled():
             assert len_cond is not None and text_len is not None, "multilingual prefill needs len_cond/text_len"
-            analyzer = AlignmentStreamAnalyzer(
+            analyzer = _SafeAlignmentStreamAnalyzer(
                 self.tfmr,
                 None,
                 text_tokens_slice=(len_cond, len_cond + text_len),
@@ -377,35 +585,62 @@ class ChatterboxT3AR(T3):
         # Upstream rebuilds the backend on every call (fresh analyzer state).
         self.compiled = False
 
-        sampler = T3ARSampler(
-            cfg_weight=cfg_weight,
-            temperature=temperature,
-            top_p=top_p,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
+        # Phase 12-7: the multilingual analyzer needs eager attention, so switch
+        # it on only for this call and always remove its hooks / restore the
+        # config. ``HSE_CHATTERBOX_MTL_ANALYZER=0`` keeps native SDPA instead.
+        analyzer_enabled = bool(self.hp.is_multilingual and self.analyzer_enabled())
+        tfmr_config = getattr(self.tfmr, "config", None)
+        sentinel = object()
+        previous_attn = (
+            getattr(tfmr_config, "_attn_implementation", sentinel)
+            if tfmr_config is not None
+            else sentinel
         )
-        state = self.ar_prefill(
-            t3_cond=t3_cond,
-            text_tokens=text_tokens,
-            initial_speech_tokens=initial_speech_tokens,
-            cfg_weight=cfg_weight,
-        )
+        if analyzer_enabled and tfmr_config is not None:
+            tfmr_config._attn_implementation = "eager"
 
-        predicted = []
-        for i in self.ar_progress(range(max_new_tokens)):
-            next_token = self.ar_sample(state.logits, state.generated_ids, sampler=sampler)
-            predicted.append(next_token)
-            state.generated_ids = torch.cat([state.generated_ids, next_token], dim=1)
+        try:
+            sampler = T3ARSampler(
+                cfg_weight=cfg_weight,
+                temperature=temperature,
+                top_p=top_p,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+            )
+            state = self.ar_prefill(
+                t3_cond=t3_cond,
+                text_tokens=text_tokens,
+                initial_speech_tokens=initial_speech_tokens,
+                cfg_weight=cfg_weight,
+            )
 
-            # Upstream always stops on EOS (`stop_on_eos` is accepted but unused
-            # there); preserved verbatim so outputs stay identical.
-            if next_token.view(-1) == self.hp.stop_speech_token:
-                logger.info(f"✅ EOS token detected! Stopping generation at step {i + 1}")
-                break
+            predicted = []
+            for i in self.ar_progress(range(max_new_tokens)):
+                next_token = self.ar_sample(state.logits, state.generated_ids, sampler=sampler)
+                predicted.append(next_token)
+                state.generated_ids = torch.cat([state.generated_ids, next_token], dim=1)
 
-            state.logits, state.past_key_values = self.ar_step(state, next_token, position=i + 1)
+                # Upstream always stops on EOS (`stop_on_eos` is accepted but unused
+                # there); preserved verbatim so outputs stay identical.
+                if next_token.view(-1) == self.hp.stop_speech_token:
+                    logger.info(f"✅ EOS token detected! Stopping generation at step {i + 1}")
+                    break
 
-        return torch.cat(predicted, dim=1)  # (1, num_tokens)
+                state.logits, state.past_key_values = self.ar_step(state, next_token, position=i + 1)
+
+            return torch.cat(predicted, dim=1)  # (1, num_tokens)
+        finally:
+            if analyzer_enabled:
+                backend = getattr(self, "patched_model", None)
+                analyzer = getattr(backend, "alignment_stream_analyzer", None)
+                if analyzer is not None and hasattr(analyzer, "close"):
+                    analyzer.close()
+                if tfmr_config is not None:
+                    if previous_attn is sentinel:
+                        with contextlib.suppress(Exception):
+                            delattr(tfmr_config, "_attn_implementation")
+                    else:
+                        tfmr_config._attn_implementation = previous_attn
 
 
 __all__ = [
@@ -413,4 +648,6 @@ __all__ = [
     "T3ARDecodeState",
     "T3ARSampler",
     "PROGRESS_ENV",
+    "ANALYZER_ENV",
+    "_SafeAlignmentStreamAnalyzer",
 ]

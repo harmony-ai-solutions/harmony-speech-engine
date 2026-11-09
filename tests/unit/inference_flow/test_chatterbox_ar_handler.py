@@ -33,6 +33,7 @@ from harmonyspeech.common.outputs import TextToSpeechRequestOutput, UnfinishedRe
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.engine.ar_cache import ARCachePool
 from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
+from harmonyspeech.task_handler.ar_runner import DEFAULT_AR_STEP_TOKENS
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 _TINY_LLAMA = {
@@ -670,4 +671,214 @@ def test_s3gen_batch_failure_falls_back_to_the_per_row_hop(batched_tiny, monkeyp
     for request in requests:
         assert results[request.request_id].result_data.finish_reason == "stop"
         assert results[request.request_id].result_data.audio_artifact is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-8: deferred S3Gen vocode for staggered-EOS rows
+# ---------------------------------------------------------------------------
+class _ScriptedEnglishContract:
+    """Deterministic per-request token script (staggered EOS by construction)."""
+
+    rows_per_request = 2
+    max_new_tokens = 1000
+
+    def __init__(self, script, hp):
+        self.script = {key: list(values) for key, values in script.items()}
+        self.hp = hp
+
+    def build_prefill(self, t3, conds_t3, text_tokens, cfg_weight, _cache=None):
+        from harmonyspeech.task_handler.ar_runner import EnglishContract
+
+        return EnglishContract().build_prefill(t3, conds_t3, text_tokens, cfg_weight)
+
+    # Runner calls these positionally as `contract.method(...)`; only the
+    # sampling/stop/final pieces need behaviour.
+    def embed_token(self, t3, row):
+        return torch.zeros(len(row.slots), 1, self.hp.n_channels, dtype=next(t3.parameters()).dtype)
+
+    def sample(self, t3, row):
+        value = self.script[row.request_id].pop(0)
+        token = torch.tensor([[value]], dtype=torch.long, device=t3.device)
+        row.generated_ids = torch.cat([row.generated_ids, token], dim=1)
+        row.tokens.append(token)
+        return token
+
+    def stop_after_sample(self, t3, row, token):
+        return int(token.view(-1)[0]) == int(self.hp.stop_speech_token)
+
+    def final_tokens(self, t3, row):
+        stream = torch.cat(row.tokens, dim=1)[0]
+        return stream[stream < int(self.hp.start_speech_token)].to(dtype=torch.long)
+
+
+@pytest.mark.unit
+def test_staggered_eos_rows_vocode_together_in_one_batched_call(batched_tiny, monkeypatch):
+    """Rows that hit EOS on different steps are held, then vocoded in one hop."""
+    import harmonyspeech.modeling.models.chatterbox.s3gen_batch as s3gen_batch
+
+    model, hp = batched_tiny
+    runner = _make_runner(model)
+    ar = runner._get_ar_runner()
+    stop = int(hp.stop_speech_token)
+    # "a" EOSes on step 3, "b" on step 5: never the same token step.
+    ar.contract = _ScriptedEnglishContract(
+        {"a": [5, 6, stop], "b": [7, 8, 9, 10, stop]}, hp
+    )
+
+    requests = [_request("a", seed=3), _request("b", seed=4)]
+    conditionals = _real_conditionals(hp)
+    for request in requests:
+        request._test_conditionals = conditionals
+
+    calls = []
+    real = s3gen_batch.inference_batched
+
+    def recording(s3gen, rows, **kwargs):
+        calls.append(len(rows))
+        return real(s3gen, rows, **kwargs)
+
+    monkeypatch.setattr(s3gen_batch, "inference_batched", recording)
+    results = _drive_with(model, runner, requests)
+
+    assert all(result.result_data.finish_reason == "stop" for result in results.values())
+    assert calls == [2], f"staggered-EOS rows must vocode together, got {calls}"
+    assert runner._ar_runner._pending_vocode == {}
+
+
+# ---------------------------------------------------------------------------
+# Phase 12-8: multi-token decode burst on continuation steps
+# ---------------------------------------------------------------------------
+def _scripted_requests(hp):
+    requests = [_request("a", seed=3), _request("b", seed=4)]
+    conditionals = _real_conditionals(hp)
+    for request in requests:
+        request._test_conditionals = conditionals
+    inputs = [_params(conditionals, request.request_data.input_text) for request in requests]
+    return requests, inputs
+
+
+@pytest.mark.unit
+def test_continuation_step_bursts_up_to_step_tokens(batched_tiny):
+    """A continuation step decodes ``runner.step_tokens`` tokens in one call."""
+    model, hp = batched_tiny
+    runner = _make_runner(model)
+    ar = runner._get_ar_runner()
+    assert ar.step_tokens == DEFAULT_AR_STEP_TOKENS
+    ar.step_tokens = 5
+    stop = int(hp.stop_speech_token)
+    script = {rid: [5 + (index % 20) for index in range(30)] + [stop] for rid in ("a", "b")}
+    ar.contract = _ScriptedEnglishContract(script, hp)
+    requests, inputs = _scripted_requests(hp)
+
+    # Admission step: prefill plus exactly one token per newly admitted row.
+    runner._execute_chatterbox_tts(inputs, requests)
+    assert ar.row("a").tokens_emitted == 1
+    steps_before = ar.row("a").steps
+
+    # Continuation step (no new rows): one handler call advances `step_tokens`.
+    runner._execute_chatterbox_tts(inputs, requests)
+    assert ar.row("a").steps - steps_before == 5
+    assert ar.row("b").tokens_emitted == 6
+
+
+@pytest.mark.unit
+def test_continuation_step_burst_stops_immediately_on_eos(batched_tiny):
+    """The burst stops the moment a row finishes, so its slot frees at once."""
+    model, hp = batched_tiny
+    runner = _make_runner(model)
+    ar = runner._get_ar_runner()
+    ar.step_tokens = 10
+    stop = int(hp.stop_speech_token)
+    # "a" EOSes on its third sampled token — the second token of the first
+    # continuation burst. "b" has plenty left and must not keep decoding.
+    script = {
+        "a": [5, 6, stop],
+        "b": [7 + (index % 20) for index in range(40)] + [stop],
+    }
+    ar.contract = _ScriptedEnglishContract(script, hp)
+    requests, inputs = _scripted_requests(hp)
+
+    runner._execute_chatterbox_tts(inputs, requests)  # admission: token 1 each
+    assert ar.has_row("a") and ar.has_row("b")
+    b_steps_before = ar.row("b").steps
+
+    runner._execute_chatterbox_tts(inputs, requests)  # token 2, then "a" EOS -> break
+
+    # Stopped at "a"'s EOS: "b" advanced only two tokens, not ten.
+    assert ar.row("b").steps - b_steps_before == 2
+    # "a" finished, its KV slot is free, and its vocode waits for the batch.
+    assert not ar.has_row("a")
+    assert ar.has_pending_vocode("a")
+
+
+@pytest.mark.unit
+def test_execute_partition_prepares_inputs_only_at_admission(tiny, monkeypatch):
+    """A multi-step AR request runs ``prepare_inputs`` exactly once."""
+    import harmonyspeech.task_handler.model_runner_base as model_runner_base
+
+    model, hp = tiny
+    runner = _make_runner(model)
+    conditionals = _conditionals(hp)
+    requests = [_request("a", seed=3), _request("b", seed=4)]
+    for request in requests:
+        request._test_conditionals = conditionals
+
+    prepared_batches = []
+
+    def counting_prepare(model_config, batch):
+        prepared_batches.append(list(batch))
+        return [_params(conditionals, request.request_data.input_text) for request in batch]
+
+    monkeypatch.setattr(model_runner_base, "prepare_inputs", counting_prepare)
+
+    pending = list(requests)
+    for _ in range(64):
+        outputs = runner._execute_partition(pending)
+        pending = [
+            request
+            for request, output in zip(pending, outputs, strict=True)
+            if isinstance(output.result_data, UnfinishedRequestOutput)
+        ]
+        if not pending:
+            break
+    else:
+        raise AssertionError("decode did not finish")
+
+    assert len(prepared_batches) == 1, prepared_batches
+    assert [request.request_id for request in prepared_batches[0]] == ["a", "b"]
+
+
+@pytest.mark.unit
+def test_multilingual_handler_dispatches_multi_request_batches_to_the_ar_runner(tiny, monkeypatch):
+    """``ChatterboxMultilingualTTS`` uses the AR runner for a multi-request step."""
+    model, hp = tiny
+    runner = _make_runner(model, model_type="ChatterboxMultilingualTTS")
+    conditionals = _conditionals(hp)
+    requests = [_request("a", seed=3), _request("b", seed=4)]
+    calls = []
+
+    def fake_ar(runner_arg, inputs, requests_arg, *, turbo, multilingual=False):
+        calls.append((len(inputs), turbo, multilingual))
+        return []
+
+    monkeypatch.setattr(runner, "_execute_chatterbox_tts_ar", fake_ar)
+
+    params = [
+        (
+            request.request_data.input_text,
+            "en",
+            SpeakerArtifact(conditionals=conditionals, backend="chatterbox"),
+            0.5,
+            0.5,
+            0.8,
+            2.0,
+            1.0,
+            0.05,
+        )
+        for request in requests
+    ]
+    outputs = runner._execute_chatterbox_multilingual_tts(params, requests)
+
+    assert outputs == []
+    assert calls == [(2, False, True)]
 
