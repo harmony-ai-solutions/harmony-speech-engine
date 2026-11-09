@@ -2,7 +2,9 @@
 
 > **Plan:** [Engine Modernization](summary.md) · **Phase:** 14 — Streaming TTS
 > **Depends on:** 14-1 (field names/validation)
-> **State reference:** verified 2026-11-08 (research) — `audio_codec.encode_audio` is whole-buffer (`common/audio_codec.py:355-384`), `resample` is one-shot `soxr.resample` (`:177-193`) — per-chunk one-shot resampling clicks/drifts, hence the stateful stream below; upstream carry pattern `.current_work/Chatterbox-TTS-Server/server.py:1009-1067`; ecosystem WAV-header precedent: OpenAI/Kokoro (`0xFFFFFFFF` sizes) / vLLM-Omni / Google (headerless PCM @24 k).
+> **State reference:** verified 2026-11-08 (research) — `audio_codec.encode_audio` is whole-buffer (`common/audio_codec.py:355-384`), `resample` is one-shot `soxr.resample` (`:177-193`) — per-chunk one-shot resampling clicks/drifts, hence the stateful stream below; ecosystem WAV-header precedent: OpenAI/Kokoro (`0xFFFFFFFF` sizes) / vLLM-Omni / Google (headerless PCM @24 k).
+>
+> ⚠️ **Carry reference superseded (Phase 12, verified 2026-11-09, commit `8b7d222`):** the `.current_work/Chatterbox-TTS-Server/server.py:1009-1067` carry is **not** the reference implementation any more — it has no per-chunk edge conditioning and butt-splices whatever ragged silence each render emits. The shipped carry is `harmonyspeech/common/audio_utils.py::CrossfadeStitcher` (per-chunk `condition_edges`, two-sided `cos²`/`sin²` pause fade, `feed()` + `flush()` proven sample-identical to the whole-buffer `crossfade_stitch`). 14-2's primitives feed **from** that class; do not re-implement a carry here.
 
 ## Objective
 

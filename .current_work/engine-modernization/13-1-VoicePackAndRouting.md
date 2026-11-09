@@ -25,6 +25,7 @@
 ## Implementation steps
 
 1. Verify-first: per-family `voice` validation today (which families validate against config lists, which ignore); native-voice sources (config keys vs `LanguageOptions`); exact set of cloning-capable model types (expected: `ChatterboxTTS`, `ChatterboxTurboTTS`, `ChatterboxMultilingualTTS`, `ChatterboxVC` (target), `OpenVoice` v1/v2 types, hs1 voice-clone mode — confirm each accepts reference audio/embedding on the wire).
+   - Verified 2026-11-09 (commit `8b7d222`): all three Chatterbox TTS families are now `ar_decode` members in `AR_INFERENCE_FAMILIES` / `AR_INFERENCE_MODEL_TYPES`, including Multilingual (12-7). That changes only how a cloning request is *decoded*, not how its reference is embedded — the 7-2 embed step and its cache key are unchanged, so 13-2's warm-up targets the same artifacts as before. `ChatterboxVC` is a `padded_batch` member (11-1) and takes `target_audio`/`target_embedding` as a target, not a source.
 2. Vendor the pack + license/provenance; package-data wiring; sizes recorded here.
 3. Catalog module + resolution API (`voices_for_model(model_config)`, `resolve_voice(model_config, name) → {kind, wav_path | native_id}`).
 4. Routing: `voice`/`target_voice` name resolution into the existing cloning paths (serving layer; no runner changes); honest 400 on non-cloning models; config knob `standard_voice_pack: true` (global, default on — it only adds resolvable names).
