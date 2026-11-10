@@ -654,3 +654,11 @@ class AsyncHarmonySpeech:
         Phase 10-1 gap recorded in 9-2's deviation 5).
         """
         return self.engine.get_whisper_lane_stats()
+
+    def get_padded_batch_stats(self) -> dict:
+        """Padded-batch headroom governance of the underlying engine (Phase 14-6).
+
+        Same wrapper-gap rule as the Whisper lane proxy: the serving layer holds
+        this object, so ``/metrics`` and ``/health`` read through it.
+        """
+        return self.engine.get_padded_batch_stats()

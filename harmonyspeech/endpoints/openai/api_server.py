@@ -125,7 +125,7 @@ async def lifespan(app: fastapi.FastAPI):
 # a well-formed body with every series present.
 @router.get(
     "/metrics",
-    description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode + streaming TTS).",
+    description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode + padded-batch governance + streaming TTS).",
 )
 async def metrics() -> Response:
     from harmonyspeech.endpoints.openai.streaming_metrics import (
@@ -135,6 +135,7 @@ async def metrics() -> Response:
     from harmonyspeech.engine.ar_cache_metrics import render_ar_cache_metrics
     from harmonyspeech.engine.ar_decode_metrics import render_ar_decode_metrics
     from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
+    from harmonyspeech.engine.padded_batch_metrics import render_padded_batch_metrics
     from harmonyspeech.engine.vram_metrics import render_vram_metrics
     from harmonyspeech.engine.whisper_lane_metrics import render_whisper_lane_metrics
 
@@ -176,12 +177,21 @@ async def metrics() -> Response:
             logger.warning(f"Failed to read AR decode stats: {exc}")
             decode_stats = None
         body += render_ar_decode_metrics(decode_stats)
+        try:
+            padded_stats = engine_ref.get_padded_batch_stats()
+        except Exception as exc:  # noqa: BLE001 - metrics must never break a scrape
+            logger.warning(f"Failed to read padded-batch stats: {exc}")
+            padded_stats = None
+        # Nothing governed still renders both families (as zeros) so
+        # dashboards never see an absent metric family.
+        body += render_padded_batch_metrics(padded_stats)
         body += render_stream_metrics(get_stream_stats())
     else:
         body += render_embedding_cache_metrics(None)
         body += render_whisper_lane_metrics(None)
         body += render_ar_cache_metrics(None)
         body += render_ar_decode_metrics(None)
+        body += render_padded_batch_metrics(None)
         body += render_stream_metrics(get_stream_stats())
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
@@ -213,6 +223,10 @@ async def health() -> JSONResponse:
             # Phase 11-0: the governor's live admission decision (observable
             # budget trip).
             health_status["whisper_admission"] = result["whisper_admission"]
+        if isinstance(result, dict) and result.get("padded_batch") is not None:
+            # Phase 14-6: the padded-batch governor's last decision per
+            # model/axis (headroom, requested vs allowed area, chosen width).
+            health_status["padded_batch"] = result["padded_batch"]
         if isinstance(result, dict) and result.get("embedding_cache") is not None:
             # Phase 7-3: cross-request embedding cache accounting.
             health_status["embedding_cache"] = result["embedding_cache"]

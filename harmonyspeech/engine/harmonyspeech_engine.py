@@ -973,6 +973,7 @@ class HarmonySpeechEngine:
         "ar_cache": {...}}``.
         ``vram`` is the Phase 4-5/10-3 summary (see :meth:`get_vram_stats`);
         ``whisper_vram`` is the Phase 10-3 boot governance report;
+        ``padded_batch`` is the Phase 14-6 padded-batch governance state;
         ``embedding_cache`` is the Phase 7-3 cache accounting (see
         :meth:`get_embedding_cache_stats`); ``ar_cache`` is the Phase 9-2 pool
         accounting (see :meth:`get_ar_cache_stats`).
@@ -1030,6 +1031,9 @@ class HarmonySpeechEngine:
             # runtime budget trip is observable on /health (it used to be
             # inferable only from the effect).
             "whisper_admission": self.get_whisper_admission(),
+            # Phase 14-6: the padded-batch governor's last decision per
+            # model/axis (requested vs allowed area, chosen width, headroom).
+            "padded_batch": self.get_padded_batch_stats(),
             "embedding_cache": self.get_embedding_cache_stats(),
             "voice_pack_cache": self.get_voice_pack_cache_stats(),
             "ar_cache": self.get_ar_cache_stats(),
@@ -1616,6 +1620,71 @@ class HarmonySpeechEngine:
             "per_window_bytes": cost,
             "active_windows": int(active_windows or 0),
         }
+
+    # ------------------------------------------------------------------
+    # Padded-batch headroom governance (Phase 14-6)
+    # ------------------------------------------------------------------
+    def get_padded_batch_stats(self) -> dict:
+        """Per-model padded-batch governance state for ``/health`` + ``/metrics``.
+
+        Shape::
+
+            {"enabled": bool,
+             "models": {<executor name>: {
+                 "model_type": str,
+                 "device": str,
+                 "headroom_bytes": int,          # last observed on that runner
+                 "axes": {<axis>: {
+                     "shrinks_total": int,       # plans the headroom reduced
+                     "headroom_bytes": int,      # last observed free device bytes
+                     "requested_area": int,      # static cap / batch_token_budget
+                     "allowed_area": int,        # effective area after headroom
+                     "width": int,               # widest planned sub-batch
+                     "max_width": int,           # max_batch_size
+                     "median_length": int,
+                     "state": "idle" | "ok" | "shrunk" | "floor",
+                 }}}}
+
+        Every configured padded family is present with all zero samples, so a
+        dashboard can tell "idle" from "absent" (the 9-2/10-1 convention). A CPU
+        runner records no axes; its configured family still appears with zeros.
+        Robust on a shell engine (``__new__`` without ``__init__``).
+        """
+        from harmonyspeech.engine.padded_batch import PADDED_MODEL_AXES, empty_axis_state
+
+        models: dict[str, dict] = {}
+        for name, model_executor in getattr(self, "model_executors", {}).items():
+            config = getattr(model_executor, "model_config", None)
+            model_type = getattr(config, "model_type", None)
+            if model_type not in PADDED_MODEL_AXES:
+                continue
+            runner = getattr(getattr(model_executor, "driver_worker", None), "model_runner", None)
+            if runner is None:
+                # Test harnesses and shell engines expose the runner directly.
+                runner = getattr(model_executor, "runner", None)
+            recorded: dict = {}
+            reader = getattr(runner, "padded_batch_stats", None)
+            if callable(reader):
+                try:
+                    recorded = dict(reader() or {})
+                except Exception as error:  # noqa: BLE001 - metrics must never break a scrape
+                    logger.warning(f"Failed to read padded-batch stats for '{name}': {error}")
+            recorded_axes = recorded.get("axes") or {}
+            axes: dict[str, dict] = {}
+            for axis in PADDED_MODEL_AXES.get(model_type, ()):
+                axes[axis] = {**empty_axis_state(), **(recorded_axes.get(axis) or {})}
+            for axis, detail in recorded_axes.items():
+                axes.setdefault(axis, {**empty_axis_state(), **(detail or {})})
+            device = recorded.get("device")
+            if not device:
+                device = str(getattr(getattr(config, "device_config", None), "device", "") or "")
+            models[name] = {
+                "model_type": model_type,
+                "device": device,
+                "headroom_bytes": int(recorded.get("headroom_bytes") or 0),
+                "axes": axes,
+            }
+        return {"enabled": bool(models), "models": models}
 
     # ------------------------------------------------------------------
     # Whisper execution lanes (Phase 10-1)

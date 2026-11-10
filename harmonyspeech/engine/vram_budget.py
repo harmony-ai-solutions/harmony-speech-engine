@@ -19,6 +19,10 @@ windows fit in the currently free device memory" — the shared-headroom bound t
 plan asks for. ``device_used_bytes`` is always the whole-device number from
 ``torch.cuda.mem_get_info`` (torch + CTranslate2 + CUDA contexts), so the
 governor automatically accounts for every resident family.
+
+:func:`headroom_limited_units` is the shared "shrink the width until it fits the
+free headroom" arithmetic. Phase 14-6 reuses it for the padded-batch model steps
+(``harmonyspeech.engine.padded_batch``), so the two governors cannot drift apart.
 """
 
 from __future__ import annotations
@@ -45,6 +49,36 @@ def per_window_bytes(peak_activation_bytes: int, windows: int) -> int:
     if windows <= 0:
         return 0
     return max(0, int(peak_activation_bytes or 0)) // windows
+
+
+def headroom_limited_units(
+    headroom_bytes: int,
+    cost_bytes: int,
+    cap: int,
+    *,
+    min_units: int = 1,
+) -> int:
+    """Largest number of ``cost_bytes`` units that fit the free headroom.
+
+    The shared arithmetic behind every "shrink the width until it fits the
+    device" governor: Whisper windows (Phase 10-3) and the padded-batch model
+    steps (Phase 14-6). ``cap`` is the configured/measured ceiling and the
+    result is clamped to ``[min_units, cap]``; a non-positive cost means "no
+    measured unit cost", which returns ``cap`` rather than throttling on a
+    guess, and an exhausted headroom returns ``min_units`` so a governor can
+    shrink to the floor but never deadlock.
+    """
+    cap = max(0, int(cap or 0))
+    if cap == 0:
+        return 0
+    cost = max(0, int(cost_bytes or 0))
+    if cost <= 0:
+        return cap
+    floor = max(0, min(int(min_units or 0), cap))
+    headroom = int(headroom_bytes or 0)
+    if headroom <= 0:
+        return floor
+    return max(floor, min(cap, headroom // cost))
 
 
 def allowed_windows(
@@ -102,11 +136,7 @@ def allowed_windows(
         # No measured/derivable unit cost: do not throttle on a guess.
         return cap
 
-    floor = max(0, min(int(min_windows or 0), cap))
-    headroom = budget - used
-    if headroom <= 0:
-        return floor
-    return max(floor, min(cap, headroom // cost))
+    return headroom_limited_units(budget - used, cost, cap, min_units=min_windows)
 
 
 def projected_whisper_peak(entries) -> int:
@@ -188,6 +218,7 @@ __all__ = [
     "DEFAULT_WHISPER_MAX_AUDIO_SECONDS",
     "allowed_windows",
     "evaluate_whisper_budget",
+    "headroom_limited_units",
     "per_window_bytes",
     "projected_whisper_peak",
 ]

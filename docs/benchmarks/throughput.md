@@ -2870,3 +2870,50 @@ CUDA_VISIBLE_DEVICES=1 python scripts/audio_regression.py --families <8> --axis 
 | chatterbox_vc | 2 | 2.62 | 762.6 | 767.0 | 740.8 | 0 |
 | chatterbox_vc | 4 | 3.53 | 1117.2 | 1155.5 | 1084.0 | 0 |
 | chatterbox_vc | 8 | 3.95 | 2011.9 | 2077.7 | 1917.1 | 0 |
+### phase14-6-verify-ov2-on — 2026-11-10T16:11:21Z
+
+* commit `31d85fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | on | 807 | 4 | 0.72 | 1386.1 |
+### phase14-6-verify-ov2-off4 — 2026-11-10T16:11:32Z
+
+* commit `31d85fc` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=4 req/s | c=4 p50 (ms) |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | off | 807 | 1 | 0.72 | 5545.2 |
+
+### Follow-up 14-6 — headroom-aware padded-batch governance, host verification (2026-11-10)
+
+The Phase 14 verification finding above (shipped config ⇒ silent WDDM paging on
+long-row OV tone-converter batches) was fixed by generalizing 10-3's runtime
+governance to every padded-batch step (owner decision 2026-11-10; TDD — 35
+red tests written first, then green; task log:
+`14-6-PaddedBatchHeadroomGovernance.md`). Shipped config re-run
+(`phase14-6-verify-*` blocks above, GPU 1):
+
+| Row (shipped config) | 12-9 fixture record | pre-14-6 shipped | **14-6 shipped** |
+|---|---|---|---|
+| openvoice_v2 split=on c=1 | 1478 ms | 7150 ms | **1386 ms** |
+| openvoice_v2 split=off c=4 | 4998 ms | 30764 ms | **5545 ms** |
+
+The cliff is gone: the planner reads live device headroom at plan time
+(observed 2.29 GiB → 0.90 GiB during the floods), shrinks the padded area
+(`7500 → 6597/2586` mel frames; `1024 → 512` phones), warns per state
+change (`Padded batch shrunk for 'ov2-tone-converter' (mel_frame axis):
+padded area 7500 -> 2586 units (0.90 GiB free device headroom, 372230 B/unit)`
+), and counts on `hse_padded_batch_shrink_total{model,axis}` (TC 7, synth 6
+during the run) with `hse_padded_batch_headroom_bytes` gauges and a
+`/health padded_batch` block. All governed models register zero-state;
+CPU-placed steps are exempt. Recorded limitation: `--scenario longform` has
+no `openvoice_v1` family, so OV1 has no live long-row datapoint — its
+governance is the same resolver and axis costs, unit-pinned for both OV model
+types and visible registered in `/health`.

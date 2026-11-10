@@ -153,6 +153,52 @@ tone converters (a `B=2` 43 s paragraph already saturates compute; `B=8` of
 3660-frame rows reserved 9796 MiB and stalled 400 s). Which of those steps
 actually batches today is the table at the top of this page.
 
+On a CUDA device those caps are **ceilings**: at plan time the engine also reads
+the device's free memory and shrinks the per-step area when the cap does not fit,
+warning once per state change (Phase 14-6, below). Ample headroom plans exactly
+as before, so outputs are unchanged; CPU steps keep the static cap only.
+
+### Headroom-aware governance for padded steps (Phase 14-6)
+
+The Phase 12-9 caps above are **static constants** calibrated under the
+benchmark fixture's ~5.6 GiB idle headroom. On a denser catalogue (the shipped
+config leaves ~2.5–3.5 GiB free) a capped-but-oversized batch still crosses the
+Windows WDDM dedicated-VRAM limit and pages silently into Shared GPU Memory —
+a measured 6–40× stall. Phase 14-6 generalizes the Phase 10-3 Whisper runtime
+governance to the padded-batch model steps:
+
+1. At plan time, on a CUDA device, the engine reads the device's free memory
+   (`torch.cuda.mem_get_info`, or the injectable provider the tests use).
+2. The requested area — the per-model `batch_token_budget` or
+   `max_batch_size × median length`, capped at the 12-9 static budget — is
+   reduced to what the free headroom can hold, never below a width of 1.
+3. The static cap stays the **ceiling**: headroom can only shrink it, never
+   widen it.
+4. A warning is emitted **once per state change** (ample → shrunk, chosen-width
+   change, or recovery), naming the model, axis, requested vs allowed area, free
+   headroom and chosen width; repeated plans at the same state stay quiet.
+5. `hse_padded_batch_shrink_total{model,axis}` counts the shrink decisions and
+   `hse_padded_batch_headroom_bytes{model,axis,device}` reports the last
+   observed free device memory. `/health` carries a `padded_batch` block with
+   the last decision per model/axis, next to `whisper_vram`/`whisper_admission`.
+6. CPU steps are untouched (no paging cliff, static cap only). Requests are
+   never refused: pressure reduces the batch width and the engine keeps serving.
+
+| Step family | Padding axis | Static cap (ceiling) | Headroom behaviour |
+|---|---|---|---|
+| OpenVoice V1 synthesizer, MeloTTS | phones | `DEFAULT_PHONE_BATCH_BUDGET = 1024` | area reduced when the free headroom holds less than 1.8 GiB/1024 phones worth |
+| OpenVoice V1/V2 tone converters | mel frames | `DEFAULT_MEL_FRAME_BATCH_BUDGET = 7500` | area reduced when the free headroom holds less than 2.6 GiB/7500 frames worth |
+| Speaker embedders, Harmony Speech vocoder, VoiceFixer restorer/vocoder | mel frames | `max_batch_size × median` | same mel-frame activation cost per padded frame |
+| Chatterbox S3Gen vocode, Chatterbox VC vocode | speech tokens | `max_batch_size × median` | **not governed**: no recorded cost model for the speech-token axis (the 14-6 coverage log records the reason) |
+
+The activation-cost constants are derived from the recorded 12-9 peaks
+(`2.6 GiB / 7500` mel frames; `1.8 GiB / 1024` phones), and the 14-6 log records
+why documented constants were chosen over a per-model startup probe. They are
+deliberately conservative (peak reserved ÷ capped area, which includes the
+model's weights), so the governor can only shrink earlier than strictly
+necessary — never allow an oversized batch.
+
+
 ## Padded batching for speaker embedders (Phase 8-2)
 
 The two embed steps that a cloning request runs before synthesis use the same

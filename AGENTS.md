@@ -10,7 +10,7 @@ This project uses Roo Code with custom rules stored in `.roo/rules/`. Read these
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **harmony-speech-engine** (14186 symbols, 24388 relationships, 277 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **harmony-speech-engine** (14388 symbols, 24747 relationships, 275 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

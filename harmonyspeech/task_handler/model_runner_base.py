@@ -118,6 +118,15 @@ from harmonyspeech.common.request import EngineRequest, ExecutorResult
 # implementations live in ``common.serialization`` (weights_only=True loaders).
 from harmonyspeech.common.serialization import conditionals_to_payload as _conditionals_to_payload  # noqa: F401
 from harmonyspeech.common.serialization import load_embedding_tensor as _load_embedding_tensor  # noqa: F401
+from harmonyspeech.engine.padded_batch import (
+    allowed_padded_area,
+    bytes_per_unit_for,
+    empty_axis_state,
+    format_padded_batch_restored,
+    format_padded_batch_warning,
+    median_length,
+    plan_width,
+)
 from harmonyspeech.engine.whisper_lane_metrics import WHISPER_QUEUE_WAIT_BUCKETS
 from harmonyspeech.modeling.loader import get_model, get_model_config, get_model_flavour
 from harmonyspeech.modeling.models.harmonyspeech.common import preprocess_wav
@@ -641,6 +650,14 @@ class ModelRunnerBase:
         # the count of batcher failures that fell back to the sequential path.
         self._whisper_batcher_obj: WhisperWindowBatcher | None = None
         self._whisper_batch_fallbacks = 0
+        # Phase 14-6 headroom-aware padded-batch governance. `_padded_batch_state`
+        # is the per-axis last-decision/observability record surfaced by
+        # `padded_batch_stats`; `cuda_free_bytes_provider` is the injectable
+        # headroom seam (tests simulate a card without a GPU; None uses
+        # torch.cuda.mem_get_info). CPU runners never read it.
+        self._padded_batch_state: dict = {}
+        self.cuda_free_bytes_provider = None
+        self._padded_headroom_warned = False
 
         # Baseline Chatterbox conditioning state, captured right after the
         # model is loaded (see `_capture_baseline_state`). None means "not
@@ -651,6 +668,158 @@ class ModelRunnerBase:
         # roles; created at model load (`_init_ar_runner`) when the pool and the
         # family flag allow it. None keeps the sequential loop.
         self._ar_runner = None
+
+    # ------------------------------------------------------------------
+    # Headroom-aware padded-batch governance (Phase 14-6)
+    # ------------------------------------------------------------------
+
+    def _device_free_bytes(self) -> int | None:
+        """Free device bytes for this runner at plan time, or None if not CUDA.
+
+        This is the injectable seam the hermetic suite drives: assign
+        ``runner.cuda_free_bytes_provider = lambda: simulated_free_bytes`` to
+        simulate a card without touching one. Without a provider the real
+        ``torch.cuda.mem_get_info`` is read; on a CPU runner (or when the read is
+        unavailable) the governor stays out of the way and the static cap applies
+        exactly as before.
+        """
+        device = str(getattr(self, "device", "cpu"))
+        if not device.startswith("cuda"):
+            return None
+        provider = getattr(self, "cuda_free_bytes_provider", None)
+        if callable(provider):
+            try:
+                return max(0, int(provider()))
+            except Exception as error:  # noqa: BLE001 - governance must never break a step
+                self._log_headroom_unavailable(error)
+                return None
+        try:
+            index = torch.device(device).index
+            free_bytes, _total_bytes = torch.cuda.mem_get_info(index)
+            return max(0, int(free_bytes))
+        except Exception as error:  # noqa: BLE001 - fall back to the static cap
+            self._log_headroom_unavailable(error)
+            return None
+
+    def _log_headroom_unavailable(self, error: Exception) -> None:
+        """Log the headroom-read fallback once per runner (never per step)."""
+        if getattr(self, "_padded_headroom_warned", False):
+            return
+        self._padded_headroom_warned = True
+        logger.debug(
+            "Padded-batch governance cannot read device headroom for "
+            f"'{getattr(self.model_config, 'name', '?')}' ({error}); "
+            "using the static padded-area cap"
+        )
+
+    def _plan_padded_batches(
+        self,
+        lengths,
+        max_batch_size: int,
+        *,
+        axis: str,
+        max_budget: int | None = None,
+        bytes_per_unit: int | None = None,
+    ) -> list[list[int]]:
+        """Plan length-similar groups under the static cap and the live headroom.
+
+        Single resolver for every ``default_token_budget`` consumer (Phase
+        14-6): the requested area is the per-model ``batch_token_budget`` or
+        ``max_batch_size x median length`` capped at the axis's 12-9 static
+        budget; on CUDA the live free device memory can only shrink that area
+        (never widen it, floor 1). Ample headroom returns exactly the pre-14-6
+        plan, so buffered/streaming outputs stay byte-identical. An axis with no
+        recorded cost model (``bytes_per_unit_for`` returns ``None``) plans
+        exactly as before and records nothing.
+        """
+        batch_size = max(1, int(max_batch_size))
+        requested_area = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
+            lengths, batch_size, max_budget=max_budget
+        )
+        budget = requested_area
+        decision = None
+        if requested_area is not None:
+            cost = bytes_per_unit if bytes_per_unit is not None else bytes_per_unit_for(axis)
+            free_bytes = self._device_free_bytes() if cost is not None else None
+            if free_bytes is not None:
+                decision = allowed_padded_area(
+                    int(requested_area), free_bytes, axis, bytes_per_unit=cost
+                )
+                budget = int(decision["allowed_area"])
+        groups = plan_batches(lengths, batch_size, budget)
+        if decision is not None:
+            self._record_padded_batch_plan(axis, decision, groups, lengths, batch_size)
+        return groups
+
+    def _record_padded_batch_plan(self, axis, decision, groups, lengths, max_batch_size) -> None:
+        """Record the last decision and emit the transition message (no spam).
+
+        The warning/restore fires only when the *governed state* changes — the
+        batch became shrunk, its chosen width changed, or it recovered — never on
+        every plan. A few MiB of headroom jitter that leaves the width intact
+        therefore stays quiet while the metrics and ``/health`` still track the
+        last observed values.
+        """
+        state = self.__dict__.setdefault("_padded_batch_state", {})
+        last = state.setdefault("_last", {})
+        entry = state.setdefault(axis, empty_axis_state())
+        width = plan_width(groups)
+        shrunk = bool(decision.get("shrunk"))
+        new_state = "floor" if shrunk and width <= 1 else ("shrunk" if shrunk else "ok")
+        previous_state = entry.get("state", "idle")
+        entry.update(
+            {
+                "headroom_bytes": int(decision["headroom_bytes"]),
+                "requested_area": int(decision["requested_area"]),
+                "allowed_area": int(decision["allowed_area"]),
+                "width": int(width),
+                "max_width": int(max_batch_size),
+                "median_length": median_length(lengths),
+                "state": new_state,
+            }
+        )
+        if shrunk:
+            entry["shrinks_total"] = int(entry.get("shrinks_total", 0)) + 1
+
+        signature = (shrunk, int(width))
+        if last.get(axis) == signature:
+            return
+        last[axis] = signature
+        model_name = getattr(self.model_config, "name", None) or "?"
+        if shrunk:
+            logger.warning(
+                format_padded_batch_warning(model_name, decision, width, max_batch_size)
+            )
+        elif previous_state in ("shrunk", "floor"):
+            logger.info(
+                format_padded_batch_restored(model_name, decision, width, max_batch_size)
+            )
+
+    def padded_batch_stats(self) -> dict:
+        """Per-axis governance state for ``/metrics`` + ``/health`` (Phase 14-6).
+
+        ``enabled`` means "this runner is a CUDA runner" (the governance can
+        read headroom at plan time); a CPU runner reports ``False`` with no axes,
+        and the engine zero-fills configured models so the Prometheus families
+        are never absent.
+        """
+        device = str(getattr(self, "device", "cpu"))
+        state = getattr(self, "_padded_batch_state", None) or {}
+        axes = {
+            axis: dict(entry)
+            for axis, entry in state.items()
+            if not str(axis).startswith("_") and isinstance(entry, dict)
+        }
+        headroom = max(
+            (int(entry.get("headroom_bytes", 0) or 0) for entry in axes.values()),
+            default=0,
+        )
+        return {
+            "enabled": device.startswith("cuda"),
+            "device": device,
+            "headroom_bytes": int(headroom),
+            "axes": axes,
+        }
 
     def _load_model(self):
         # Every load (first boot or reload) starts a fresh cache generation:
@@ -1199,10 +1368,9 @@ class ModelRunnerBase:
 
         lengths = [int(row[2].numel()) for row in finished]
         batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-        budget = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
-            lengths, batch_size
-        )
-        groups = plan_batches(lengths, batch_size, budget)
+        # Speech-token axis: no recorded 12-9 cost model, so the governor records
+        # the reason and leaves the pre-14-6 plan untouched (coverage log).
+        groups = self._plan_padded_batches(lengths, batch_size, axis="speech_token")
 
         for group in groups:
             group_rows = [finished[position] for position in group]
@@ -1609,10 +1777,9 @@ class ModelRunnerBase:
                     partials: dict[int, list[np.ndarray]] = {index: [] for index in misses}
                     plan_lengths = [int(row[1].shape[0]) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(
-                        plan_lengths, batch_size
+                    groups = self._plan_padded_batches(
+                        plan_lengths, batch_size, axis="mel_frame"
                     )
-                    groups = plan_batches(plan_lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         with torch.no_grad():
@@ -1779,10 +1946,9 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                budget = self.model_config.batch_token_budget or default_token_budget(
-                    frame_lengths, batch_size
+                groups = self._plan_padded_batches(
+                    frame_lengths, batch_size, axis="mel_frame"
                 )
-                groups = plan_batches(frame_lengths, batch_size, budget)
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
@@ -1846,6 +2012,10 @@ class ModelRunnerBase:
         # The encoder batch below covers the reference encoder; the per-segment
         # STFT frontend stays per row (it reflect-pads every clip on its own).
         assert_batch_aligned("_execute_openvoice_tone_converter_encoder", inputs, requests_to_batch)
+        # Phase 14-6: rows are planned on sample counts while the padded axis is
+        # mel frames (one frame per hop_length samples), so the measured
+        # per-frame activation cost is converted to the plan's own unit.
+        hop_length = max(1, int(hf_config.data.hop_length))
 
         def segment_spectrogram(segment):
             """Per-segment STFT: the historical frontend, unchanged."""
@@ -1919,10 +2089,14 @@ class ModelRunnerBase:
                     # same length-similar grouping without a second STFT.
                     plan_lengths = [int(segment.waveform.numel()) for _, segment in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(
-                        plan_lengths, batch_size
+                    groups = self._plan_padded_batches(
+                        plan_lengths,
+                        batch_size,
+                        axis="mel_frame",
+                        bytes_per_unit=bytes_per_unit_for(
+                            "mel_frame", units_per_frame=hop_length
+                        ),
                     )
-                    groups = plan_batches(plan_lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         specs = [segment_spectrogram(segment) for _row, segment in group_rows]
@@ -2072,10 +2246,12 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(spec.size(-1)) for _index, spec in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                budget = self.model_config.batch_token_budget or default_token_budget(
-                    frame_lengths, batch_size, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
+                groups = self._plan_padded_batches(
+                    frame_lengths,
+                    batch_size,
+                    axis="mel_frame",
+                    max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET,
                 )
-                groups = plan_batches(frame_lengths, batch_size, budget)
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
@@ -2343,10 +2519,12 @@ class ModelRunnerBase:
                     segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
                     lengths = [int(row[1].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(
-                        lengths, batch_size, max_budget=DEFAULT_PHONE_BATCH_BUDGET
+                    groups = self._plan_padded_batches(
+                        lengths,
+                        batch_size,
+                        axis="phone",
+                        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
                     )
-                    groups = plan_batches(lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         with torch.no_grad():
@@ -2488,10 +2666,12 @@ class ModelRunnerBase:
                     segment_audio: list[list[np.ndarray]] = [[] for _ in inputs]
                     lengths = [int(row[1][2].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    budget = self.model_config.batch_token_budget or default_token_budget(
-                        lengths, batch_size, max_budget=DEFAULT_PHONE_BATCH_BUDGET
+                    groups = self._plan_padded_batches(
+                        lengths,
+                        batch_size,
+                        axis="phone",
+                        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
                     )
-                    groups = plan_batches(lengths, batch_size, budget)
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         with torch.no_grad():
@@ -2645,10 +2825,9 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[2]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                budget = self.model_config.batch_token_budget or default_token_budget(
-                    frame_lengths, batch_size
+                groups = self._plan_padded_batches(
+                    frame_lengths, batch_size, axis="mel_frame"
                 )
-                groups = plan_batches(frame_lengths, batch_size, budget)
                 per_request: dict[int, list[torch.Tensor]] = {index: [] for index, _ in rows}
                 forwarded = 0
                 for group in groups:
@@ -2751,10 +2930,9 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                budget = self.model_config.batch_token_budget or default_token_budget(
-                    frame_lengths, batch_size
+                groups = self._plan_padded_batches(
+                    frame_lengths, batch_size, axis="mel_frame"
                 )
-                groups = plan_batches(frame_lengths, batch_size, budget)
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
@@ -3379,11 +3557,11 @@ class ModelRunnerBase:
 
         lengths = [int(token.numel()) for token in tokens]
         batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-        budget = getattr(self.model_config, "batch_token_budget", None) or default_token_budget(
-            lengths, batch_size
-        )
+        # Speech-token axis: no recorded 12-9 cost model, so the governor records
+        # the reason and leaves the pre-14-6 plan untouched (coverage log).
+        groups = self._plan_padded_batches(lengths, batch_size, axis="speech_token")
         results: list = [None] * len(inputs)
-        for group in plan_batches(lengths, batch_size, budget):
+        for group in groups:
             try:
                 rows = [
                     S3GenRow(
