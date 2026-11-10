@@ -151,7 +151,7 @@ model_configs:
   - name: "ov2-synthesizer-ja"
     model: "myshell-ai/MeloTTS-Japanese"
     model_type: "MeloTTSSynthesizer"
-    language: "JA"
+    language: "JP"           # fixed 2026-11-10: MeloTTS language key is "JP"; "JA" failed the supported-language assert at request time (config.yml was already right)
     voices: [ "JP" ]
     max_batch_size: 8
     batched_inference: true

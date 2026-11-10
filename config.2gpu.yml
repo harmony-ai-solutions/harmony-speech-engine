@@ -1,0 +1,347 @@
+# ============================================================================
+# Harmony Speech Engine — 2x RTX 4060 Ti 16 GB placement (pipeline split)
+# ============================================================================
+# Generated from the placement recommendation (2026-11-10) built on the
+# feat/engine-overhaul branch measurements (docs/benchmarks/*, Phase 11-0
+# multi-device fixes, Phase 14-6 padded-batch headroom governance).
+#
+#   cuda:0  AR / clone-quality card    Chatterbox block (base group MUST stay
+#                                      co-located: the weight registry dedups
+#                                      S3Gen/VE/T3 per (repo,rev,component,
+#                                      dtype) with no device in the key) +
+#                                      VoiceFixer (rides this card to keep the
+#                                      dense card's whisper governor clean).
+#                                      Resident ~10.0 GiB, est. peak ~11.5 GiB.
+#   cuda:1  dense-compute card         Whisper x2 + OpenVoice V1 + Melo/OV2.
+#                                      Resident ~3.4 GiB; whisper slice capped
+#                                      by whisper_vram_budget_bytes (7.5 GiB,
+#                                      sized above the projected probe peaks:
+#                                      turbo 2x300s ~5740 MiB + tiny 2x300s
+#                                      ~1457 MiB = ~7.0 GiB).
+#   cpu     hs1 x3, silero-vad, kitten x4 (12 shared threads: ORT intra_op=4
+#           recommended for kitten, torch CPU threads ~4-6).
+#
+# Knob deltas vs config.gpu.yml (see docs/batching.md + the recommendation):
+#   * ar_inference.kv_cache_budget_bytes 3.5 GiB — the pool owns ONE BUDGET
+#     PER DEVICE; cuda:0 carries en w4 (8 slabs x135) + multilingual w4
+#     (8 x135) + turbo w8 (8 x144) = 3312 MiB <= 3584 MiB.
+#   * chatterbox_turbo admission width 4 -> 8 (fastest AR family; more rows
+#     per decode step amortize the 4060 Ti's lower bandwidth). RE-GATE before
+#     production: tests/e2e/tts/test_chatterbox_ar_parity.py + the
+#     chatterbox-exhaustion scenario.
+#   * faster-whisper-tiny num_workers 4 -> 2 (Phase 10-5 M-sweep: width is
+#     flat; 2 workers is the Phase 11-0 probe-validated shape).
+#   * whisper_vram_budget_bytes set (hard boot bound + live governor);
+#     whisper_max_audio_seconds stays 300 s on the shared card — raise both
+#     together if you admit 8-min audio (projected peak scales with it).
+#   * embedding cache 1000/1 GiB -> 4000/4 GiB (latency-neutral, RAM is
+#     plentiful; saves GPU embed work on repeated voices).
+#
+# Boot:
+#   python -m harmonyspeech.endpoints.openai.api_server \
+#       --config-file-path config.2gpu.yml --port 2242
+# (No CUDA_VISIBLE_DEVICES masking — every secondary card is spelled with an
+# explicit index per docs/models.md#multi-device-placement. hs1 checkpoints
+# still need HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1.)
+
+standard_voice_pack: true
+voice_pack_warmup: true
+
+embedding_cache_enabled: true
+embedding_cache_ttl_s: 300
+embedding_cache_max_entries: 4000
+embedding_cache_max_bytes: 4294967296   # 4 GiB
+
+# Hard device-level ceiling for the whisper slice on cuda:1 (torch + CT2 +
+# contexts; the governor shrinks allowed_windows as live device-used rises).
+whisper_vram_budget_bytes: 8053063680  # 7.5 GiB > ~7.0 GiB projected peaks
+whisper_max_audio_seconds: 300
+
+ar_inference:
+  kv_cache_budget_bytes: 3758096384    # 3.5 GiB per device; cuda:0 fits 3312 MiB of arenas
+  default_cap_tokens: 1536             # ceiling; en/multi clamp to 1152 (Perceiver), turbo 1536
+  enabled: true
+
+model_configs:
+  # ---------------------------------------------------------------- cuda:0 --
+  # Chatterbox base group (shares S3Gen/VE/T3 — keep on one card)
+  - name: "chatterbox"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxTTS"
+    watermark: true
+    max_batch_size: 4        # AR admission width; 8 slabs x 135 MiB
+    dtype: "float16"
+    s3gen_precision: "float16"
+    backbone_group: "chatterbox-base"
+    device_config:
+      device: "cuda:0"
+
+  - name: "chatterbox_turbo"
+    model: "resemble-ai/chatterbox-turbo"
+    model_type: "ChatterboxTurboTTS"
+    watermark: true
+    max_batch_size: 8        # widened from 4: 8 slabs x 144 MiB; re-gate parity+exhaustion
+    dtype: "float16"
+    s3gen_precision: "float16"
+    device_config:
+      device: "cuda:0"
+
+  - name: "chatterbox_multilingual"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxMultilingualTTS"
+    watermark: true
+    max_batch_size: 4        # AR admission width; 8 slabs x 135 MiB
+    dtype: "float16"
+    s3gen_precision: "float16"
+    backbone_group: "chatterbox-base"
+    device_config:
+      device: "cuda:0"
+
+  - name: "chatterbox_vc"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxVC"
+    watermark: true
+    max_batch_size: 8        # padded batch: source tokenize + S3Gen vocode
+    batched_inference: true
+    dtype: "float16"
+    s3gen_precision: "float16"
+    backbone_group: "chatterbox-base"
+    device_config:
+      device: "cuda:0"
+
+  - name: "chatterbox_embedding"
+    model: "resemble-ai/chatterbox"
+    model_type: "ChatterboxEmbedding"
+    max_batch_size: 4        # loop_admission depth = the card's AR width
+    dtype: "float16"
+    backbone_group: "chatterbox-base"
+    device_config:
+      device: "cuda:0"
+
+  # VoiceFixer on the AR card (independent of the clone/STT stack)
+  - name: "voicefixer-restorer"
+    model: "jlmarrugom/voice_fixer"
+    model_type: "VoiceFixerRestorer"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+
+  - name: "voicefixer-vocoder"
+    model: "jlmarrugom/voice_fixer"
+    model_type: "VoiceFixerVocoder"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:0"
+
+  # ---------------------------------------------------------------- cuda:1 --
+  # STT + OpenVoice/Melo (dense compute)
+  - name: "faster-whisper-large-v3-turbo"
+    model: "large-v3-turbo"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    num_workers: 2
+    batched_inference: true
+    whisper_window_batch_size: 8
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "faster-whisper-tiny"
+    model: "tiny"
+    model_type: "FasterWhisper"
+    max_batch_size: 16
+    num_workers: 2           # M-sweep: flat; 2 is the 11-0 probe-validated shape
+    batched_inference: true
+    whisper_window_batch_size: 8
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov1-synthesizer-en"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "EN"
+    voices: ["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov1-synthesizer-zh"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1Synthesizer"
+    language: "ZH"
+    voices: ["default"]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov1-tone-converter"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverter"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov1-tone-converter-encoder"
+    model: "myshell-ai/openvoice"
+    model_type: "OpenVoiceV1ToneConverterEncoder"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-synthesizer-en"
+    model: "myshell-ai/MeloTTS-English-v3"
+    model_type: "MeloTTSSynthesizer"
+    language: "EN"
+    voices: [ "EN-Newest" ]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-synthesizer-zh"
+    model: "myshell-ai/MeloTTS-Chinese"
+    model_type: "MeloTTSSynthesizer"
+    language: "ZH"
+    voices: [ "ZH" ]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-synthesizer-es"
+    model: "myshell-ai/MeloTTS-Spanish"
+    model_type: "MeloTTSSynthesizer"
+    language: "ES"
+    voices: [ "ES" ]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-synthesizer-fr"
+    model: "myshell-ai/MeloTTS-French"
+    model_type: "MeloTTSSynthesizer"
+    language: "FR"
+    voices: [ "FR" ]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-synthesizer-ja"
+    model: "myshell-ai/MeloTTS-Japanese"
+    model_type: "MeloTTSSynthesizer"
+    language: "JP"            # MeloTTS language key is "JP" (inputs.py assert + cleaner map); "JA" breaks at request time
+    voices: [ "JP" ]
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-tone-converter"
+    model: "myshell-ai/openvoicev2"
+    model_type: "OpenVoiceV2ToneConverter"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  - name: "ov2-tone-converter-encoder"
+    model: "myshell-ai/openvoicev2"
+    model_type: "OpenVoiceV2ToneConverterEncoder"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cuda:1"
+
+  # ------------------------------------------------------------------- cpu --
+  - name: "hs1-encoder"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechEncoder"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-synthesizer"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechSynthesizer"
+    max_batch_size: 1
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "hs1-vocoder"
+    model: "harmony-ai/harmony-speech-v1"
+    model_type: "HarmonySpeechVocoder"
+    max_batch_size: 8
+    batched_inference: true
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "silero-vad"
+    model: "silero-vad"
+    model_type: "SileroVAD"
+    load_format: "onnx"
+    max_batch_size: 16
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "kitten-tts-mini"
+    model: "KittenML/kitten-tts-mini-0.8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "kitten-tts-micro"
+    model: "KittenML/kitten-tts-micro-0.8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "kitten-tts-nano"
+    model: "KittenML/kitten-tts-nano-0.8-fp32"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
+
+  - name: "kitten-tts-nano-int8"
+    model: "KittenML/kitten-tts-nano-0.8-int8"
+    model_type: "KittenTTSSynthesizer"
+    voices: ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
+    max_batch_size: 4
+    dtype: "float32"
+    device_config:
+      device: "cpu"
