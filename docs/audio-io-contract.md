@@ -168,9 +168,10 @@ never selects the output language: the model always translates to English.
 
 | Field | Values | Notes |
 |---|---|---|
-| `format` | `wav` (default), `flac`, `ogg`, `mp3`, `opus`, `pcm`, `aac` | `aac` only when `ffmpeg` is installed; `opus` only when libsndfile supports it (current builds do) |
-| `sample_rate` | `8000`, `16000`, `22050`, `24000`, `32000`, `44100`, `48000` | Omitted → model native rate |
-| `stream` | `false` | `true` is rejected with 400 (streaming is not implemented yet) |
+| `format` | `wav` (default), `flac`, `ogg`, `mp3`, `opus`, `pcm`, `aac` | `aac` only when `ffmpeg` is installed; `opus` only when libsndfile supports it (current builds do). While streaming, only `wav` and `pcm` are accepted |
+| `sample_rate` | `8000`, `16000`, `22050`, `24000`, `32000`, `44100`, `48000` | Omitted → model native rate. Works while streaming |
+| `stream_format` | `audio`, `sse` | Setting it selects streaming on `/v1/audio/speech` (see the [streaming section](api.md#streaming-output)); both envelopes require `format` `wav`/`pcm` |
+| `stream` | `false` | Deprecated alias for `stream_format: "audio"` |
 
 Behavior:
 

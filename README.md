@@ -19,6 +19,7 @@ a variety of Speech-related model architectures for Text-To-Speech, Speech-To-Te
 - Cross-request embedding cache: repeated reference audio skips the speaker-embedding/conditioning work, bounded by age, entry count and memory, observable on `/health` and `/metrics`, and tunable or disable-able per deployment (See [Embedding cache](docs/embedding-cache.md)).
 - Shared AR KV-cache pool: one device-wide, size-capped budget for token-level autoregressive caches, with a per-request slot allocator, startup budget validation, and slot/footprint/grant accounting on `/health` and `/metrics`; a full pool falls back to sequential execution instead of failing (See [AR KV-cache pool](docs/ar-cache.md)).
 - Broad audio I/O: WAV/FLAC/OGG/MP3 input out of the box (AAC/M4A/WebM/AMR with ffmpeg), and `output_options` that really converts to WAV/FLAC/OGG/MP3/Opus/PCM (AAC with ffmpeg) at a requested sample rate. Audio can be sent as JSON base64 **or** as a `multipart/form-data` file upload (See [Audio I/O contract](docs/audio-io-contract.md)).
+- Streaming TTS: `/v1/audio/speech` can stream a long response as it is synthesised — `stream_format: "audio"` for a chunked binary WAV/PCM body or `"sse"` for Server-Sent Events carrying base64 PCM deltas, with gapless chunk joins, a strict pre-synthesis admission matrix, `X-Audio-*` response headers and client-disconnect abort; the deprecated `stream: true` alias maps to `"audio"` (See [API reference](docs/api.md#streaming-output)).
 - GPU & CPU Inference
 - Huggingface Integration
 - Interactive UI

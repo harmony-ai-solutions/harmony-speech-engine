@@ -228,10 +228,28 @@ class AudioOutputOptions(BaseModel):
         default=None,
         description=(
             "Resample the output to this rate in Hz. Supported: 8000, 16000, 22050, 24000, 32000, 44100, 48000. "
-            "When omitted the model's native rate is kept."
+            "When omitted the model's native rate is kept. While streaming, the effective (target) rate is "
+            "reported in the X-Audio-Sample-Rate response header."
         ),
     )
-    stream: bool | None = False
+    stream_format: Literal["audio", "sse"] | None = Field(
+        default=None,
+        description=(
+            "Streaming envelope: 'audio' (chunked binary WAV/PCM) or 'sse' (Server-Sent Events). "
+            "Setting this field selects streaming (matching OpenAI's /v1/audio/speech, where the body streams "
+            "once a format is chosen). Streaming is served on /v1/audio/speech only and requires "
+            "`format` to be 'wav' or 'pcm'; `trim_silence`, `fix_internal_silence` and non-native `speed` are "
+            "rejected because they are whole-buffer-only post-processing. `sample_rate` and `remove_dc_offset` "
+            "are supported while streaming."
+        ),
+    )
+    stream: bool | None = Field(
+        default=False,
+        description=(
+            "Deprecated alias for `stream_format: 'audio'` (kept for OpenAI-compatible clients). "
+            "`true` selects the binary streaming envelope; an explicit `stream_format` wins when both are set."
+        ),
+    )
 
 
 class BaseRequest(BaseModel):

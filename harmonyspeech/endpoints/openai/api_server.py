@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import APIRouter, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from loguru import logger
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
@@ -52,7 +52,10 @@ from harmonyspeech.endpoints.openai.request_envelope import (
 )
 from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
-from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
+from harmonyspeech.endpoints.openai.serving_text_to_speech import (
+    OpenAIServingTextToSpeech,
+    StreamingAudioResponse,
+)
 from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
@@ -116,14 +119,19 @@ async def lifespan(app: fastapi.FastAPI):
 
 
 # Prometheus metrics: the default registry's series plus the engine's VRAM,
-# embedding-cache, Whisper-lane and AR-cache gauges/counters (Phase 4-5, 7-3,
-# 10-1, 9-2). Rendered by hand so a scrape never needs a running GPU — or even a
-# live cache — to return a well-formed body with every series present.
+# embedding-cache, Whisper-lane and AR-cache gauges/counters and the serving
+# layer's streaming-TTS counters (Phase 4-5, 7-3, 10-1, 9-2, 14-5). Rendered by
+# hand so a scrape never needs a running GPU — or even a live cache — to return
+# a well-formed body with every series present.
 @router.get(
     "/metrics",
-    description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode).",
+    description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode + streaming TTS).",
 )
 async def metrics() -> Response:
+    from harmonyspeech.endpoints.openai.streaming_metrics import (
+        get_stream_stats,
+        render_stream_metrics,
+    )
     from harmonyspeech.engine.ar_cache_metrics import render_ar_cache_metrics
     from harmonyspeech.engine.ar_decode_metrics import render_ar_decode_metrics
     from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
@@ -168,11 +176,13 @@ async def metrics() -> Response:
             logger.warning(f"Failed to read AR decode stats: {exc}")
             decode_stats = None
         body += render_ar_decode_metrics(decode_stats)
+        body += render_stream_metrics(get_stream_stats())
     else:
         body += render_embedding_cache_metrics(None)
         body += render_whisper_lane_metrics(None)
         body += render_ar_cache_metrics(None)
         body += render_ar_decode_metrics(None)
+        body += render_stream_metrics(get_stream_stats())
     return PlainTextResponse(body, media_type=CONTENT_TYPE_LATEST)
 
 
@@ -292,15 +302,29 @@ async def create_speech(raw_request: Request, x_api_key: str | None = Header(Non
     Accepts a JSON body (primary, OpenAI-style) or a multipart/form-data body
     for voice cloning, where the reference audio is uploaded as a file part
     instead of base64 inside JSON.
+
+    A request that selects a streaming envelope returns a
+    :class:`~harmonyspeech.endpoints.openai.serving_text_to_speech.StreamingAudioResponse`
+    (Phase 14-3/14-4): the serving layer already primed the first frame, so a
+    pre-first-byte failure is a normal JSON error above and headers are only
+    committed for a stream that has audio. The response object carries the body
+    iterator (binary frames or SSE event text), the media type and the exact
+    14-1 header set; this route only wraps it, so both envelopes share one
+    branch. ``X-Accel-Buffering: no`` / ``Cache-Control: no-cache,
+    no-transform`` ride along so intermediaries never buffer or transform the
+    body.
     """
     request = await parse_dual_request(raw_request, TextToSpeechRequest, upload_fields=_TTS_UPLOAD_FIELDS)
     generator = await openai_serving_tts.create_text_to_speech(request, raw_request)
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
-    # if request.output_options and request.output_options.stream:
-    #     return StreamingResponse(content=generator, media_type="text/event-stream")
-    else:
-        return JSONResponse(content=generator.model_dump())
+    if isinstance(generator, StreamingAudioResponse):
+        return StreamingResponse(
+            content=generator.body,
+            media_type=generator.media_type,
+            headers=generator.headers,
+        )
+    return JSONResponse(content=generator.model_dump())
 
 
 @router.get("/v1/audio/speech/models", response_model=ModelList)

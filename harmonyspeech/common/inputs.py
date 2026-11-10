@@ -342,6 +342,9 @@ class TextToSpeechGenerationOptions:
 class TextToSpeechAudioOutputOptions:
     format: str | None = "wav"
     sample_rate: int | None = None
+    #: Streaming envelope (Phase 14-1): ``"audio"`` / ``"sse"``, or ``None``
+    #: for buffered output. ``stream`` is the deprecated alias for ``"audio"``.
+    stream_format: str | None = None
     stream: bool | None = False
 
 

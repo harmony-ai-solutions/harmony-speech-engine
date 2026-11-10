@@ -38,6 +38,25 @@ Design notes
   (:data:`MODEL_SAMPLES_EVERY_RUN`) — the KittenTTS ONNX graph has unseeded
   ``RandomNormalLike``/``RandomUniformLike`` nodes, so its two runs can never be
   sample-identical.
+* **The streaming axis is distributional for the clone pipelines (2026-11-10).**
+  ``streaming:off-vs-on`` compares the buffered chunked path against the
+  streaming frame source, sample-exactly for six of the eight families
+  (HarmonySpeech bit-identical, Chatterbox/MeloTTS inside the documented
+  cross-process noise floor, KittenTTS on its stochastic bounds). The two
+  OpenVoice clone families are **distributional** instead, because their
+  streamed side submits chunk sub-requests one at a time: each chunk's
+  tone-conversion is a B=1 forward, while the buffered side submits the whole
+  four-chunk burst at once and the engine co-batches it into one padded
+  tone-converter forward (Phase 8-3). That padded-batch equivalence has always
+  been distributional (log-mel ≤ 1.48e-4), never sample-exact, and the
+  edge-condition trim decision flips under numeric noise. Measured 2026-11-10 on
+  the RTX 5060 Ti: length ±0.026-0.054 %, waveform decorrelated (corr
+  0.02-0.10) but spectrally identical (LTAS corr ≥ 0.9995, RMS ≤ 2.1 %) —
+  inaudible. Those cases get the stochastic distributional bounds **and** a
+  streamed ``run1-vs-run2`` determinism sub-check: the streaming path itself
+  must be repeatable given the same seed (it mirrors the
+  ``determinism:run1-vs-run2`` equality class). See
+  :data:`STREAMING_AXIS_DISTRIBUTIONAL`.
 * **Output filters are not a harness axis (Phase 12-3).** ``remove_dc_offset``,
   ``trim_silence`` and ``fix_internal_silence`` are opt-in post-processing whose
   *intent* is to change samples. The honest on-vs-off gate ("same seed, flags on
@@ -70,6 +89,12 @@ Usage
     python scripts/audio_regression.py \
         --families chatterbox,chatterbox_multilingual,chatterbox_turbo \
         --axis dtype:fp32-vs-autocast --s3gen-autocast bfloat16 --gpu
+
+    # streamed vs buffered (Phase 14-5): same seed + chunk plan, multi-chunk,
+    # comparing PRE-WATERMARK PCM (the watermark diverges by design)
+    python scripts/audio_regression.py \
+        --families chatterbox,openvoice_v1,melotts \
+        --axis streaming:off-vs-on
 """
 
 from __future__ import annotations
@@ -234,6 +259,78 @@ LONGFORM_AXIS_FAMILIES = (
 #: byte-identity gate would fail for the wrong reason. The unit self-check pins
 #: this value to the serving constant.
 LONGFORM_IDENTITY_CHUNK_BUDGET = 300
+
+#: ``streaming:off-vs-on`` (Phase 14-5). Side A is the buffered chunked path,
+#: side B the streaming frame source (``_stream_audio_segments`` driven
+#: in-process — the harness has no HTTP server and does not need one). Both
+#: sides use the same seed and chunk plan, and the watermark is **off**: the
+#: watermark diverges by design (per-segment perth in streaming vs one
+#: whole-clip call buffered), so the axis compares pre-watermark stitch/DC
+#: output. Admission already excludes trim/internal/non-native speed from
+#: streaming, so no filter asymmetry can leak in. This validates the stream
+#: generator's chunk ordering and frame slicing; the stitcher primitive itself
+#: is pinned sample-exact by ``tests/unit/common/test_audio_utils.py``.
+#:
+#: The six families that are not in :data:`STREAMING_AXIS_DISTRIBUTIONAL` keep
+#: the strict gate this axis shipped with: identical duration, bit-identical
+#: quantized PCM for deterministic families, the documented cross-process CUDA
+#: kernel-noise floor (:data:`SHARING_MAX_ABS_DIFF` / :data:`SHARING_LOG_MEL_MSE`)
+#: for the seeded stochastic ones, and the stochastic bounds for a model that
+#: samples every run (:data:`MODEL_SAMPLES_EVERY_RUN`).
+STREAMING_AXIS_FAMILIES = LONGFORM_AXIS_FAMILIES
+
+#: Clone-pipeline families whose ``streaming:off-vs-on`` comparison is
+#: **distributional** (owner decision, 2026-11-10). Why:
+#:
+#: * Sequential streaming submits chunk sub-requests one at a time, so each
+#:   chunk's tone-conversion runs as a **B=1** forward. The buffered path
+#:   submits the whole 4-chunk burst at once and the engine co-batches it into
+#:   one padded tone-converter forward (Phase 8-3). The padded-batch
+#:   tone-converter equivalence has always been distributional — the Phase 8-3
+#:   record bounds it at log-mel ≤ 1.48e-4 — and was never sample-exact.
+#: * The tone converter's edge-condition trim decision flips under that numeric
+#:   noise, so the stitched length moves by a few samples and the waveform is
+#:   phase-shifted; a sample-wise comparison is meaningless by construction.
+#: * Measured 2026-11-10 on the RTX 5060 Ti (evidence:
+#:   ``out/bench/gate-14-verify-streaming-axis.json``): openvoice_v1 length
+#:   +0.054 %, RMS +2.08 %, waveform corr 0.021, LTAS corr 0.9995; openvoice_v2
+#:   length -0.026 %, RMS +0.83 %, waveform corr 0.105, LTAS corr 0.9999. Both
+#:   are inaudible: the long-term average spectrum is what the ear hears.
+#: * The failure is localised to the clone pipelines: MeloTTS (the same
+#:   synthesizer, standalone) passes sample-exact, so the synthesizer, the
+#:   seeded decode and the frame generator/stitcher are exonerated. Only the
+#:   TC batch shape differs.
+#:
+#: These families are scored with :data:`THRESHOLDS` ``["stochastic"]``
+#: (duration/RMS/LTAS) plus a spectral-correlation floor
+#: (:data:`STREAMING_DISTRIBUTIONAL_LTAS_CORR_MIN`); the **waveform** corr and
+#: ``max |Δsample|`` are reported but not gated — they are decorrelated by
+#: construction. Each case additionally gets a streamed ``run1-vs-run2``
+#: determinism sub-check (:func:`streaming_determinism_entry`), which is where
+#: sample-exactness still belongs: the streaming path must be repeatable.
+STREAMING_AXIS_DISTRIBUTIONAL = frozenset({"openvoice_v1", "openvoice_v2"})
+
+#: Families that keep the strict sample-exact gate (derived, for self-documenting
+#: tests): everything on the streaming axis except the clone pipelines.
+STREAMING_AXIS_STRICT = frozenset(STREAMING_AXIS_FAMILIES) - STREAMING_AXIS_DISTRIBUTIONAL
+
+#: Spectral-correlation floor for the distributional streaming class. The
+#: stochastic threshold set has no correlation gate, but LTAS correlation is the
+#: one correlation that stays meaningful when the waveform is decorrelated
+#: (measured 0.9995 / 0.9999 for the two clone families, 1.0 for every other
+#: family). 0.99 catches a genuinely different spectrum while leaving room for
+#: the measured spread; a crossed/duplicated chunk also moves LTAS RMSE.
+STREAMING_DISTRIBUTIONAL_LTAS_CORR_MIN = 0.99
+
+#: Families whose streamed render is repeated for the streaming axis's
+#: ``run1-vs-run2`` determinism sub-check. The whole axis: the check is cheap
+#: relative to the model boot it piggybacks on (side B's own manifest is run 1,
+#: so only one extra worker process per family is spawned), and every family's
+#: streaming path should be repeatable given the same seed — KittenTTS is the
+#: documented exception and is scored distributionally by
+#: :data:`MODEL_SAMPLES_EVERY_RUN`.
+STREAMING_DETERMINISM_FAMILIES = frozenset(STREAMING_AXIS_FAMILIES)
+
 
 #: Families whose *model* draws fresh noise on every inference, so two runs of
 #: the same seeded request cannot be sample-identical no matter what the engine
@@ -899,7 +996,7 @@ METRIC_SR = 24000
 class Axis:
     """A change axis with a label for each side."""
 
-    kind: str  # "dtype" | "sharing" | "baseline" | "batching"
+    kind: str  # "dtype" | "sharing" | "baseline" | "batching" | "longform" | "determinism" | "streaming"
     side_a: str
     side_b: str
     #: Autocast precision for ``dtype:fp32-vs-autocast`` (``None`` for every
@@ -928,10 +1025,10 @@ def parse_axis(text: str) -> Axis:
     if "-vs-" not in pair:
         raise ValueError(f"axis must contain '-vs-', got {text!r}")
     a, b = pair.split("-vs-", 1)
-    if kind not in {"dtype", "sharing", "baseline", "batching", "longform", "determinism"}:
+    if kind not in {"dtype", "sharing", "baseline", "batching", "longform", "determinism", "streaming"}:
         raise ValueError(
             f"unknown axis kind '{kind}' (expected dtype, sharing, batching, longform, "
-            "determinism or baseline)"
+            "determinism, streaming or baseline)"
         )
     if kind == "batching":
         for side in (a, b):
@@ -943,6 +1040,9 @@ def parse_axis(text: str) -> Axis:
     if kind == "determinism":
         if (a, b) != ("run1", "run2"):
             raise ValueError(f"the determinism axis is 'determinism:run1-vs-run2', got {text!r}")
+    if kind == "streaming":
+        if (a, b) != ("off", "on"):
+            raise ValueError(f"the streaming axis is 'streaming:off-vs-on', got {text!r}")
     if kind == "dtype" and {a, b} == set(AUTOCAST_AXIS_SIDES):
         # Phase 11-2 experiment axis. Side A must be the fp32 reference so the
         # report's "A vs B" reads as "baseline vs experiment".
@@ -1024,6 +1124,24 @@ def side_settings(axis: Axis, side: str) -> dict:
             "sentence_pause_ms": 0,
             "seed": LONGFORM_AXIS_SEED,
             "deterministic": True,
+        }
+    if axis.kind == "streaming":
+        # Same seed + chunk plan on both sides. The watermark is off (it
+        # diverges by design between the envelopes); batch size is 1 so the
+        # buffered burst cannot co-batch and the comparison isolates the stream
+        # generator's ordering/frame slicing.
+        return {
+            "dtype": "float32",
+            "share": True,
+            "watermark": False,
+            "split_text": True,
+            "chunk_size": LONGFORM_AXIS_CHUNK_SIZE,
+            "crossfade_ms": 40,
+            "sentence_pause_ms": 120,
+            "seed": LONGFORM_AXIS_SEED,
+            "deterministic": True,
+            "max_batch_size": 1,
+            "streaming": side == "on",
         }
     return {"dtype": side, "share": True, "watermark": True}
 
@@ -1392,6 +1510,120 @@ def _request_generation_options(settings: dict):
     return GenerationOptions(**kwargs)
 
 
+def _run_streaming_worker(job, engine, serving_tts, text_table) -> dict:
+    """Render each case through the buffered or streaming path, in-process.
+
+    Phase 14-5. The harness has no HTTP server, so the streaming side drives
+    the serving layer's own frame source (``_stream_audio_segments``) — exactly
+    the seam the integration tests use. Both sides write a PCM-16 WAV, so the
+    parent's ``compute_metrics`` compares quantized samples. The watermark is
+    disabled by the axis settings, so the comparison is the pre-watermark
+    stitch/DC output the owner decision scoped equality to.
+    """
+    import asyncio
+
+    import soundfile as sf
+
+    from harmonyspeech.common.audio_utils import split_text_into_chunks
+    from harmonyspeech.common.inputs import TextToSpeechRequestInput
+    from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import StreamState
+    from harmonyspeech.endpoints.openai.wire import from_wire_audio
+    from tests.audio_fixtures import reference_wav_b64
+
+    settings = job["settings"]
+    streaming = bool(settings.get("streaming"))
+    options = _request_generation_options(settings)
+
+    class _Request:
+        async def is_disconnected(self):
+            return False
+
+    manifest_cases: dict[str, dict] = {}
+    for case in job["cases"]:
+        request = TextToSpeechRequest(
+            model=case["model"],
+            input=_case_text(case, text_table),
+            mode=case.get("mode", "single_speaker_tts"),
+            input_audio=reference_wav_b64(case["reference"]) if case.get("reference") else None,
+            language=case.get("language"),
+            voice=case.get("voice"),
+            generation_options=options,
+        )
+        request_id = f"stream-gate-{case['name']}"
+        request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
+        artifacts = from_wire_audio(request_data)
+        chunks = split_text_into_chunks(
+            request_data.input_text,
+            chunk_size=int(settings["chunk_size"]),
+            language=getattr(request_data, "language_id", None),
+        )
+        if len(chunks) < 2:  # pragma: no cover - guarded by _cases_for_axis
+            raise SystemExit(
+                f"streaming axis: {job['family']}/{case['name']} does not split into "
+                f"2+ chunks at {settings['chunk_size']} characters"
+            )
+
+        started = time.time()
+        try:
+            if streaming:
+
+                async def render():
+                    state = StreamState()
+                    segments = [
+                        segment
+                        async for segment in serving_tts._stream_audio_segments(
+                            raw_request=_Request(),
+                            request_id=request_id,
+                            request_data=request_data,
+                            artifacts=artifacts,
+                            chunks=chunks,
+                            state=state,
+                            requested_rate=None,
+                        )
+                    ]
+                    return segments, state
+
+                segments, state = asyncio.run(render())
+                samples = (
+                    np.concatenate(segments).astype(np.float32)
+                    if segments
+                    else np.empty(0, dtype=np.float32)
+                )
+                rate = int(state.source_rate or 0)
+            else:
+                response = asyncio.run(serving_tts.create_text_to_speech(request, _Request()))
+                samples, rate = _decode_response_audio(response)
+        except Exception as exc:  # noqa: BLE001 - reported per case
+            manifest_cases[case["name"]] = {"error": f"{type(exc).__name__}: {exc}"}
+            print(
+                f"[worker:{job['side']}] {job['family']}/{case['name']} FAILED: {exc}",
+                flush=True,
+            )
+            continue
+
+        if rate <= 0 or samples.size == 0:
+            manifest_cases[case["name"]] = {"error": "empty render"}
+            continue
+
+        wav_path = os.path.join(job["out_dir"], f"{case['name']}.wav")
+        sf.write(wav_path, np.asarray(samples, dtype=np.float32), rate, subtype="PCM_16")
+        manifest_cases[case["name"]] = {
+            "wav": wav_path,
+            "sample_rate": rate,
+            "samples": int(samples.size),
+            "seconds": round(float(samples.size) / rate, 4),
+            "elapsed_s": round(time.time() - started, 2),
+        }
+        print(
+            f"[worker:{job['side']}] {job['family']}/{case['name']}: "
+            f"{samples.size / rate:.2f}s audio in {time.time() - started:.1f}s "
+            f"({'streamed' if streaming else 'buffered'})",
+            flush=True,
+        )
+    return manifest_cases
+
+
 def run_worker(job_path: str) -> int:
     """Boot one engine for one side of the axis and run the family's cases."""
     import asyncio
@@ -1449,6 +1681,13 @@ def run_worker(job_path: str) -> int:
     manifest = {"family": job["family"], "side": job["side"], "cases": {}}
 
     text_table = __import__("tests.audio_fixtures", fromlist=["TEXTS"]).TEXTS
+
+    if job.get("axis_kind") == "streaming":
+        manifest["cases"] = _run_streaming_worker(job, engine, serving_tts, text_table)
+        manifest["vram"] = engine.engine.get_vram_stats() if hasattr(engine, "engine") else None
+        with open(job["manifest"], "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2)
+        return 0
 
     if batching_axis:
         manifest["cases"] = _run_batching_worker(job, engine, text_table)
@@ -1662,28 +1901,64 @@ def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tu
             failures.append(f"corr {metrics['corr']} < {AUTOCAST_CORR_MIN}")
         return (not failures), failures
 
-    if axis.kind in {"longform", "determinism"}:
-        # Phase 12-4. The dispatcher must not alter the single-shot path, and
-        # the seeded chunked path must reproduce its stitched bytes. Length is a
-        # hard invariant; the sample comparison is bit-exact for deterministic
-        # families and bounded by the documented cross-process CUDA noise floor
-        # for stochastic ones (the same limit the sharing axis records).
+    if axis.kind in {"longform", "determinism", "streaming"}:
+        # Phase 12-4 / 14-5. The dispatcher must not alter the single-shot path,
+        # the seeded chunked path must reproduce its stitched bytes, and the
+        # streaming generator must reproduce the buffered pre-watermark PCM.
+        # Length is a hard invariant; the sample comparison is bit-exact for
+        # deterministic families and bounded by the documented cross-process
+        # CUDA noise floor for stochastic ones (the same limit the sharing axis
+        # records).
         #
-        # A family whose *model* samples on every inference
-        # (:data:`MODEL_SAMPLES_EVERY_RUN`) cannot be sample-compared at all.
-        # Duration stays a hard invariant — it proves the chunk count, pairing
-        # and stitch length did not move — and the spectral/level distribution
-        # must stay inside the stochastic bounds. A crossed or duplicated chunk
-        # changes the stitched length (chunks differ in length) and the LTAS, so
-        # this gate still catches the failure it exists for.
+        # Phase 14-5 recalibration (owner decision, 2026-11-10): the clone
+        # pipelines are the exception **on the streaming axis only** — see
+        # :data:`STREAMING_AXIS_DISTRIBUTIONAL`. Sequential streaming makes each
+        # chunk's tone-conversion a B=1 forward while the buffered burst is
+        # co-batched into one padded forward (Phase 8-3, distributional at
+        # log-mel ≤ 1.48e-4), and the edge-condition trim decision flips under
+        # that noise: the waveform decorrelates and the length moves by a few
+        # samples. Score those cases with the stochastic distribution bounds
+        # plus the spectral-correlation floor. Their sample-exactness is gated
+        # by the streamed run1-vs-run2 sub-check instead
+        # (:func:`streaming_determinism_entry`).
+        if axis.kind == "streaming" and family in STREAMING_AXIS_DISTRIBUTIONAL:
+            failures = []
+            distributional = THRESHOLDS["stochastic"]
+            if metrics["duration_pct"] > distributional["duration_pct"]:
+                failures.append(
+                    f"duration changed ({metrics['duration_pct']}%) — the streaming path "
+                    "altered the frame count"
+                )
+            if metrics["rms_pct"] > distributional["rms_pct"]:
+                failures.append(f"rms {metrics['rms_pct']:.2f}% > {distributional['rms_pct']}%")
+            if metrics["ltas_rmse_db"] > distributional["ltas_rmse_db"]:
+                failures.append(
+                    f"ltas rmse {metrics['ltas_rmse_db']:.2f}dB > "
+                    f"{distributional['ltas_rmse_db']}dB"
+                )
+            if metrics["ltas_corr"] < STREAMING_DISTRIBUTIONAL_LTAS_CORR_MIN:
+                failures.append(
+                    f"ltas corr {metrics['ltas_corr']} < "
+                    f"{STREAMING_DISTRIBUTIONAL_LTAS_CORR_MIN} (spectrum changed)"
+                )
+            return (not failures), failures
+
         failures = []
         if metrics["duration_pct"] != 0.0:
             failures.append(
-                f"duration changed ({metrics['duration_pct']}%) — the chunking path altered the frame count"
+                f"duration changed ({metrics['duration_pct']}%) — the streaming/chunking path "
+                "altered the frame count"
             )
         if metrics["identical"]:
             return True, []
         if family and family in MODEL_SAMPLES_EVERY_RUN:
+            # A family whose *model* samples on every inference cannot be
+            # sample-compared at all. Duration stays a hard invariant — it
+            # proves the chunk count, pairing and stitch length did not move —
+            # and the spectral/level distribution must stay inside the
+            # stochastic bounds. A crossed or duplicated chunk changes the
+            # stitched length (chunks differ in length) and the LTAS, so this
+            # gate still catches the failure it exists for.
             stochastic = THRESHOLDS["stochastic"]
             if metrics["rms_pct"] > stochastic["rms_pct"]:
                 failures.append(f"rms {metrics['rms_pct']:.2f}% > {stochastic['rms_pct']}%")
@@ -1695,8 +1970,8 @@ def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tu
         family_kind = _family_kind(family) if family else "deterministic"
         if family_kind == "deterministic":
             failures.append(
-                "not bit-identical (the chunking dispatcher must leave the single-shot / "
-                "seeded chunked path byte-identical)"
+                "not bit-identical (the streaming/chunking path must leave the buffered "
+                "pre-watermark PCM byte-identical)"
             )
         else:
             if metrics["max_abs_diff"] > SHARING_MAX_ABS_DIFF:
@@ -1747,6 +2022,37 @@ def verdict_for_axis(axis: Axis, metrics: dict, family: str | None = None) -> tu
     return metrics["passed"], metrics["failures"]
 
 
+def streaming_determinism_entry(path_run1: str, path_run2: str, family: str) -> dict:
+    """Compare two **streamed** renders of the same request (Phase 14-5 addendum).
+
+    Owner decision 2026-11-10: the clone pipelines' streamed-vs-buffered
+    comparison is distributional (see :data:`STREAMING_AXIS_DISTRIBUTIONAL`), so
+    sample-exactness moves here — the streaming path itself must be repeatable
+    given the same seed and chunk plan. Run 1 is the streaming side's own
+    manifest; run 2 is a second worker with identical settings, so this mirrors
+    the topology and the equality class of ``determinism:run1-vs-run2``:
+
+    * duration must not move at all (a crossed/duplicated chunk changes it);
+    * deterministic families must be bit-identical;
+    * a model that samples every run (:data:`MODEL_SAMPLES_EVERY_RUN`) is
+      scored distributionally — it can never be sample-identical;
+    * seeded stochastic families get the documented cross-process CUDA
+      kernel-noise floor (:data:`SHARING_MAX_ABS_DIFF` /
+      :data:`SHARING_LOG_MEL_MSE`), which is what the buffered determinism axis
+      measured for openvoice_v1 (bit-identical) and openvoice_v2 (4.5e-5).
+
+    A real streaming-path defect (wrong chunk order, unseeded noise, duplicated
+    or dropped chunk) moves samples by O(1), orders of magnitude above that
+    floor. ``kind`` is chosen the same way the main comparison chooses it so the
+    reported thresholds match the family's classification.
+    """
+    kind = "stochastic" if family in MODEL_SAMPLES_EVERY_RUN else _family_kind(family)
+    metrics = compute_metrics(path_run1, path_run2, kind)
+    determinism_axis = Axis(kind="determinism", side_a="run1", side_b="run2")
+    passed, failures = verdict_for_axis(determinism_axis, metrics, family=family)
+    return {"metrics": metrics, "passed": passed, "failures": failures}
+
+
 # ---------------------------------------------------------------------------
 # Parent orchestration
 # ---------------------------------------------------------------------------
@@ -1790,9 +2096,19 @@ def _run_side(
     use_gpu: bool,
     workdir: str,
     cases: list[dict] | None = None,
+    *,
+    run_tag: str | None = None,
 ) -> dict:
-    out_dir = os.path.join(workdir, f"{family}_{side}")
-    manifest_path = os.path.join(workdir, f"{family}_{side}.json")
+    """Run one side of the axis in its own worker process.
+
+    ``run_tag`` distinguishes repeated runs of the *same* side (the streaming
+    axis's ``run1-vs-run2`` determinism sub-check) without changing the settings
+    derived from ``side``: it only names the work directory, the manifest and the
+    job file, so a second streamed render cannot overwrite the first.
+    """
+    tag = run_tag or side
+    out_dir = os.path.join(workdir, f"{family}_{tag}")
+    manifest_path = os.path.join(workdir, f"{family}_{tag}.json")
     spec = FAMILY_SPECS[family]
     settings = side_settings(axis, side)
     if axis.kind == "batching" and family in BATCHING_AXIS_STOCHASTIC:
@@ -1802,6 +2118,7 @@ def _run_side(
     job = {
         "family": family,
         "side": side,
+        "axis_kind": axis.kind,
         "settings": settings,
         "use_gpu": use_gpu,
         "cases": cases if cases is not None else _cases_for_axis(axis, family),
@@ -1809,7 +2126,7 @@ def _run_side(
         "out_dir": out_dir,
         "manifest": manifest_path,
     }
-    job_path = os.path.join(workdir, f"{family}_{side}_job.json")
+    job_path = os.path.join(workdir, f"{family}_{tag}_job.json")
     with open(job_path, "w", encoding="utf-8") as handle:
         json.dump(job, handle, indent=2)
 
@@ -1850,8 +2167,8 @@ def _markdown_table(report: dict) -> str:
         f"{report['env'].get('gpu') or 'CPU'} · driver {report['env'].get('driver') or 'n/a'} · "
         f"mode {'GPU' if report['use_gpu'] else 'CPU'}",
         "",
-        "| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Family | Case | Kind | Verdict | stream det | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     skipped: list[str] = []
     for family, detail in report["families"].items():
@@ -1861,17 +2178,24 @@ def _markdown_table(report: dict) -> str:
             # an unexplained gap in the table.
             reason = detail.get("skip_reason") or "skipped"
             lines.append(
-                f"| {family} | - | skipped | SKIP | - | - | - | - | - | - | - | {reason[:80]} |"
+                f"| {family} | - | skipped | SKIP | - | - | - | - | - | - | - | - | {reason[:80]} |"
             )
         for case_name, case in detail.get("cases", {}).items():
             if "metrics" not in case:
                 lines.append(
-                    f"| {family} | {case_name} | - | ERROR | - | - | - | - | - | - | - | "
+                    f"| {family} | {case_name} | - | ERROR | - | - | - | - | - | - | - | - | "
                     f"{case.get('error', '')[:60]} |"
                 )
                 continue
             m = case["metrics"]
             verdict = "PASS" if case["passed"] else "FAIL"
+            determinism = case.get("streaming_determinism")
+            if determinism is None:
+                determinism_cell = "-"
+            elif determinism.get("error"):
+                determinism_cell = "ERROR"
+            else:
+                determinism_cell = "PASS" if determinism["passed"] else "FAIL"
             wer = case.get("wer")
             if wer:
                 wer_cell = f"{wer['wer']:.3f}"
@@ -1885,7 +2209,8 @@ def _markdown_table(report: dict) -> str:
                 wer_cell = "-"
             label = case.get("label") or "-"
             lines.append(
-                f"| {family} | {case_name} | {detail['kind']} | {verdict} | {m['duration_pct']} | "
+                f"| {family} | {case_name} | {detail['kind']} | {verdict} | {determinism_cell} | "
+                f"{m['duration_pct']} | "
                 f"{m['rms_pct']} | {m['logmel_mse']} | {m['ltas_rmse_db']} | {m['corr']} | {m['identical']} | "
                 f"{wer_cell} | {label} |"
             )
@@ -1970,13 +2295,24 @@ def run_harness(args) -> int:
         print(f"[harness] {family}: side B ({axis.side_b})…", flush=True)
         side_b = _run_side(family, axis.side_b, axis, use_gpu, workdir, cases=cases)
 
+        # Phase 14-5 addendum (owner decision 2026-11-10): render the streamed
+        # side a second time with identical settings. Side B's own manifest is
+        # run 1, so this is exactly "two streamed renders of the same request";
+        # only one extra worker process is spawned per family.
+        side_b_run2 = None
+        if axis.kind == "streaming" and family in STREAMING_DETERMINISM_FAMILIES:
+            print(f"[harness] {family}: side B run 2 (streamed determinism)…", flush=True)
+            side_b_run2 = _run_side(
+                family, axis.side_b, axis, use_gpu, workdir, cases=cases, run_tag="on_run2"
+            )
+
         if axis.kind == "batching":
             # The family's stochastic thresholds are not what a padded-batch
             # axis asserts (it is sample-wise). AR decode is the exception: its
             # vocode noise differs by construction, so its gate stays
             # distributional.
             kind = "stochastic" if family in BATCHING_AXIS_STOCHASTIC else "deterministic"
-        if axis.kind in {"longform", "determinism"} and family in MODEL_SAMPLES_EVERY_RUN:
+        if axis.kind in {"longform", "determinism", "streaming"} and family in MODEL_SAMPLES_EVERY_RUN:
             # A model that draws fresh noise per inference cannot be compared
             # sample-wise: report/score it with the stochastic distribution
             # metrics (see :data:`MODEL_SAMPLES_EVERY_RUN`).
@@ -1989,6 +2325,8 @@ def run_harness(args) -> int:
             "side_b": side_b,
             "skipped_cases": skipped_entries,
         }
+        if side_b_run2 is not None:
+            family_entry["side_b_run2"] = side_b_run2
         if "error" in side_a or "error" in side_b:
             family_entry["error"] = side_a.get("error") or side_b.get("error")
             report["passed"] = False
@@ -2040,6 +2378,32 @@ def run_harness(args) -> int:
                 "failures": failures,
                 "label": case.get("label"),
             }
+
+            # Phase 14-5 addendum: streamed run1-vs-run2 determinism. This is
+            # where sample-exactness lives for the clone families, whose
+            # streamed-vs-buffered comparison is distributional (see
+            # :data:`STREAMING_AXIS_DISTRIBUTIONAL`); it runs for every family
+            # on the axis so a nondeterministic streaming path is caught
+            # everywhere.
+            if side_b_run2 is not None:
+                b2 = (side_b_run2.get("cases") or {}).get(name, {})
+                if b2.get("error"):
+                    determinism = {
+                        "error": b2["error"],
+                        "passed": False,
+                        "failures": [f"run 2 failed: {b2['error']}"],
+                    }
+                else:
+                    determinism = streaming_determinism_entry(b["wav"], b2["wav"], family)
+                case_entry["streaming_determinism"] = determinism
+                if not determinism["passed"]:
+                    passed = False
+                    failures.append(
+                        "streamed run1-vs-run2: "
+                        + "; ".join(determinism.get("failures") or ["not repeatable"])
+                    )
+                    case_entry["passed"] = False
+                    case_entry["failures"] = failures
             if wer is not None:
                 case_entry["wer"] = wer
             family_entry["cases"][name] = case_entry
@@ -2203,6 +2567,39 @@ def _cases_for_axis(axis: Axis, family: str) -> list[dict]:
                 "the single-shot path"
             )
         return [base]
+    if axis.kind == "streaming":
+        # Phase 14-5: one multi-chunk TTS case per family. The same literal text
+        # and chunk budget as the determinism axis, so the two sides share the
+        # chunk plan; the streaming side drives ``_stream_audio_segments``.
+        tts_cases = [case for case in spec["cases"] if case.get("kind", "tts") == "tts"]
+        if not tts_cases:
+            raise SystemExit(
+                f"family '{family}' has no TTS case; the streaming axis covers "
+                f"{', '.join(STREAMING_AXIS_FAMILIES)}"
+            )
+        base = dict(tts_cases[0])
+        base["name"] = f"streamed_{base['name']}"
+        base["text_literal"] = LONGFORM_CHUNKED_TEXT
+        base.pop("text", None)
+        base["label"] = "streamed vs buffered (multi-chunk, pre-watermark)"
+        if family in STREAMING_AXIS_DISTRIBUTIONAL:
+            # Self-documenting case table (owner decision 2026-11-10): the
+            # report must say why this case is not sample-exact.
+            base["label"] += (
+                "; distributional: B=1 vs B=4 tone-converter numerics"
+                " (Phase 8-3 log-mel <= 1.48e-4), run1-vs-run2 determinism gated"
+            )
+        if len(
+            _chunks_for_axis_text(
+                LONGFORM_CHUNKED_TEXT, base.get("language"), LONGFORM_AXIS_CHUNK_SIZE
+            )
+        ) < 2:
+            raise SystemExit(
+                "LONGFORM_CHUNKED_TEXT does not split at LONGFORM_AXIS_CHUNK_SIZE="
+                f"{LONGFORM_AXIS_CHUNK_SIZE}; the streaming axis would only exercise "
+                "the single-chunk path"
+            )
+        return [base]
     if axis.kind != "batching":
         return spec["cases"]
     cases = spec.get("batching_cases")
@@ -2240,7 +2637,8 @@ def main(argv=None) -> int:
         help=(
             "change axis: dtype:float32-vs-float16, sharing:dedup-vs-dup, "
             "batching:1-vs-4, longform:off-vs-on, determinism:run1-vs-run2, "
-            "dtype:fp32-vs-autocast or dtype:float32-vs-float32 (identity)"
+            "streaming:off-vs-on, dtype:fp32-vs-autocast or "
+            "dtype:float32-vs-float32 (identity)"
         ),
     )
     parser.add_argument("--gpu", action="store_true", help="require a CUDA host")

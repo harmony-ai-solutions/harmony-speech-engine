@@ -73,6 +73,23 @@ def synth_wav_b64(sample_rate: int = 24000, seconds: float = 1.0, amplitude: flo
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+class _SingleOutputStream:
+    """One-item async stream, shaped like ``engine.AsyncStream``."""
+
+    def __init__(self, output):
+        self._output = output
+        self._done = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._done:
+            raise StopAsyncIteration
+        self._done = True
+        return self._output
+
+
 class FakeEngine:
     """Stand-in for :class:`AsyncHarmonySpeech` with optional boundary decoding."""
 
@@ -110,6 +127,16 @@ class FakeEngine:
     async def generate(self, request_id, request_data, artifacts=None):
         self.requests.append(request_data)
         yield self._make_output(request_id, request_data)
+
+    async def add_request(self, request_id, request_data, artifacts=None, arrival_time=None):
+        """Streaming-path hook (Phase 14-3): one canned output, like ``generate``.
+
+        The binary/SSE envelopes submit chunk sub-requests sequentially and need
+        the per-request id to abort one in flight, which is exactly
+        ``AsyncHarmonySpeech.add_request``'s contract.
+        """
+        self.requests.append(request_data)
+        return _SingleOutputStream(self._make_output(request_id, request_data))
 
     def _make_output(self, request_id, request_data):
         try:

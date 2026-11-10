@@ -2025,10 +2025,14 @@ python scripts/bench_throughput.py --scenario longform --fidelity \
 python scripts/bench_throughput.py --print-longform-scenarios
 
 # Headline (INFO): one run per family, both variants.
+# NOTE (corrected 2026-11-10): the 12-9 matrix and fidelity runs booted the
+# 8-entry long-form fixture below, NOT the shipped config.gpu.yml — see the
+# 12-4 log ("Config: out/bench/config-phase12.yml") and the Phase 14
+# verification section for the residency consequence.
 # AR families + kitten: c=1,4,8 with 4 requests/level.
 CUDA_VISIBLE_DEVICES=1 HARMONYSPEECH_LOG_LEVEL=INFO \
     python -m harmonyspeech.endpoints.openai.api_server \
-    --config-file-path config.gpu.yml --port 2242 \
+    --config-file-path out/bench/config-phase12.yml --port 2242 \
     > out/bench/engine-phase12-info.log 2>&1
 python scripts/bench_throughput.py --scenario longform --families chatterbox \
     --longform-split both --concurrency 1,4,8 --longform-requests 4 \
@@ -2172,4 +2176,697 @@ python scripts/bench_throughput.py --scenario longform --families melo \
 | openvoice_v2 | off | 2 | 138 / 138 |
 | openvoice_v2 | on | 0 | 138 / 138 |
 | kitten | off | 8 | 138 / 138 |
-| kitten | on | 6 | 138 / 138 |
+| kitten | on | 6 | 138 / 138 |## 2026-11-10T02:07:58Z — `longform:off-vs-on`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0001 | 1.0 | False | - | bundled voice, plain text |
+| chatterbox | tts_clone_voice_a | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | synthetic reference: timbre porting only (source is not speech) |
+| chatterbox_turbo | tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0001 | 1.0 | False | - | - |
+| chatterbox_multilingual | tts_en | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0001 | 1.0 | False | - | English text, bundled English conditionals |
+| chatterbox_multilingual | tts_de_en_accent | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0001 | 1.0 | False | - | German text + bundled English conditionals: accent transfer, NOT native German |
+| openvoice_v1 | clone_voice_a | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | - |
+| openvoice_v1 | clone_voice_b | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | reference voice_b -> repo_voice_b: the synthetic clip has no VAD-detectable speech |
+| openvoice_v2 | clone_voice_a | stochastic | PASS | 0.0 | 0.0 | 1.4e-05 | 0.0003 | 1.0 | False | - | - |
+| melotts | tts_en | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | False | - | - |
+| harmonyspeech | clone_voice_a | deterministic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | - |
+| kittentts | tts_en | stochastic | PASS | 0.0 | 0.088 | 2.417015 | 0.1486 | 0.9926 | False | - | - |
+
+Skipped optional cases (excluded from metrics):
+- `chatterbox_multilingual/tts_de_native` — native-accent German case skipped: provide tests/audio_fixtures/ref_voice_de.wav — any short German speech clip, e.g. self-recorded; see provenance rules in tests/audio_fixtures/__init__.py
+## 2026-11-10T02:14:34Z — `determinism:run1-vs-run2`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | chunked_tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | chunked determinism (same seed, two runs) |
+| chatterbox_turbo | chunked_tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 3e-06 | 0.0 | 1.0 | False | - | chunked determinism (same seed, two runs) |
+| chatterbox_multilingual | chunked_tts_en | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | chunked determinism (same seed, two runs) |
+| openvoice_v1 | chunked_clone_voice_a | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | chunked determinism (same seed, two runs) |
+| openvoice_v2 | chunked_clone_voice_a | stochastic | PASS | 0.0 | 0.0 | 1.5e-05 | 0.0001 | 1.0 | False | - | chunked determinism (same seed, two runs) |
+| melotts | chunked_tts_en | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | False | - | chunked determinism (same seed, two runs) |
+| harmonyspeech | chunked_clone_voice_a | deterministic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | chunked determinism (same seed, two runs) |
+| kittentts | chunked_tts_en | stochastic | PASS | 0.0 | 0.052 | 3.204345 | 0.1085 | 0.992 | False | - | chunked determinism (same seed, two runs) |
+## 2026-11-10T02:21:16Z — `batching:1-vs-4`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | batch_short | stochastic | PASS | 0.0 | 0.0 | 9e-06 | 0.0005 | 1.0 | False | - | short text |
+| chatterbox | batch_medium | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0001 | 1.0 | False | - | medium text |
+| chatterbox | batch_long | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0001 | 1.0 | False | - | long text |
+| chatterbox | batch_shortest | stochastic | PASS | 0.0 | 0.0 | 3e-06 | 0.0002 | 1.0 | False | - | shortest text |
+| chatterbox | vc_batch_a | stochastic | PASS | 0.0 | 0.0 | 1.6e-05 | 0.0003 | 1.0 | False | - | 3.6 s real speech -> 4.4 s real target |
+| chatterbox | vc_batch_b | stochastic | PASS | 0.0 | 0.0 | 8e-06 | 0.0002 | 1.0 | False | - | 4.4 s real speech -> 3.6 s real target |
+| chatterbox | vc_batch_c | stochastic | PASS | 0.0 | 0.0 | 6.9e-05 | 0.0004 | 1.0 | False | - | 8 s synthetic source -> real target |
+| chatterbox | vc_batch_d | stochastic | PASS | 0.0 | 0.0 | 0.000145 | 0.0006 | 1.0 | False | - | 8 s synthetic source -> other real target |
+| chatterbox_turbo | batch_short | stochastic | PASS | 0.0 | 0.0 | 1.3e-05 | 0.0006 | 1.0 | False | - | short text |
+| chatterbox_turbo | batch_medium | stochastic | PASS | 0.0 | 0.0 | 1e-05 | 0.0003 | 1.0 | False | - | medium text |
+| chatterbox_turbo | batch_long | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0001 | 1.0 | False | - | long text |
+| chatterbox_turbo | batch_shortest | stochastic | PASS | 0.0 | 0.0 | 4e-06 | 0.0002 | 1.0 | False | - | shortest text |
+## 2026-11-10T02:22:53Z — `dtype:fp32-vs-autocast`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | tts_bundled_voice | stochastic | PASS | 0.0 | 0.414 | 0.28353 | 0.126 | 0.9932 | False | - | bundled voice, plain text |
+| chatterbox | tts_clone_voice_a | stochastic | FAIL | 0.0 | 0.491 | 0.952932 | 0.2106 | 0.8475 | False | - | synthetic reference: timbre porting only (source is not speech) |
+| chatterbox | vc_speech_a_to_b | stochastic | FAIL | 0.0 | 0.365 | 2.999537 | 1.0594 | 0.9976 | False | 0.000 | real speech -> real speech timbre: content must stay intelligible (WER gate) |
+| chatterbox | vc_speech_to_synth_voice | stochastic | PASS | 0.0 | 0.197 | 0.735857 | 0.1507 | 0.9938 | False | 1.600 (report-only) | real speech -> synthetic vowel timbre: isolates timbre porting (WER reported, not gated) |
+| chatterbox_multilingual | tts_en | stochastic | PASS | 0.0 | 0.088 | 0.57571 | 0.2085 | 0.9912 | False | - | English text, bundled English conditionals |
+| chatterbox_multilingual | tts_de_en_accent | stochastic | PASS | 0.0 | 0.067 | 0.388366 | 0.0736 | 0.9904 | False | - | German text + bundled English conditionals: accent transfer, NOT native German |
+| chatterbox_turbo | tts_bundled_voice | stochastic | PASS | 0.0 | 0.104 | 0.693355 | 0.3925 | 0.9937 | False | - | - |
+
+Skipped optional cases (excluded from metrics):
+- `chatterbox_multilingual/tts_de_native` — native-accent German case skipped: provide tests/audio_fixtures/ref_voice_de.wav — any short German speech clip, e.g. self-recorded; see provenance rules in tests/audio_fixtures/__init__.py
+## 2026-11-10T02:25:18Z — `dtype:fp32-vs-autocast`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | tts_bundled_voice | stochastic | PASS | 0.0 | 0.112 | 0.008219 | 0.0274 | 0.9998 | False | - | bundled voice, plain text |
+| chatterbox | tts_clone_voice_a | stochastic | PASS | 0.0 | 0.01 | 0.041138 | 0.0229 | 0.9978 | False | - | synthetic reference: timbre porting only (source is not speech) |
+| chatterbox | vc_speech_a_to_b | stochastic | PASS | 0.0 | 0.098 | 0.098588 | 0.0958 | 1.0 | False | 0.000 | real speech -> real speech timbre: content must stay intelligible (WER gate) |
+| chatterbox | vc_speech_to_synth_voice | stochastic | PASS | 0.0 | 0.089 | 0.01565 | 0.0106 | 0.9999 | False | 2.200 (report-only) | real speech -> synthetic vowel timbre: isolates timbre porting (WER reported, not gated) |
+| chatterbox_multilingual | tts_en | stochastic | PASS | 0.0 | 0.097 | 0.020435 | 0.0163 | 0.9997 | False | - | English text, bundled English conditionals |
+| chatterbox_multilingual | tts_de_en_accent | stochastic | PASS | 0.0 | 0.046 | 0.011037 | 0.0175 | 0.9999 | False | - | German text + bundled English conditionals: accent transfer, NOT native German |
+| chatterbox_turbo | tts_bundled_voice | stochastic | PASS | 0.0 | 0.023 | 0.020288 | 0.0418 | 0.9999 | False | - | - |
+
+Skipped optional cases (excluded from metrics):
+- `chatterbox_multilingual/tts_de_native` — native-accent German case skipped: provide tests/audio_fixtures/ref_voice_de.wav — any short German speech clip, e.g. self-recorded; see provenance rules in tests/audio_fixtures/__init__.py
+## 2026-11-10T02:27:44Z — `streaming:off-vs-on`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | streamed_tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| chatterbox_turbo | streamed_tts_bundled_voice | stochastic | PASS | 0.0 | 0.0 | 2e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| chatterbox_multilingual | streamed_tts_en | stochastic | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| openvoice_v1 | streamed_clone_voice_a | stochastic | FAIL | 0.054 | 2.081 | 43.81633 | 0.5927 | 0.0206 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| openvoice_v2 | streamed_clone_voice_a | stochastic | FAIL | 0.026 | 0.831 | 20.941809 | 0.3676 | 0.1045 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| melotts | streamed_tts_en | stochastic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| harmonyspeech | streamed_clone_voice_a | deterministic | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| kittentts | streamed_tts_en | stochastic | PASS | 0.0 | 0.083 | 3.145006 | 0.1369 | 0.9922 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+### phase14-verify-chatterbox — 2026-11-10T02:43:42Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | AR decode, admission width 4 | off | 807 | 1 | 0.07 | 15424.3 | 0.13 | 30911.7 | 0.13 | 31445.7 |
+| chatterbox | AR decode, admission width 4 | on | 807 | 4 | 0.1 | 9723.9 | 0.1 | 29260.5 | 0.1 | 29654.8 |
+### phase14-verify-chatterbox_turbo — 2026-11-10T02:46:26Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox_turbo | AR decode, admission width 4 | off | 807 | 1 | 0.17 | 6236.3 | 0.24 | 16762.0 | 0.24 | 16856.7 |
+| chatterbox_turbo | AR decode, admission width 4 | on | 807 | 4 | 0.15 | 6641.1 | 0.15 | 19304.3 | 0.15 | 19610.5 |
+### phase14-verify-chatterbox_multilingual — 2026-11-10T02:51:56Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox_multilingual | AR decode, admission width 4 | off | 807 | 1 | 0.06 | 18816.3 | 0.11 | 35895.5 | 0.11 | 37157.3 |
+| chatterbox_multilingual | AR decode, admission width 4 | on | 807 | 4 | 0.1 | 9990.6 | 0.09 | 33254.2 | 0.09 | 32088.7 |
+### phase14-verify-kitten — 2026-11-10T02:56:51Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kitten | lanes | off | 807 | 1 | 0.06 | 17647.4 | 0.1 | 39065.0 | 0.1 | 39178.5 |
+| kitten | lanes | on | 807 | 4 | 0.13 | 7795.1 | 0.13 | 23261.4 | 0.13 | 23264.9 |
+### phase14-verify-melo — 2026-11-10T02:57:57Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 8 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=2 req/s | c=2 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| melo | padded batch | off | 807 | 1 | 0.89 | 1122.2 | 0.89 | 2229.0 | 1.17 | 3412.3 | 1.36 | 5866.7 |
+| melo | padded batch | on | 807 | 4 | 1.09 | 919.5 | 1.12 | 1792.7 | 1.19 | 3198.4 | 1.19 | 4267.5 |
+### phase14-verify-openvoice_v2 — 2026-11-10T03:04:35Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 8 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) | c=2 req/s | c=2 p50 (ms) | c=4 req/s | c=4 p50 (ms) | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | off | 807 | 1 | 0.66 | 1514.2 | 0.67 | 2998.7 | 0.13 | 30764.3 | 0.09 | 88135.5 |
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | on | 807 | 4 | 0.14 | 7150.3 | 0.14 | 14093.8 | 0.16 | 24377.1 | 0.19 | 27096.4 |
+### phase14-verify-spot-chatterbox — 2026-11-10T03:05:00Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4 · HTTP client pool: 4 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox | 4 | 1.02 | 4789.2 | 5086.3 | 3924.5 | 0 |
+### phase14-verify-spot-chatterbox_turbo — 2026-11-10T03:05:15Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4 · HTTP client pool: 4 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_turbo | 4 | 1.77 | 2695.1 | 2976.8 | 2262.8 | 0 |
+### phase14-verify-spot-clone-distinct — 2026-11-10T03:05:45Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: distinct · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 4 · HTTP client pool: 4 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_clone | 4 | 0.9 | 5324.8 | 5753.6 | 4434.4 | 0 |
+### phase14-verify-vc-post — 2026-11-10T03:05:46Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 1, 2, 4, 8 · HTTP client pool: 8 connection(s)
+* 16 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+
+* chatterbox_vc: skipped — model 'chatterbox_vc' is not configured on the target engine
+### phase14-verify-ar-chatterbox — 2026-11-10T03:16:32Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4, 8, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox | 4 | 2.16 | 2201.5 | 2612.4 | 1851.8 | 0 |
+| chatterbox | 8 | 2.75 | 2830.5 | 3034.0 | 2592.4 | 0 |
+| chatterbox | 20 | 2.84 | 4226.4 | 7035.1 | 4268.1 | 0 |
+
+AR pool utilization (sampled from `/metrics`; Phase 9-6):
+
+| Family | Concurrency | Max slots active | Grants Δ | Refusals Δ | Max tokens/step |
+|---|---|---|---|---|---|
+| chatterbox | 4 | 8 | 32 | 0 | 16.0 |
+| chatterbox | 8 | 8 | 40 | 0 | 15.821 |
+| chatterbox | 20 | 8 | 40 | 0 | 15.981 |
+### phase14-verify-ar-chatterbox_turbo — 2026-11-10T03:16:48Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4, 8, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_turbo | 4 | 4.46 | 977.4 | 1323.7 | 862.1 | 0 |
+| chatterbox_turbo | 8 | 5.19 | 1535.5 | 1580.7 | 1390.1 | 0 |
+| chatterbox_turbo | 20 | 4.87 | 2517.4 | 4103.4 | 2506.9 | 0 |
+
+AR pool utilization (sampled from `/metrics`; Phase 9-6):
+
+| Family | Concurrency | Max slots active | Grants Δ | Refusals Δ | Max tokens/step |
+|---|---|---|---|---|---|
+| chatterbox_turbo | 4 | 4 | 16 | 0 | 17.25 |
+| chatterbox_turbo | 8 | 4 | 20 | 0 | 15.78 |
+| chatterbox_turbo | 20 | 4 | 20 | 0 | 16.222 |
+### phase14-verify-cache-same-on — 2026-11-10T03:17:12Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 8 · HTTP client pool: 8 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_clone | 8 | 1.15 | 6543.1 | 8244.7 | 6153.1 | 0 |
+### phase14-verify-cache-distinct-on — 2026-11-10T03:17:37Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: distinct · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 8 · HTTP client pool: 8 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_clone | 8 | 1.15 | 6478.0 | 8394.7 | 6194.3 | 0 |
+### phase14-verify-cache-same-off — 2026-11-10T03:18:42Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: off (verified against --embedding-cache off)
+* concurrency: 8 · HTTP client pool: 8 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_clone | 8 | 1.1 | 6945.3 | 8690.0 | 6463.3 | 0 |
+### phase14-verify-cache-distinct-off — 2026-11-10T03:19:08Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: distinct · embedding cache: off (verified against --embedding-cache off)
+* concurrency: 8 · HTTP client pool: 8 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_clone | 8 | 1.1 | 6344.7 | 9230.7 | 6462.2 | 0 |
+### phase14-verify-shorttext-post — 2026-11-10T03:22:25Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 1, 2, 4, 8 · HTTP client pool: 8 connection(s)
+* 16 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| melo | 1 | 8.53 | 117.0 | 120.2 | 117.0 | 0 |
+| melo | 2 | 8.7 | 230.6 | 234.1 | 222.7 | 0 |
+| melo | 4 | 11.57 | 339.6 | 363.5 | 331.2 | 0 |
+| melo | 8 | 14.93 | 531.3 | 551.1 | 509.2 | 0 |
+| openvoice_v2 | 1 | 1.77 | 555.5 | 593.6 | 564.8 | 0 |
+| openvoice_v2 | 2 | 1.88 | 1055.7 | 1090.5 | 1061.5 | 0 |
+| openvoice_v2 | 4 | 1.87 | 2159.8 | 2416.1 | 2103.4 | 0 |
+| openvoice_v2 | 8 | 1.92 | 3890.8 | 5946.9 | 3926.3 | 0 |
+| chatterbox | 1 | 0.62 | 1593.1 | 1705.2 | 1601.3 | 0 |
+| chatterbox | 2 | 0.61 | 3312.7 | 3445.7 | 3195.7 | 0 |
+| chatterbox | 4 | 0.63 | 6398.9 | 6459.7 | 5780.4 | 0 |
+| chatterbox | 8 | 0.63 | 12750.1 | 12998.5 | 9996.5 | 0 |
+| whisper | 1 | 2.53 | 396.4 | 427.8 | 394.5 | 0 |
+| whisper | 2 | 2.55 | 777.3 | 801.1 | 760.3 | 0 |
+| whisper | 4 | 2.7 | 1464.0 | 1547.6 | 1413.5 | 0 |
+| whisper | 8 | 2.76 | 2910.4 | 2994.5 | 2742.6 | 0 |
+
+* openvoice_v1: skipped — model 'openvoice_v1' is not configured on the target engine
+* harmonyspeech: skipped — model 'harmonyspeech' is not configured on the target engine
+* voicefixer: skipped — model 'voicefixer' is not configured on the target engine
+* kitten: skipped — model 'kitten-tts-mini' is not configured on the target engine
+### phase14-verify-same-cache-on — 2026-11-10T03:23:08Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 1, 4, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | 1 | 5.41 | 176.8 | 193.7 | 184.7 | 0 |
+| openvoice_v2 | 4 | 6.34 | 642.1 | 659.4 | 610.9 | 0 |
+| openvoice_v2 | 20 | 8.1 | 2343.2 | 2406.3 | 2057.7 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | 4 | synth | 5 | 5 | 1.0 | 12 | 12 | — |
+| openvoice_v2 | 4 | tc | 5 | 5 | 1.0 | 0 | 12 | — |
+| openvoice_v2 | 20 | synth | 4 | 4 | 1.0 | 20 | 20 | — |
+| openvoice_v2 | 20 | tc | 4 | 6 | 1.5 | 0 | 20 | — |
+### phase14-verify-distinct-cache-on — 2026-11-10T03:23:20Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: distinct · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 1, 4, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | 1 | 5.55 | 177.3 | 192.6 | 180.1 | 0 |
+| openvoice_v2 | 4 | 6.93 | 571.5 | 606.8 | 569.7 | 0 |
+| openvoice_v2 | 20 | 8.5 | 2040.6 | 2328.5 | 1903.3 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | 4 | synth | 5 | 5 | 1.0 | 15 | 15 | — |
+| openvoice_v2 | 4 | tc | 5 | 5 | 1.0 | 0 | 15 | — |
+| openvoice_v2 | 20 | synth | 3 | 3 | 1.0 | 19 | 19 | — |
+| openvoice_v2 | 20 | tc | 3 | 5 | 1.67 | 0 | 19 | — |
+### phase14-verify-ov1-same — 2026-11-10T03:23:29Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on (verified against --embedding-cache on)
+* concurrency: 1, 4, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| openvoice_v1 | 1 | 7.56 | 132.2 | 139.8 | 132.1 | 0 |
+| openvoice_v1 | 4 | 8.85 | 446.5 | 481.9 | 437.2 | 0 |
+| openvoice_v1 | 20 | 9.29 | 2022.2 | 2091.4 | 1773.7 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| openvoice_v1 | 4 | synth | 5 | 5 | 1.0 | 15 | 15 | — |
+| openvoice_v1 | 4 | tc | 5 | 5 | 1.0 | 0 | 15 | — |
+| openvoice_v1 | 20 | synth | 4 | 6 | 1.5 | 20 | 20 | — |
+| openvoice_v1 | 20 | tc | 4 | 6 | 1.5 | 0 | 20 | — |
+### phase14-verify-hs1-voicefixer — 2026-11-10T03:23:53Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 1, 4, 8, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| harmonyspeech | 1 | 6.05 | 163.7 | 173.8 | 165.1 | 0 |
+| harmonyspeech | 4 | 6.43 | 616.3 | 621.5 | 590.3 | 0 |
+| harmonyspeech | 8 | 6.4 | 1222.0 | 1330.4 | 1067.9 | 0 |
+| harmonyspeech | 20 | 6.3 | 1867.0 | 3097.3 | 1803.3 | 0 |
+| voicefixer | 1 | 8.17 | 122.1 | 124.8 | 122.2 | 0 |
+| voicefixer | 4 | 9.99 | 398.6 | 426.7 | 389.2 | 0 |
+| voicefixer | 8 | 10.84 | 707.8 | 762.2 | 649.8 | 0 |
+| voicefixer | 20 | 10.97 | 1591.5 | 1791.0 | 1343.2 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| voicefixer | 4 | restore | 5 | 5 | 1.0 | 15 | 15 | — |
+| voicefixer | 4 | vocoder | 5 | 5 | 1.0 | 0 | 15 | — |
+| voicefixer | 8 | restore | 3 | 3 | 1.0 | 17 | 17 | — |
+| voicefixer | 8 | vocoder | 3 | 3 | 1.0 | 0 | 17 | — |
+| voicefixer | 20 | restore | 3 | 3 | 1.0 | 19 | 19 | — |
+| voicefixer | 20 | vocoder | 3 | 3 | 1.0 | 0 | 19 | — |
+### phase14-verify-kitten-lanes — 2026-11-10T03:24:10Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 8 · HTTP client pool: 8 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| kitten | 8 | 1.74 | 3938.1 | 5587.8 | 4006.4 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| kitten | 8 | lanes | 5 | 0 | 0.0 | 0 | 19 | 4 |
+### phase14-verify-same-cache-off — 2026-11-10T03:24:50Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: off (verified against --embedding-cache off)
+* concurrency: 1, 4, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | 1 | 5.36 | 179.5 | 191.7 | 186.3 | 0 |
+| openvoice_v2 | 4 | 6.13 | 658.8 | 672.1 | 625.9 | 0 |
+| openvoice_v2 | 20 | 8.01 | 2377.0 | 2435.8 | 2095.3 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | 4 | embed | 5 | 5 | 1.0 | 11 | 11 | — |
+| openvoice_v2 | 4 | synth | 5 | 5 | 1.0 | 11 | 11 | — |
+| openvoice_v2 | 4 | tc | 5 | 5 | 1.0 | 0 | 11 | — |
+| openvoice_v2 | 20 | embed | 4 | 4 | 1.0 | 20 | 20 | — |
+| openvoice_v2 | 20 | synth | 4 | 4 | 1.0 | 20 | 20 | — |
+| openvoice_v2 | 20 | tc | 4 | 6 | 1.5 | 0 | 20 | — |
+### phase14-verify-distinct-cache-off — 2026-11-10T03:25:03Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: distinct · embedding cache: off (verified against --embedding-cache off)
+* concurrency: 1, 4, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | 1 | 5.69 | 175.1 | 180.7 | 175.6 | 0 |
+| openvoice_v2 | 4 | 6.93 | 573.4 | 593.7 | 569.8 | 0 |
+| openvoice_v2 | 20 | 7.71 | 2410.0 | 2564.8 | 2058.5 | 0 |
+
+Per-step sub-batch composition (engine DEBUG log):
+
+| Family | Concurrency | Step | Steps logged | Sub-batches | avg/step | Rows | Requests | Lanes |
+|---|---|---|---|---|---|---|---|---|
+| openvoice_v2 | 4 | embed | 5 | 5 | 1.0 | 15 | 15 | — |
+| openvoice_v2 | 4 | synth | 5 | 5 | 1.0 | 15 | 15 | — |
+| openvoice_v2 | 4 | tc | 5 | 5 | 1.0 | 0 | 15 | — |
+| openvoice_v2 | 20 | embed | 4 | 5 | 1.25 | 19 | 19 | — |
+| openvoice_v2 | 20 | synth | 4 | 4 | 1.0 | 19 | 19 | — |
+| openvoice_v2 | 20 | tc | 4 | 5 | 1.25 | 0 | 19 | — |
+### phase14-verify-whisper-windows — 2026-11-10T03:25:39Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4, 8, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| whisper | 4 | 4.44 | 897.0 | 928.7 | 873.8 | 0 |
+| whisper | 8 | 5.73 | 1360.4 | 1455.2 | 1222.9 | 0 |
+| whisper | 20 | 5.35 | 3176.9 | 3708.3 | 3118.2 | 0 |
+### phase14-verify-fixture-melo-on — 2026-11-10T14:27:22Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) |
+|---|---|---|---|---|---|---|
+| melo | padded batch | on | 807 | 4 | 1.05 | 957.2 |
+### phase14-verify-fixture-ov2-on — 2026-11-10T14:27:34Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=1 req/s | c=1 p50 (ms) |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | on | 807 | 4 | 0.66 | 1507.7 |
+### phase14-verify-fixture-ov2-off4 — 2026-11-10T14:27:44Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=4 req/s | c=4 p50 (ms) |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | off | 807 | 1 | 0.78 | 5125.8 |
+### phase14-verify-fixture-ov2-off8 — 2026-11-10T14:27:55Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* fixture: real prose (owner-provided extract from The Villainess Malfoy, 2026-11-09) · chunk budget server default (300) chars · crossfade server default (40 ms) · pause server default (120 ms) · filters dc=False trim=False internal=False
+* 4 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Class | Chunking | Chars | Chunks/req | c=8 req/s | c=8 p50 (ms) |
+|---|---|---|---|---|---|---|
+| openvoice_v2 | clone pipeline (VAD -> embed -> synth -> tone convert) | off | 807 | 1 | 0.79 | 5059.8 |
+### phase14-verify-whisper-windows-gpu — 2026-11-10T14:28:38Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 4, 8, 20 · HTTP client pool: 20 connection(s)
+* 20 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| whisper | 4 | 25.77 | 149.8 | 177.9 | 149.9 | 0 |
+| whisper | 8 | 32.1 | 215.9 | 276.9 | 213.4 | 0 |
+| whisper | 20 | 35.16 | 487.6 | 512.9 | 460.8 | 0 |
+
+## Phase 14 pre-commit verification vs commit `8b7d222` (2026-11-10)
+
+Before committing Phase 14 (streaming TTS) — and carrying the already-committed
+Phase 13 (`1243ddb` + `7357358`) — every measured table in this file was
+re-run on the benchmark host (GPU 1, RTX 5060 Ti 16 GiB, torch 2.9.1+cu130,
+suite baseline 1943→1958 passed / 5 skipped on the run tree). The comparison
+baseline is this document at `8b7d222` (byte-identical to the working copy
+before this section). All runs carry `phase14-verify-*` labels; their
+per-run blocks are appended above verbatim (`--md-out` provenance) and the
+JSON lives under `out/bench/phase14-verify-*.json`. Runbook:
+`out/bench/run-14-verify-bench.ps1`, `out/bench/verify-14-fixture.ps1`,
+`out/bench/measure-14-stream.py`.
+
+### Regression gates (`audio_regression`, GPU 1, real weights)
+
+| Axis | Scope | Verdict | Note |
+|---|---|---|---|
+| `longform:off-vs-on` | 8 families | **PASS** | pins the buffered chunked path through the Phase 14 dispatcher refactor |
+| `determinism:run1-vs-run2` | 8 families | **PASS** | seeded chunked determinism unchanged |
+| `batching:1-vs-4` | chatterbox + turbo | **PASS** | AR/embed padded-batch equivalence unchanged |
+| `dtype:fp32-vs-autocast` fp16 | 3 chatterbox families | **PASS** | matches the recorded 7/7 |
+| `dtype:fp32-vs-autocast` bf16 | 3 chatterbox families | **FAIL (5/7)** | reproduces the recorded 2026-11-08 verdict verbatim (`tts_clone_voice_a` corr 0.8475, `vc_speech_a_to_b` mse 2.9995 vs recorded 0.8475/3.000) — the documented reason fp16 ships; not a regression |
+| `streaming:off-vs-on` (new, 14-5) | 8 families | **PASS after recalibration** | first strict run failed OV1/OV2 only; owner decision 2026-11-10: the OV clone cases compare distributionally (B=1 sequential streaming vs B=4 burst TC numerics — Phase 8-3 equivalence was never sample-exact) plus a streamed run1-vs-run2 determinism sub-check; the other six families stay sample-exact (harmonyspeech bit-identical, AR trio corr 1.0, melo exact). Re-run: `out/bench/gate-14-verify-streaming-axis-recal.json` |
+| AR parity e2e (seeded token equality) | English + Turbo | **2 passed** | pinned on HF-cache checkpoints |
+| Whisper window parity e2e | tiny, 1-window + 65 s multi-window | **2 passed** | needs the cuDNN shim; without it CT2 hard-aborts (`0xC0000409`) — same host fact as the Method note |
+
+### Throughput comparison vs the recorded tables
+
+| Table (recorded) | Re-run | Verdict |
+|---|---|---|
+| Phase 12-9 long-form matrix, 5 of 6 families | shipped `config.gpu.yml` | **match within noise** — melo on 919 vs 917 ms, kitten on 7795 vs 7748, multilingual on 9991 vs 10495, chatterbox on/turbo off+on all within ±5 % |
+| Phase 12-9 long-form matrix, openvoice_v2 | shipped `config.gpu.yml` | **cliff — see next section** (7150 vs 1478 ms at on/c=1) |
+| Phase 12-9 long-form matrix, openvoice_v2 | the 12-9 fixture `config-phase12.yml` | **match within noise** — on/c=1 1508 vs 1478 ms, off/c=4 5126 vs 4998, off/c=8 5060 vs 8965 (no cliff) |
+| 11-0 shipped-config spots (c=4) | shipped config | chatterbox 0.80→1.02 req/s, turbo 1.55→1.77, clone-distinct 0.90→0.90 (p50 2178→5325 ms; mean 4434 — latency profile shifted, throughput flat) |
+| Phase 9-6 three-way runner rows (DEBUG) | shipped config | chatterbox 2.09/2.13/2.25 → 2.16/2.75/2.84 req/s; turbo 5.29/5.59/5.44 → 4.46/5.19/4.87 — the 9-6 rows predate Phase 12-8 (deferred vocode, multi-token steps: tokens/step 3.95→16), so the deltas are 12+13 effects, not 14 |
+| Phase 9-6 cache composition (chatterbox clone c=8) | shipped config | all four cells 1.10–1.15 req/s vs recorded 0.14–0.30 — 4–8× better than the pre-12 baseline |
+| Phase 5-3/8 short-text post rows | `config-post.yml` | melo 8.29→8.53 / 14.43→14.93 (c=1/c=8), ov2 clone 1.84→1.77 / 1.90→1.92, chatterbox 0.60→0.62 — unchanged-or-better; whisper-tiny rows below |
+| Phase 8 clone matrix (OV2, 4 cells) | `config-phase8.yml` | same/on 4.05→5.41 (c=1), 6.38→8.10 (c=20); distinct/on 6.45→8.50 — better (Silero default VAD is cheaper than Whisper-VAD per request); off cells likewise ≥ recorded |
+| Phase 8 OV1 curve | fixture | 5.12/6.38/7.41 → 7.56/8.85/9.29 req/s — better |
+| Phase 8 HS/VF curves | fixture | HS 6.23–6.51 → 6.05–6.43 (flat, CPU-bound, as recorded); VF 8.51–11.54 → 8.17–10.97 — within noise |
+| Phase 8 kitten lanes (c=8) | fixture | 1.79/3804 → 1.74/3938 — within noise |
+| Phase 11-1 VC post rows | ``config-vc-post.yml`` (as recorded) | 2.59/2.65/3.58/4.03 → **2.52/2.62/3.53/3.95 req/s** (c=1/2/4/8), p50 385/747/1096/1963 → 396/763/1117/2012 ms — match within noise |
+| Phase 10 lanes+windows (whisper tiny) | windows fixture + cuDNN shim | c=4 26.92→25.77, c=8 32.14→32.10, c=20 32.03→35.16 req/s — matches the recorded envelope |
+| Phase 12-9 fidelity | shipped config | turbo on 4 vs 4, chatterbox 2/2, multilingual 3 vs 4 (137/138 words — transcription-floor band), melo 4-5, ov2 on 6 vs 0 (at the ~6 floor; LTAS-identical), kitten 8 vs 6 — all words heard everywhere except the known unchunked-turbo row; no coverage regression |
+
+**Whisper cuDNN confound (recorded, honest):** the first whisper re-run
+(`phase14-verify-whisper-windows`) silently fell back to CPU int8 — the boot
+missed the side-installed cuDNN 8 shim the recorded runs expose via
+`PYTHONPATH=out\bench\dllshim` **plus** the same DLL dirs on `PATH`
+(`cublasLt64_12.dll` is resolved through PATH; `os.add_dll_directory`
+alone is not enough — the shim boot without PATH crashed at model init).
+Those rows are superseded by `phase14-verify-whisper-windows-gpu` above.
+
+### Finding — the shipped config does not fit the recorded long-form envelope on a 16 GiB card
+
+The OV2 cliff on the shipped config is **not a Phase 13/14 regression**: the
+same tree reproduces the recorded 12-9 numbers on the 8-entry
+`config-phase12.yml` fixture the 12-9 session actually booted (12-4 log,
+`Config: out/bench/config-phase12.yml`). The difference is residency:
+
+| Boot | Resident models | Idle device used | Idle free |
+|---|---|---|---|
+| 12-9 fixture (`config-phase12.yml`) | 8 | 10.7 GiB | **5.6 GiB** |
+| shipped `config.gpu.yml` (whisper CPU-fallback) | 28 | — | ~2.5–3.5 GiB |
+| shipped + whisper on GPU (shim) | 28 | 15.06 GiB | **0.87 GiB** (whisper probes alone project 8.3 GiB; the governance block warns) |
+
+The Phase 12-9 padded-area budgets cap a TC batch at 7500 mel frames
+(~2.6 GiB peak reserved), which fits the fixture's 5.6 GiB headroom but not
+the shipped catalogue's: long-row TC batches page into WDDM Shared Memory and
+the 12-9 cliff returns (on/c=1 1478→7150 ms; off/c=8 →88 s — the exact
+pre-12-9 signature the fixture header itself documents). Two shipped-config
+gaps for the owner to weigh (recorded here, not fixed in this phase):
+1. The 12-9 matrix is a **fixture-config result**; the reproduce block's
+   `--config-file-path config.gpu.yml` line does not match what was booted.
+2. A 16 GiB card cannot host all 28 models + the 2.75 GiB AR pool and still
+   serve long-form OV clone floods; options are a slimmer default catalogue,
+   lazy/secondary-device residency for the seldom-used synthesizers, or
+   documenting the envelope (the shipped `request_timeout_s` default of
+   120 s also clips unchunked c≥8 floods — the fixture sets 600 s for exactly
+   this reason).
+
+### Streaming measurements (new surface, Phase 14)
+
+`measure-14-stream.py` against the shipped config (INFO boot, 807-char
+fixture, 4 chunks, 5 runs):
+
+| Family | TTFA alone p50 | TTFA +1 co-batch | TTFA +3 co-batch | Stream wall (median) | Buffered wall |
+|---|---|---|---|---|---|
+| chatterbox | 3.62 s | 13.87 s | 33.61 s | 16.19 s | 9.74 s |
+| melo | 0.22 s | 0.82 s | 2.44 s | 1.07 s | 0.91 s |
+
+The 12-8 deferred-vocode caveat is real and quantified: chunk 0 alone keeps
+the `first audio after the first sentence` promise (3.6 s for one AR chunk;
+0.22 s padded), but a chunk co-batched behind other rows waits for the
+slowest row. Sequential streaming also forgoes the burst's co-batched decode
+(stream wall 16.2 vs 9.7 s for the whole paragraph) — pipelining remains the
+deferred, measured follow-up. SSE envelope verified end-to-end (5 deltas, one
+`speech.audio.done` with `duration_s` 39.48 / `usage.input_characters`
+807, `data: [DONE]` last); `hse_tts_stream_first_frame_seconds` /
+`chunks_total{outcome}` / `bytes_total` all observed moving with
+`completed` outcomes and zero-state present.
+
+### Reproduce
+
+``bash
+# gates (in-process, real weights)
+CUDA_VISIBLE_DEVICES=1 python scripts/audio_regression.py --families <8> --axis longform:off-vs-on --gpu ...
+#   (determinism / batching:1-vs-4 / dtype:fp32-vs-autocast fp16+bf16 / streaming:off-vs-on)
+# throughput: out/bench/run-14-verify-bench.ps1 (boots shipped + fixture configs)
+# OV2 attribution + whisper-on-GPU: out/bench/verify-14-fixture.ps1
+# streaming TTFA/metrics: out/bench/measure-14-stream.py --family chatterbox --family melo
+# whisper shim: PYTHONPATH=out\bench\dllshim AND the cudnn/cublas/nvrtc bin dirs on PATH
+``
+## 2026-11-10T14:39:33Z — `streaming:off-vs-on`
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · mode GPU
+
+| Family | Case | Kind | Verdict | stream det | duration Δ% | RMS Δ% | log-mel MSE | LTAS RMSE dB | corr | identical | WER | Expectation |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| chatterbox | streamed_tts_bundled_voice | stochastic | PASS | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| chatterbox_turbo | streamed_tts_bundled_voice | stochastic | PASS | PASS | 0.0 | 0.0 | 3e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| chatterbox_multilingual | streamed_tts_en | stochastic | PASS | PASS | 0.0 | 0.0 | 1e-06 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| openvoice_v1 | streamed_clone_voice_a | stochastic | PASS | PASS | 0.054 | 2.081 | 43.81633 | 0.5927 | 0.0206 | False | - | streamed vs buffered (multi-chunk, pre-watermark); distributional: B=1 vs B=4 tone-converter numerics (Phase 8-3 log-mel <= 1.48e-4), run1-vs-run2 determinism gated |
+| openvoice_v2 | streamed_clone_voice_a | stochastic | PASS | PASS | 0.026 | 0.831 | 20.941683 | 0.3676 | 0.1045 | False | - | streamed vs buffered (multi-chunk, pre-watermark); distributional: B=1 vs B=4 tone-converter numerics (Phase 8-3 log-mel <= 1.48e-4), run1-vs-run2 determinism gated |
+| melotts | streamed_tts_en | stochastic | PASS | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| harmonyspeech | streamed_clone_voice_a | deterministic | PASS | PASS | 0.0 | 0.0 | 0.0 | 0.0 | 1.0 | True | - | streamed vs buffered (multi-chunk, pre-watermark) |
+| kittentts | streamed_tts_en | stochastic | PASS | PASS | 0.0 | 0.039 | 3.192458 | 0.117 | 0.9918 | False | - | streamed vs buffered (multi-chunk, pre-watermark) |
+### phase14-verify-vc-post — 2026-11-10T14:50:43Z
+
+* commit `7357358` · torch 2.9.1+cu130 · NVIDIA GeForce RTX 5060 Ti · driver 610.88 · CUDA_VISIBLE_DEVICES=1
+* config: n/a
+* clone reference: same · embedding cache: on
+* concurrency: 1, 2, 4, 8 · HTTP client pool: 8 connection(s)
+* 16 requests per concurrency level, HTTP against http://127.0.0.1:2242
+
+| Family | Concurrency | req/s | p50 (ms) | p95 (ms) | mean (ms) | failures |
+|---|---|---|---|---|---|---|
+| chatterbox_vc | 1 | 2.52 | 395.6 | 414.4 | 397.1 | 0 |
+| chatterbox_vc | 2 | 2.62 | 762.6 | 767.0 | 740.8 | 0 |
+| chatterbox_vc | 4 | 3.53 | 1117.2 | 1155.5 | 1084.0 | 0 |
+| chatterbox_vc | 8 | 3.95 | 2011.9 | 2077.7 | 1917.1 | 0 |

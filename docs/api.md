@@ -159,9 +159,10 @@ See [Audio I/O contract](audio-io-contract.md) for the complete format/transport
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `format` | string | `"wav"` | `wav`, `flac`, `ogg`, `mp3`, `opus`, `pcm` (raw s16le) or `aac` (only when `ffmpeg` is available). Unsupported values → HTTP 400 |
-| `sample_rate` | integer | null | Resample output to this rate (Hz): 8000, 16000, 22050, 24000, 32000, 44100, 48000. If null, uses the model's native rate |
-| `stream` | boolean | false | Whether to stream the response (reserved for future use; `true` currently returns 400) |
+| `format` | string | `"wav"` | `wav`, `flac`, `ogg`, `mp3`, `opus`, `pcm` (raw s16le) or `aac` (only when `ffmpeg` is available). Unsupported values → HTTP 400. While streaming, only `wav` and `pcm` are accepted |
+| `sample_rate` | integer | null | Resample output to this rate (Hz): 8000, 16000, 22050, 24000, 32000, 44100, 48000. If null, uses the model's native rate. Works while streaming; the effective rate is reported in the `X-Audio-Sample-Rate` header |
+| `stream_format` | string | null | Streaming envelope: `"audio"` (chunked binary WAV/PCM) or `"sse"` (Server-Sent Events). **Setting this field selects streaming** — matching OpenAI's `/v1/audio/speech`, where the body streams once a format is chosen. See [Streaming output](#streaming-output). Streaming is served on `/v1/audio/speech` only |
+| `stream` | boolean | false | **Deprecated** alias for `stream_format: "audio"` (kept for OpenAI-compatible clients). `true` selects the binary streaming envelope; an explicit `stream_format` wins when both are set |
 
 Notes:
 
@@ -171,6 +172,182 @@ Notes:
   Set `sample_rate` explicitly for `pcm`; otherwise the model native rate applies.
 - Audio responses include an optional `sample_rate` field with the effective rate whenever the
   engine re-encoded or resampled the payload.
+
+#### Streaming output
+
+Streaming is opt-in: a request streams when `output_options.stream_format` is
+set (or the deprecated `stream: true` alias is used). Both envelopes emit the
+same audio frames — one frame per completed synthesis chunk, crossfaded so joins
+are gapless — and differ only in framing.
+
+| `stream_format` | Transport | Body |
+|-----------------|-----------|------|
+| `"audio"` | `Transfer-Encoding: chunked`, no `Content-Length` | `format: "wav"`: a 44-byte streaming RIFF header (`0xFFFFFFFF` in both size fields) followed by s16le frames. `format: "pcm"`: headerless s16le frames |
+| `"sse"` | `Content-Type: text/event-stream` | `speech.audio.delta` events carrying a base64 `audio` field, one `speech.audio.done` terminal event, then `data: [DONE]`; `: keepalive` comments during a long first chunk |
+
+`X-Audio-Format` is the emitted container (`wav`/`pcm`), and
+`X-Audio-Sample-Rate` is the **effective/target** rate: the requested
+`sample_rate` when resampling is active, otherwise the model's native rate.
+
+While `stream_format: "sse"` is selected the audio is always headerless s16le
+PCM: each `speech.audio.delta` carries the raw samples, even when
+`format: "wav"` was requested. `X-Audio-Format` and
+`speech.audio.done.format` therefore report `pcm` — the requested container
+only frames the binary envelope.
+
+SSE event semantics:
+
+- `speech.audio.delta` — `{type, audio, chunk_index}`. `chunk_index` starts at
+  0 and increases by one per frame, so a dropped frame is detectable.
+- `speech.audio.done` — exactly one per successful stream: `{type, id, model,
+  created, sample_rate, format, chunks, duration_s, usage}`. `sample_rate` is
+  the effective/target rate, `duration_s` the spoken duration, `chunks` the
+  number of delta frames sent, and `usage` adds `input_characters` and
+  `audio_seconds`. `data: [DONE]` follows it as the last line.
+- `speech.audio.error` — at most one, and only when synthesis fails **after**
+  the stream started: `{error: {message, type, code}}`, then the stream closes
+  with no `done` and no `[DONE]`. A failure before the first event is a normal
+  HTTP error response instead.
+- `: keepalive` comment lines may appear between events (including before the
+  first one) when a chunk takes longer than 15 seconds; they carry no data.
+
+`EventSource` cannot send a POST body, so browser clients use `fetch` with a
+stream reader instead.
+
+Every streaming response carries the same header set:
+
+| Header | Value |
+|--------|-------|
+| `X-Audio-Format` | `wav` or `pcm` — the streaming container |
+| `X-Audio-Sample-Rate` | Effective/target rate in Hz |
+| `X-Audio-Channels` | `1` (mono) |
+| `X-Audio-Bits` | `16` (signed little-endian PCM) |
+| `X-Request-Id` | The request id (mirrors the buffered response `id`) |
+| `X-Accel-Buffering` | `no` (so a reverse proxy does not buffer the body) |
+| `Cache-Control` | `no-cache, no-transform` |
+
+**Admission rules (final).** Every failure below is an HTTP 400 returned
+**before synthesis starts**; nothing is silently downgraded:
+
+| Request while streaming | Result |
+|-------------------------|--------|
+| `format` other than `wav`/`pcm` (e.g. `mp3`, `flac`) | **400** — the message names the `wav`/`pcm` restriction |
+| `sample_rate` set | **Allowed** — the engine resamples the stream statefully |
+| `remove_dc_offset: true` | **Allowed** — applied per chunk |
+| `trim_silence: true` | **400** — whole-buffer-only: trims relative to the final buffer's global peak |
+| `fix_internal_silence: true` | **400** — whole-buffer-only: collapses pauses on the final stitched buffer |
+| `speed` other than `null`/`1` on a family that does not consume it natively (the Chatterbox families) | **400** — whole-buffer-only: the speed change is a phase-vocoder stretch of the final buffer. Native-speed families (Harmony Speech, OpenVoice V1, MeloTTS, KittenTTS) accept `speed` while streaming |
+
+Envelope framing (streaming WAV header, SSE event bodies, resampling
+continuity) is delivered by the streaming serving path; the request fields,
+admission rules and response headers above are final.
+
+##### Streaming examples
+
+Binary WAV stream, played as it arrives (`curl --no-buffer` stops curl from
+buffering, so the first chunk reaches the player immediately):
+
+```bash
+curl --no-buffer -s http://localhost:2242/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "chatterbox",
+    "input": "This is a long sentence. It is followed by another sentence. And a third one.",
+    "generation_options": {"split_text": true},
+    "output_options": {"stream_format": "audio", "format": "wav"}
+  }' | ffplay -nodisp -autoexit -
+```
+
+Headerless PCM at a requested rate (the rate is also in `X-Audio-Sample-Rate`):
+
+```bash
+curl --no-buffer -s http://localhost:2242/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "chatterbox",
+    "input": "This is a long sentence. It is followed by another sentence.",
+    "generation_options": {"split_text": true},
+    "output_options": {"stream_format": "audio", "format": "pcm", "sample_rate": 16000}
+  }' | ffplay -f s16le -ar 16000 -ac 1 -nodisp -autoexit -
+```
+
+SSE + PCM in the browser. `EventSource` cannot send a POST body, so use
+`fetch` with a stream reader; base64-decode each `speech.audio.delta` and feed
+the s16le samples to an `AudioWorklet` (or a `ScriptProcessorNode` on older
+browsers). The worklet should convert `Int16` to `Float32` (`sample / 32768`)
+and play from a small ring buffer; use the `X-Audio-Sample-Rate` response
+header as the `AudioContext` rate.
+
+```js
+const response = await fetch("/v1/audio/speech", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    model: "chatterbox",
+    input: "This is a long sentence. It is followed by another sentence.",
+    generation_options: { split_text: true },
+    output_options: { stream_format: "sse", format: "pcm", sample_rate: 24000 },
+  }),
+});
+
+const sampleRate = Number(response.headers.get("X-Audio-Sample-Rate"));
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+
+for (;;) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, { stream: true });
+
+  let boundary;
+  while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+    const frame = buffer.slice(0, boundary);
+    buffer = buffer.slice(boundary + 2);
+
+    if (frame.startsWith(":")) continue; // ": keepalive" comment
+    const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+    if (!dataLine) continue;
+    const data = dataLine.slice("data: ".length);
+    if (data === "[DONE]") continue; // terminal frame, nothing to play
+
+    const event = JSON.parse(data);
+    if (event.type === "speech.audio.delta") {
+      const binary = atob(event.audio);
+      const pcm = new Int16Array(binary.length / 2);
+      for (let i = 0; i < pcm.length; i++) {
+        pcm[i] = (binary.charCodeAt(2 * i) | (binary.charCodeAt(2 * i + 1) << 8)) << 16 >> 16;
+      }
+      // postMessage({pcm, sampleRate}, [pcm.buffer]) to your AudioWorklet
+    } else if (event.type === "speech.audio.error") {
+      console.error("stream failed", event.error);
+    }
+  }
+}
+```
+
+##### Reverse-proxy notes
+
+Streaming only works when every hop passes the body through incrementally:
+
+- `X-Accel-Buffering: no` is sent on every streaming response; nginx honours
+  it. A proxy that ignores it needs buffering disabled explicitly
+  (`proxy_buffering off;`).
+- Keep `proxy_http_version 1.1` and forward chunked bodies
+  (`proxy_set_header Connection "";`).
+- Do **not** gzip `text/event-stream` or the audio stream. `Cache-Control:
+  no-cache, no-transform` asks intermediaries not to transform the body, but
+  some still compress when `gzip_types` includes the type; exclude
+  `text/event-stream` (and the audio types) or turn compression off for the
+  endpoint.
+- `proxy_read_timeout` must exceed the first chunk's synthesis time, not the
+  whole response: with sequential chunking the first sentence can take several
+  seconds, and SSE emits a `: keepalive` comment at most every 15 s so an
+  otherwise-idle connection is kept warm. 60 s is a safe starting point; a
+  binary stream sends no keepalive, so size it for the first chunk's latency.
+- A client that disconnects mid-stream stops the remaining synthesis server
+  side; the in-flight chunk is aborted and no further chunk is submitted.
+
 
 ### Audio inputs and transports
 

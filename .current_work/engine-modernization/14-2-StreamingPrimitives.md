@@ -27,6 +27,111 @@
 
 ## Checklist
 
-- [ ] soxr `ResampleStream` verified + wrapped; continuity/flush gate green
-- [ ] WAV header + frame + SSE primitives with golden-fixture tests
-- [ ] `summary.md` ticked
+- [x] soxr `ResampleStream` verified + wrapped; continuity/flush gate green
+- [x] WAV header + frame + SSE primitives with golden-fixture tests
+- [x] `summary.md` ticked
+
+## Verification log (2026-11-10)
+
+**Changed** — `harmonyspeech/endpoints/openai/streaming.py` extended in place
+(no parallel module): the module docstring now covers both phases, `__all__`
+grew additively, and a new "Binary envelope primitives" + "SSE envelope
+primitives" section carries `wav_stream_header`, `pcm16_frame`,
+`StreamResampler` (alias `ResampleStream`), `sse_event`, `delta_payload`,
+`done_payload`, `error_payload`, `keepalive`, plus the constants
+`WAV_STREAM_HEADER_BYTES`, `SSE_EVENT_{DELTA,DONE,ERROR}`, `SSE_KEEPALIVE`,
+`SSE_DONE_FRAME`. The 14-1 symbols (`resolve_stream_format`,
+`streaming_response_headers`, every constant) are byte-identical — only the
+docstring and `__all__` changed. New tests:
+`tests/unit/wire_contract/test_streaming_primitives.py` (105 tests; sibling of
+14-1's `test_streaming_protocol.py` rather than a new
+`tests/unit/endpoints/` package, which the repo does not have — the
+wire-contract convention is the established home for this seam).
+
+**Verified `soxr` API (environment assumption pinned).** Installed
+`python-soxr` **1.0.0** exposes `ResampleStream`:
+
+* constructor — `soxr.ResampleStream(in_rate: float, out_rate: float,
+  num_channels: int, dtype='float32', quality='HQ')`;
+* `resample_chunk(x: np.ndarray, last=False) -> np.ndarray` — `last=True`
+  flushes the filter tail and must be called once at the end; a later
+  `resample_chunk` raises `RuntimeError: Input after last input` (the wrapper
+  pre-empts this with its own `RuntimeError`);
+* `clear()` resets the same configuration; `delay` and `num_clips` are
+  **methods**, not attributes;
+* mono input may be `(frames,)` or `(frames, 1)`; `dtype='float32'` matches
+  the serving layer's waveform representation.
+
+Measured: with `quality='HQ'`, streaming `resample_chunk` output equals
+one-shot `soxr.resample(x, in, out, quality='HQ')` **exactly** (max abs diff
+0.0) for realistic lengths at 48 k→16 k, 44.1 k→8 k, 24 k→22.05 k and
+16 k→48 k. Only *total* inputs of 1–2 samples differ (soxr's own edge
+handling/length choice), which is not a chunk seam; the gate uses real-length
+sweeps split at 0/1/3/odd/non-block-aligned boundaries. `tests/unit/wire_contract/test_streaming_primitives.py::TestStreamResampler::test_installed_soxr_exposes_the_pinned_resample_stream_api`
+re-pins the signature/defaults, so an environment change fails loudly.
+
+**Serving-layer verification (what `_chunked` holds).** The chunked path
+gathers one `AudioArtifact` per chunk and reads `audio_artifact.numpy`
+(float32 mono `[samples]`, `serving_text_to_speech.py:618-633`), then the
+buffered encoder runs `to_wire_audio → encode_artifact →
+audio_codec.encode_audio`. So `pcm16_frame` is the **one canonical
+conversion**: `audio_codec.encode_audio(waveform, rate, "pcm")` (the existing
+`_to_s16le`). Only the legacy pre-artifact payload (base64 WAV `str`) and
+container `bytes` go through `audio_codec.decode_wav_b64` /
+`decode_audio` — the codec layer's decoders, never a second decode path.
+No codec-layer or `CrossfadeStitcher` change was made (the primitives consume
+the stitcher's float32 output).
+
+**Deviations**
+
+1. `StreamResampler.feed()`/`flush()` exchange **float32 numpy samples**, not
+   bytes. 14-3's frame loop resamples between the watermark and the PCM
+   encoder, and the continuity gate is a float comparison against one-shot
+   `soxr.resample`; a byte-level API would quantize twice and could not meet
+   the ≤1e-6 tolerance. `pcm16_frame()` is the single quantizer at the end.
+   The task-file name `ResampleStream` is exported as an alias for
+   discoverability.
+2. `pcm16_frame()` accepts an `AudioArtifact`-like object (the verified
+   serving representation), a numpy waveform, container `bytes`, or the legacy
+   base64 `str`; all routes end in the same `encode_audio(..., "pcm")`.
+3. `done_payload()` keeps the task-file positional signature. `usage` is
+   copied (never mutated) and extended with `audio_seconds` (from
+   `duration_s`, rounded to 6 dp) and `input_characters` (from the caller's
+   usage when supplied, else `0`). `duration_s` is documented as coming from
+   the resampler's `emitted_samples ÷ rate`, never from wire bytes.
+4. `error_payload()` returns exactly `{error: {message, type, code}}` as the
+   task file specifies (no top-level `type`); the event name carries the type.
+5. Added `SSE_DONE_FRAME = "data: [DONE]\n\n"` so 14-4 emits the final frame
+   without hand-rolling it (still a separate emission after `done`).
+6. The known `wave` wart is pinned by test: `soundfile` reads the stream to
+   EOF (`frames == len(samples)`) while stdlib `wave.getnframes()` reports
+   `0xFFFFFFFF // 2 == 2147483647`.
+
+**Blast radius.** `gitnexus` was available but its index is at `1243ddb` (one
+commit behind `HEAD`, and it predates the untracked 14-1/14-2 files), so the
+graph cannot see this module. `gitnexus.detect_changes(scope="unstaged")`
+reports **0 affected processes, risk low** for the uncommitted tree. Grep
+blast radius: the only importers of `endpoints.openai.streaming` are
+`serving_text_to_speech.py:62` (imports `STREAMING_AUDIO_FORMATS`,
+`resolve_stream_format`) and `tests/unit/wire_contract/test_streaming_protocol.py`
+— both unaffected by additive names; nothing existing was renamed or removed.
+
+**Tests.** Command:
+`& "C:\Users\sge20\miniconda3\envs\hse\python.exe" -m pytest tests/unit tests/integration tests/e2e/wire_contract -q --no-header`
+
+* before (14-1 baseline): **1749 passed, 5 skipped**
+* after: **1854 passed, 5 skipped** (+105, all in
+  `test_streaming_primitives.py`)
+* `ruff check` clean on both touched files (the repo does not enforce
+  `ruff format`; existing files are not format-clean, so no unrelated
+  reformatting was applied).
+
+**Reproduce**
+
+```powershell
+& "C:\Users\sge20\miniconda3\envs\hse\python.exe" -c "import soxr, inspect; print(soxr.__version__); print(inspect.signature(soxr.ResampleStream.__init__)); print(inspect.signature(soxr.ResampleStream.resample_chunk))"
+& "C:\Users\sge20\miniconda3\envs\hse\python.exe" -m pytest tests/unit/wire_contract/test_streaming_primitives.py -q --no-header
+```
+
+**Blocker:** none (installed python-soxr 1.0.0 has `ResampleStream`; no new
+dependencies).

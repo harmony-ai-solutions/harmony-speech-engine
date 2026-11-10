@@ -314,12 +314,19 @@ def test_invalid_output_sample_rate_rejected_before_synthesis(wire_client, rate)
     assert len(wire_client.engine.requests) == before
 
 
-def test_stream_output_still_rejected(wire_client):
+def test_stream_output_alias_is_admitted_not_the_old_rejection(wire_client):
+    """Phase 14-1/14-3: `stream: true` is the deprecated alias for stream_format="audio".
+
+    The admission contract is final and 14-3 serves the binary envelope, so an
+    admitted streaming request streams (never the old 400 rejection, never a
+    silent buffered 200 JSON body).
+    """
     response = wire_client.client.post(
         "/v1/audio/speech", json=_tts_payload(output_options={"stream": True})
     )
-    assert response.status_code == 400
-    assert "Stream output" in response.json()["message"]
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/")
+    assert response.content[:4] == b"RIFF"
 
 
 @pytest.mark.parametrize(
