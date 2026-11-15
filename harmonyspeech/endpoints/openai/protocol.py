@@ -157,35 +157,38 @@ class GenerationOptions(BaseModel):
         description="(OpenVoice V1 / MeloTTS) Weight of the stochastic duration predictor vs the deterministic one. Default: 0.2.",
     )
     # Long-form audio (Phase 12-2): sentence-aware splitting, concurrent chunk
-    # synthesis and ordered stitching. Defaults keep the single-shot path.
+    # synthesis and ordered stitching. On by default (Phase 12 follow-up,
+    # 2026-11-15): an oblivious client with long text gets complete, stitched
+    # audio instead of silent truncation at the model's token ceiling;
+    # `split_text: false` restores the legacy single-shot behaviour.
     split_text: bool = Field(
-        False,
+        True,
         description=(
             "Split long input text into sentence-aware chunks before synthesis and stitch the "
-            "result. A request that yields 0 or 1 chunk takes the single-shot path unchanged."
+            "result (default). A request that yields 0 or 1 chunk takes the single-shot path "
+            "unchanged. Set false to synthesize the whole text in one call."
         ),
     )
     chunk_size: int | None = Field(
         None,
         description=(
-            "Character budget per synthesis chunk when `split_text` is enabled (also enables "
-            "chunking on its own). When `split_text` is true and this is null, the server "
-            "budget is 300 characters, except for Chatterbox Turbo (150) and Chatterbox "
-            "Multilingual (75), which use tighter budgets so their long-form output stays "
-            "faithful to the text (measured 2026-11-09). An explicit value always wins."
+            "Character budget per synthesis chunk when chunking is enabled (also enables "
+            "chunking on its own). When chunking is on and this is null, the server budget "
+            "is 300 characters for every model family (unified by Phases 12-7/12-8, "
+            "2026-11-09). An explicit value always wins."
         ),
     )
     crossfade_ms: int | None = Field(
         None,
         description=(
-            "Equal-power crossfade length between stitched chunks in milliseconds (default 0). "
+            "Equal-power crossfade length between stitched chunks in milliseconds (default 40). "
             "The fade consumes part of `sentence_pause_ms` rather than adding to it."
         ),
     )
     sentence_pause_ms: int | None = Field(
         None,
         description=(
-            "Silence inserted between stitched sentence chunks in milliseconds (default 0). "
+            "Silence inserted between stitched sentence chunks in milliseconds (default 120). "
             "The audible gap is `sentence_pause_ms - crossfade_ms` (clamped at zero)."
         ),
     )

@@ -807,6 +807,119 @@ def test_chunk_size_alone_enables_chunking():
 
 
 @pytest.mark.integration
+def test_long_text_without_generation_options_chunks_by_default():
+    """Default-on chunking (2026-11-15): the oblivious caller is covered.
+
+    A request with no ``generation_options`` at all is chunked exactly like
+    one that set ``split_text: true`` — long text no longer relies on the
+    client knowing the feature to avoid silent token-ceiling truncation.
+    """
+    from harmonyspeech.common.inputs import TextToSpeechRequestInput
+
+    serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
+    text = " ".join(f"Sentence number {index} is here." for index in range(60))
+    request_data = TextToSpeechRequestInput(
+        request_id="default-on",
+        requested_model="chatterbox",
+        model="chatterbox",
+        input_text=text,
+        mode="single_speaker_tts",
+    )
+    chunks = serving._resolve_chunks(request_data)
+    assert chunks is not None and len(chunks) > 1
+    assert all(len(chunk) <= 300 for chunk in chunks)
+
+
+@pytest.mark.integration
+def test_split_text_false_opts_out_of_chunking():
+    """The legacy single-shot behaviour stays available via an explicit false."""
+    from harmonyspeech.common.inputs import TextToSpeechRequestInput
+
+    serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
+    text = " ".join(f"Sentence number {index} is here." for index in range(60))
+    request_data = TextToSpeechRequestInput(
+        request_id="opt-out",
+        requested_model="chatterbox",
+        model="chatterbox",
+        input_text=text,
+        mode="single_speaker_tts",
+        generation_options=GenerationOptions(split_text=False),
+    )
+    assert serving._resolve_chunks(request_data) is None
+
+
+LONG_TEXT = " ".join(f"Sentence number {index} is here." for index in range(60))
+assert len(LONG_TEXT) > 600  # module import guard: the fixtures below rely on this
+MID_TEXT = " ".join(f"Sentence number {index} is here." for index in range(17))
+assert 400 < len(MID_TEXT) <= 600  # above Multilingual's limit, below English's
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_split_text_false_long_input_is_rejected_with_a_clear_400():
+    """The single-shot over-length guard (2026-11-15).
+
+    An opted-out long text on an AR family would silently truncate at the
+    speech-token ceiling (~40 s of audio) and return clipped audio with a 200;
+    the serving layer rejects it before synthesis with the cause and the fix.
+    """
+    harness, model = _chatterbox_harness()
+    async with harness:
+        response = await _speak(harness, _request(LONG_TEXT, split_text=False))
+    assert isinstance(response, ErrorResponse), response
+    assert "truncated" in response.message
+    assert "split_text" in response.message
+    assert str(len(LONG_TEXT)) in response.message
+    assert model.generate_calls == []  # rejected before any synthesis
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_multilingual_single_shot_guard_is_tighter_than_english():
+    """CJK-capable Multilingual gets the conservative 400-char ceiling."""
+    config = _model_config("chatterbox_multilingual", "ChatterboxMultilingualTTS")
+    model = ChatterboxStubModel(model_type="ChatterboxMultilingualTTS")
+    harness = EngineHarness([config], {"chatterbox_multilingual": model})
+    async with harness:
+        rejected = await _speak(
+            harness,
+            TextToSpeechRequest(
+                model="chatterbox_multilingual",
+                input=MID_TEXT,
+                mode="single_speaker_tts",
+                language="en",
+                generation_options=GenerationOptions(split_text=False),
+            ),
+        )
+    assert isinstance(rejected, ErrorResponse), rejected
+
+    # The same length is below the English families' 600-char ceiling, so the
+    # single-shot path there synthesizes the whole text in one call.
+    english_harness, english_model = _chatterbox_harness()
+    async with english_harness:
+        accepted = await _speak(english_harness, _request(MID_TEXT, split_text=False))
+    assert isinstance(accepted, TextToSpeechResponse), accepted
+    assert english_model.generate_calls == [MID_TEXT]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_truncation_guard_escape_hatch_re_enables_the_legacy_behaviour(monkeypatch):
+    """``HSE_ALLOW_TRUNCATING_SINGLE_SHOT`` keeps the OFF baseline measurable.
+
+    The truncation benchmark (``bench_throughput.py --longform-split both``)
+    scores the un-chunked long fixture; the guard must not reject it when the
+    operator explicitly opted in (set on the server process).
+    """
+    monkeypatch.setenv("HSE_ALLOW_TRUNCATING_SINGLE_SHOT", "1")
+    harness, model = _chatterbox_harness()
+    async with harness:
+        response = await _speak(harness, _request(LONG_TEXT, split_text=False))
+    assert isinstance(response, TextToSpeechResponse), response
+    assert model.generate_calls == [LONG_TEXT]  # single call, whole text
+
+
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_crossfade_shortens_the_stitched_buffer():
     harness, _model = _chatterbox_harness()

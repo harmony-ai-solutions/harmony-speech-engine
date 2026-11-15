@@ -1,7 +1,8 @@
 """Wire-contract tests for the Phase 12-1 long-form request fields.
 
-The fields are accepted now and are inert until the serving layer wires them
-(12-2); these tests pin the defaults so existing requests stay byte-identical.
+The fields pin the wire defaults: chunking is ON by default (2026-11-15), so a
+long request without options is split and stitched; short requests (0/1
+chunks) and explicit ``split_text: false`` keep the single-shot path.
 """
 
 from harmonyspeech.common.inputs import TextToSpeechGenerationOptions, TextToSpeechRequestInput
@@ -10,7 +11,7 @@ from harmonyspeech.endpoints.openai.protocol import GenerationOptions, TextToSpe
 
 def test_generation_options_long_form_defaults():
     opts = GenerationOptions()
-    assert opts.split_text is False
+    assert opts.split_text is True
     assert opts.chunk_size is None
     assert opts.crossfade_ms is None
     assert opts.sentence_pause_ms is None
@@ -42,7 +43,7 @@ def test_request_input_passes_long_form_options_through():
 
 def test_internal_generation_options_dataclass_defaults():
     opts = TextToSpeechGenerationOptions(seed=None, style=None, speed=None, pitch=None, energy=None)
-    assert opts.split_text is False
+    assert opts.split_text is True
     assert opts.chunk_size is None
     assert opts.crossfade_ms is None
     assert opts.sentence_pause_ms is None
@@ -95,12 +96,18 @@ def test_chunk_request_timeout_override_formula():
     assert serving._chunk_request_timeout_s(4) is None
 
 
-def test_chunking_defaults_keep_single_shot_requests_unchunked():
-    """Default-off fields must not enable the serving chunker."""
+def test_chunking_defaults_enable_splitting_for_long_texts():
+    """Default-on chunking (2026-11-15): unset options still split long text.
+
+    A request that omits ``generation_options`` is treated exactly like one
+    that set ``split_text: true``; only an explicit ``split_text: false``
+    opts out. Short texts (0/1 chunks) keep the single-shot path via the
+    chunker gate, not via this default.
+    """
     from harmonyspeech.endpoints.openai.serving_text_to_speech import DEFAULT_CHUNK_SIZE
 
     options = GenerationOptions()
-    assert options.split_text is False
+    assert options.split_text is True
     assert options.chunk_size is None
     assert DEFAULT_CHUNK_SIZE > 0
 

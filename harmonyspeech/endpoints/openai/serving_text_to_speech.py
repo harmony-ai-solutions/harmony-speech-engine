@@ -4,10 +4,13 @@ Single-shot requests keep the pre-12 behaviour byte-for-byte: when the input
 splits into zero or one chunk the chunker is skipped entirely and the original
 request goes through the engine exactly as before.
 
-Long-form requests (``split_text: true`` or an explicit ``chunk_size``) are
-split into sentence-aware chunks, **submitted concurrently** so the engine can
-admit them into one batch, and stitched back in chunk-index order (never
-completion order). The serving layer owns the cross-family post-processing:
+Long-form requests are split into sentence-aware chunks, **submitted
+concurrently** so the engine can admit them into one batch, and stitched back
+in chunk-index order (never completion order). Chunking is on by default
+(2026-11-15): a request without ``generation_options`` is chunked exactly like
+one that set ``split_text: true``; ``split_text: false`` (or a short input)
+keeps the single-shot path. The serving layer owns the cross-family
+post-processing:
 
 * the reference is conditioned **once** for a voice-cloning request and reused
   by every chunk (no per-chunk embed step) — through exactly the mechanism the
@@ -37,6 +40,7 @@ import base64
 import contextlib
 import copy
 import dataclasses
+import os
 import threading
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -114,6 +118,38 @@ from harmonyspeech.processing.pipeline_registry import get_spec
 #: 768-token KV-slot truncation and Multilingual's premature analyzer EOS. Every
 #: family uses this unified 300-char default again.
 DEFAULT_CHUNK_SIZE = 300
+
+#: Single-shot over-length guard (2026-11-15). When chunking is off (an
+#: explicit ``split_text: false``, since chunking is the default), an
+#: autoregressive family cannot synthesize text longer than its speech-token
+#: ceiling — ``max_new_tokens`` 1000/1001 tokens at 25 Hz, about 40 seconds of
+#: audio — and the overflow is truncated mid-sentence with only a log warning
+#: (``finish_reason=length`` in ``ar_runner``); the client sees a 200 with
+#: clipped audio. Instead of returning truncated audio, the serving layer
+#: rejects such requests with a 400 naming the cause and the fix.
+#:
+#: Character ceilings are duration estimates with a margin, keyed by model
+#: type (the AR families; see ``AR_INFERENCE_FAMILIES`` in
+#: ``task_handler/batching.py``): spoken English runs at roughly 12–15
+#: characters per second (the 807-char / 138-word Villainess fixture measures
+#: ~14.6), so 40 s is ~480–600 chars — 600 is the generous end. Chatterbox
+#: Multilingual also carries CJK input at ~6–10 chars/s, so it gets the
+#: conservative 400. A borderline text below the guard can still truncate on a
+#: slow voice; chunking is the real fix and is on by default. Non-AR families
+#: (duration-predictor synthesis) have no speech-token ceiling and are not
+#: guarded.
+SINGLE_SHOT_MAX_INPUT_CHARS: dict[str, int] = {
+    "ChatterboxTTS": 600,
+    "ChatterboxTurboTTS": 600,
+    "ChatterboxMultilingualTTS": 400,
+}
+
+#: Escape hatch for the truncation benchmark (``bench_throughput.py
+#: --longform-split both`` scores the OFF baseline on the long fixture, which
+#: the guard would reject). Any value other than "0"/"" enables the legacy
+#: truncating behaviour; read per request so tests can ``monkeypatch.setenv``.
+def _allow_truncating_single_shot() -> bool:
+    return os.environ.get("HSE_ALLOW_TRUNCATING_SINGLE_SHOT", "0") not in ("", "0")
 
 #: Model types that consume ``generation_options.speed`` natively today (each
 #: maps ``speed`` onto a duration predictor / ``length_scale`` / ``alpha``).
@@ -673,12 +709,21 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         # no pipeline step re-reads the base64 field.
         artifacts = from_wire_audio(request_data)
 
-        # Long-form dispatch (Phase 12-2). A short input (0/1 chunks) returns
-        # None and keeps the single-shot path below byte-identical.
+        # Long-form dispatch (Phase 12-2), on by default. A short input (0/1
+        # chunks) returns None and keeps the single-shot path below
+        # byte-identical.
         try:
             chunks = self._resolve_chunks(request_data)
         except ValueError as e:
             return self.create_error_response(str(e))
+
+        # Single-shot over-length guard (2026-11-15): an opted-out long text
+        # on an AR family would silently truncate at the speech-token ceiling
+        # and return clipped audio with a 200 — fail fast with the cause.
+        if chunks is None:
+            length_error = self._single_shot_length_error(request_data)
+            if length_error is not None:
+                return self.create_error_response(length_error)
 
         # Phase 14-3/14-4: the streaming envelopes. They are chosen before the
         # buffered dispatch because even a one-chunk request must stream (its
@@ -833,19 +878,52 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         """
         return DEFAULT_CHUNK_SIZE
 
+    def _single_shot_length_error(self, request_data) -> str | None:
+        """Return the over-length admission error for a non-chunked request.
+
+        Reached only when :meth:`_resolve_chunks` declined to chunk (an
+        explicit ``split_text: false`` — chunking is the default, and a long
+        text with it on always produces 2+ chunks). On an autoregressive
+        family such a request would be silently truncated at the
+        speech-token ceiling (~40 s of audio) and returned as a 200; the
+        guard turns that into a 400 naming the cause. Unresolvable model
+        types (bare serving objects, unresolvable pipelines) and non-AR
+        families are never rejected, and ``HSE_ALLOW_TRUNCATING_SINGLE_SHOT``
+        disables the guard for the truncation benchmark.
+        """
+        if _allow_truncating_single_shot():
+            return None
+        text = getattr(request_data, "input_text", "") or ""
+        limit: int | None = None
+        for model_type in self._request_model_types(request_data):
+            candidate = SINGLE_SHOT_MAX_INPUT_CHARS.get(model_type)
+            if candidate is not None and (limit is None or candidate < limit):
+                limit = candidate
+        if limit is None or len(text) <= limit:
+            return None
+        return (
+            f"Input text is {len(text)} characters, but single-shot synthesis on this model "
+            f"family is bounded by its autoregressive speech-token ceiling (about 40 seconds "
+            f"of audio, roughly {limit} characters) — longer text would be truncated "
+            "mid-sentence. Remove generation_options.split_text (sentence-aware chunking is "
+            "on by default), or shorten the text."
+        )
+
     def _resolve_chunks(self, request_data: TextToSpeechRequestInput) -> list[str] | None:
         """Return the chunk list for a long-form request, or ``None`` to skip.
 
-        ``None`` covers both "chunking not requested" and the degenerate
-        0/1-chunk case, which is the byte-identity gate: the chunker pipeline is
-        not entered at all, so a short request is indistinguishable from the
-        pre-12 path.
+        Chunking is on by default (2026-11-15): a request without
+        ``generation_options`` chunks exactly like one that set
+        ``split_text: true``, so an oblivious long-form caller gets complete,
+        stitched audio instead of silent truncation at the model's speech-token
+        ceiling. ``None`` covers an explicit opt-out (``split_text: false``
+        with no ``chunk_size``) and the degenerate 0/1-chunk case, which is the
+        byte-identity gate: the chunker pipeline is not entered at all, so a
+        short request is indistinguishable from the single-shot path.
         """
         options = getattr(request_data, "generation_options", None)
-        if options is None:
-            return None
 
-        split_text = bool(_option(options, "split_text", False))
+        split_text = bool(_option(options, "split_text", True))
         chunk_size = _option(options, "chunk_size", None)
         if not split_text and chunk_size is None:
             return None

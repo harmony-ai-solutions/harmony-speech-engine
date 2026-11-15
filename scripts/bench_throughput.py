@@ -1440,19 +1440,20 @@ def build_longform_payload(
     ``crossfade_ms``/``sentence_pause_ms``. The unit self-check asserts that.
 
     ``chunk_size`` is omitted when ``None`` (its default), so the serving
-    layer's **per-model** default applies — 300 characters, 150 for Chatterbox
-    Turbo and 75 for Chatterbox Multilingual (Phase 12-5). ``crossfade_ms``/
+    layer's unified 300-character default applies (every family since Phases
+    12-7/12-8; the old per-model 150/75 budgets were removed). ``crossfade_ms``/
     ``sentence_pause_ms`` are likewise omitted when ``None``, so a bench run
     measures the serving layer's Phase 12-5 defaults (40 ms / 120 ms) rather
     than pinning 0/0 from the harness. An explicit CLI value is still sent
-    verbatim.
+    verbatim. OFF runs that exceed the family's single-shot ceiling require
+    ``HSE_ALLOW_TRUNCATING_SINGLE_SHOT=1`` on the server (the serving layer
+    rejects opted-out over-long text with a 400 since 2026-11-15).
     """
     payload = _build_payload(family, reference_audio_b64, text_override=text)
     options: dict = {"split_text": bool(split_text)}
     if split_text:
-        # Omitted when None so the serving layer's per-model default applies
-        # (300 chars; 150 for Chatterbox Turbo, Phase 12-5). An explicit CLI
-        # value is still sent verbatim.
+        # Omitted when None so the serving layer's unified 300-char default
+        # applies. An explicit CLI value is still sent verbatim.
         if chunk_size is not None:
             options["chunk_size"] = int(chunk_size)
         if crossfade_ms is not None:

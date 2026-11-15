@@ -328,8 +328,9 @@ class TextToSpeechGenerationOptions:
     noise_scale_w: float | None = None
     sdp_ratio: float | None = None
     # Long-form audio (Phase 12-1 fields, wired by the serving layer in 12-2).
-    # Defaults keep every existing caller on the single-shot path.
-    split_text: bool = False
+    # On by default (2026-11-15): long text is chunked unless the caller opts
+    # out with split_text=False.
+    split_text: bool = True
     chunk_size: int | None = None
     crossfade_ms: int | None = None
     sentence_pause_ms: int | None = None
