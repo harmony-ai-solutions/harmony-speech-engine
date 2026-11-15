@@ -70,9 +70,7 @@ class EngineArgs:
             help="Cross-request embedding cache FIFO cap, overriding the config file.",
         )
         parser.add_argument(
-            "--no-embedding-cache",
-            action="store_true",
-            help="Disable the cross-request embedding cache entirely.",
+            "--no-embedding-cache", action="store_true", help="Disable the cross-request embedding cache entirely."
         )
         parser.add_argument(
             "--ar-cache-budget-bytes",
@@ -84,9 +82,7 @@ class EngineArgs:
             ),
         )
         parser.add_argument(
-            "--no-ar-cache",
-            action="store_true",
-            help="Disable the shared autoregressive KV-cache pool entirely.",
+            "--no-ar-cache", action="store_true", help="Disable the shared autoregressive KV-cache pool entirely."
         )
         return parser
 

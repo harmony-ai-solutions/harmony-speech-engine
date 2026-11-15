@@ -30,14 +30,8 @@ import torch
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.modeling.loader import get_model
 from harmonyspeech.modeling.models.batch_padding import length_mask, sync_mask
-from harmonyspeech.modeling.models.harmonyspeech.harmonyspeech import (
-    ForwardTacotron,
-    MelGANGenerator,
-)
-from harmonyspeech.modeling.models.voicefixer.voicefixer import (
-    VoiceFixerRestorer,
-    VoiceFixerVocoder,
-)
+from harmonyspeech.modeling.models.harmonyspeech.harmonyspeech import ForwardTacotron, MelGANGenerator
+from harmonyspeech.modeling.models.voicefixer.voicefixer import VoiceFixerRestorer, VoiceFixerVocoder
 
 #: ``MelGANGenerator`` with two upsampling stages (4 samples per mel frame).
 MELGAN_UPSCALES = [2, 2]
@@ -198,9 +192,7 @@ def _tiny_melgan(seed: int = 0) -> MelGANGenerator:
 def _pad_rows(rows, pad_value: float = 0.0) -> torch.Tensor:
     """Pad ``[1, C, T]`` rows on the time axis into one ``[B, C, T_max]`` batch."""
     lengths = [int(row.shape[-1]) for row in rows]
-    padded = torch.full(
-        (len(rows), rows[0].shape[1], max(lengths)), pad_value, dtype=rows[0].dtype
-    )
+    padded = torch.full((len(rows), rows[0].shape[1], max(lengths)), pad_value, dtype=rows[0].dtype)
     for index, row in enumerate(rows):
         padded[index, :, : lengths[index]] = row[0]
     return padded
@@ -310,9 +302,7 @@ def test_voicefixer_vocoder_batched_mixed_lengths_match_their_solo_runs():
     lengths = [5, 9, 7]
     vocoder = _tiny_voicefixer_vocoder()
     mels = _vocoder_mels(lengths)
-    expected_samples = [
-        (length + length % 2 + 4) * VOICEFIXER_SAMPLES_PER_FRAME for length in lengths
-    ]
+    expected_samples = [(length + length % 2 + 4) * VOICEFIXER_SAMPLES_PER_FRAME for length in lengths]
 
     with torch.no_grad():
         solo = [vocoder(mel) for mel in mels]
@@ -511,8 +501,6 @@ def test_harmonyspeech_synthesizer_generate_takes_a_batch_but_padding_leaks():
 
     # The longest row (no padding of its own) still matches: the difference is
     # the shorter row's padding, not the batch shape.
-    assert torch.allclose(
-        batched[1][:, : solo_long.shape[-1]], solo_long[0], atol=1e-6
-    )
+    assert torch.allclose(batched[1][:, : solo_long.shape[-1]], solo_long[0], atol=1e-6)
     short_delta = (batched[0][:, : solo_short.shape[-1]] - solo_short[0]).abs().max()
     assert short_delta > 1e-2, float(short_delta)

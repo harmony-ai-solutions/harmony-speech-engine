@@ -145,15 +145,10 @@ class ModelConfig:
         self.backbone_group = backbone_group
 
         if batched_inference is not None and not isinstance(batched_inference, bool):
-            raise ValueError(
-                f"batched_inference must be a bool or None, got {type(batched_inference).__name__}"
-            )
+            raise ValueError(f"batched_inference must be a bool or None, got {type(batched_inference).__name__}")
         self.batched_inference = batched_inference
-        if batch_token_budget is not None:
-            if not isinstance(batch_token_budget, int) or batch_token_budget < 1:
-                raise ValueError(
-                    f"batch_token_budget must be a positive int or None, got {batch_token_budget!r}"
-                )
+        if batch_token_budget is not None and (not isinstance(batch_token_budget, int) or batch_token_budget < 1):
+            raise ValueError(f"batch_token_budget must be a positive int or None, got {batch_token_budget!r}")
         self.batch_token_budget = batch_token_budget
 
         # Phase 10-1: CTranslate2 worker count (faster-whisper `num_workers`,
@@ -169,15 +164,9 @@ class ModelConfig:
         # module constant only, so the documented 4-vs-8 sweep needed a
         # measurement wrapper. Inert for every other model type.
         if isinstance(whisper_window_batch_size, bool) or not isinstance(whisper_window_batch_size, int):
-            raise ValueError(
-                "whisper_window_batch_size must be a positive int, "
-                f"got {whisper_window_batch_size!r}"
-            )
+            raise ValueError(f"whisper_window_batch_size must be a positive int, got {whisper_window_batch_size!r}")
         if whisper_window_batch_size < 1:
-            raise ValueError(
-                "whisper_window_batch_size must be a positive int, "
-                f"got {whisper_window_batch_size!r}"
-            )
+            raise ValueError(f"whisper_window_batch_size must be a positive int, got {whisper_window_batch_size!r}")
         self.whisper_window_batch_size = whisper_window_batch_size
 
         # Phase 11-3: S3Gen vocode precision knob. Default "float32" is the
@@ -185,16 +174,10 @@ class ModelConfig:
         # experiment to an honest, per-model config value. Kept strict (no
         # dtype aliases) so the shipped surface matches docs/models.md.
         if not isinstance(s3gen_precision, str):
-            raise ValueError(
-                "s3gen_precision must be 'float32' or 'float16', "
-                f"got {s3gen_precision!r}"
-            )
+            raise ValueError(f"s3gen_precision must be 'float32' or 'float16', got {s3gen_precision!r}")
         normalized_precision = s3gen_precision.strip().lower()
         if normalized_precision not in _VALID_S3GEN_PRECISIONS:
-            raise ValueError(
-                "s3gen_precision must be 'float32' or 'float16', "
-                f"got {s3gen_precision!r}"
-            )
+            raise ValueError(f"s3gen_precision must be 'float32' or 'float16', got {s3gen_precision!r}")
         self.s3gen_precision = normalized_precision
 
         self.dtype = _get_and_verify_dtype(dtype)
@@ -279,24 +262,17 @@ class EngineConfig:
         """Verify configs are valid & consistent with each other."""
         # self.model_config.verify_with_parallel_config(self.parallel_config)
         budget = self.whisper_vram_budget_bytes
-        if budget is not None and (
-            isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0
-        ):
-            raise ValueError(
-                "whisper_vram_budget_bytes must be a positive int or None, "
-                f"got {budget!r}"
-            )
+        if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0):
+            raise ValueError(f"whisper_vram_budget_bytes must be a positive int or None, got {budget!r}")
         try:
             max_audio = float(self.whisper_max_audio_seconds)
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                "whisper_max_audio_seconds must be a positive number, "
-                f"got {self.whisper_max_audio_seconds!r}"
+                f"whisper_max_audio_seconds must be a positive number, got {self.whisper_max_audio_seconds!r}"
             ) from exc
         if max_audio <= 0:
             raise ValueError(
-                "whisper_max_audio_seconds must be a positive number, "
-                f"got {self.whisper_max_audio_seconds!r}"
+                f"whisper_max_audio_seconds must be a positive number, got {self.whisper_max_audio_seconds!r}"
             )
 
         budget = self.ar_cache_budget_bytes
@@ -308,13 +284,12 @@ class EngineConfig:
 
         if self.voice_pack_cache_dir is not None and not isinstance(self.voice_pack_cache_dir, str):
             raise ValueError(
-                "voice_pack_cache_dir must be a filesystem path string or None, "
-                f"got {self.voice_pack_cache_dir!r}"
+                f"voice_pack_cache_dir must be a filesystem path string or None, got {self.voice_pack_cache_dir!r}"
             )
 
     def to_dict(self):
         """Return the configs as a dictionary, for use in **kwargs."""
-        return dict((field.name, getattr(self, field.name)) for field in fields(self))
+        return {field.name: getattr(self, field.name) for field in fields(self)}
 
     @classmethod
     def load_config_from_yaml(cls, yaml_file_path: str) -> "EngineConfig":
@@ -333,12 +308,8 @@ class EngineConfig:
         ar_inference = config_data.get("ar_inference") or {}
         if not isinstance(ar_inference, dict):
             raise ValueError(f"ar_inference must be a mapping, got {type(ar_inference).__name__}")
-        ar_budget = ar_inference.get(
-            "kv_cache_budget_bytes", config_data.get("ar_cache_budget_bytes", 1073741824)
-        )
-        ar_cap_tokens = ar_inference.get(
-            "default_cap_tokens", config_data.get("ar_cache_default_cap_tokens", 768)
-        )
+        ar_budget = ar_inference.get("kv_cache_budget_bytes", config_data.get("ar_cache_budget_bytes", 1073741824))
+        ar_cap_tokens = ar_inference.get("default_cap_tokens", config_data.get("ar_cache_default_cap_tokens", 768))
         ar_enabled = ar_inference.get("enabled", config_data.get("ar_cache_enabled", True))
 
         EngineConfig._verify_backbone_group_s3gen_precision(model_configs)
@@ -374,11 +345,7 @@ class EngineConfig:
         S3Gen-vocode families participate (``ChatterboxEmbedding`` has no
         vocode and never writes the seam value).
         """
-        s3gen_model_types = {
-            "ChatterboxTTS",
-            "ChatterboxMultilingualTTS",
-            "ChatterboxVC",
-        }
+        s3gen_model_types = {"ChatterboxTTS", "ChatterboxMultilingualTTS", "ChatterboxVC"}
         seen: dict[str, tuple[str, str]] = {}
         for cfg in model_configs:
             group = getattr(cfg, "backbone_group", None)
@@ -415,12 +382,9 @@ def _get_and_verify_dtype(dtype: str | torch.dtype) -> torch.dtype:
     if isinstance(dtype, str):
         dtype = dtype.lower()
         if dtype == "auto":
-            if config_dtype == torch.float32:
-                # Following the common practice, we use float16 for float32
-                # models.
-                torch_dtype = torch.float16
-            else:
-                torch_dtype = config_dtype
+            # Following the common practice, we use float16 for float32
+            # models.
+            torch_dtype = torch.float16 if config_dtype == torch.float32 else config_dtype
         else:
             if dtype not in _STR_DTYPE_TO_TORCH_DTYPE:
                 raise ValueError(f"Unknown dtype: {dtype}")

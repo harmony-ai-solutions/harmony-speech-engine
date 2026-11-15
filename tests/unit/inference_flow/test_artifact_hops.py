@@ -57,12 +57,7 @@ def _engine_shell(*configs, requests=()):
 
 
 def _engine_request(request_data, artifacts=None) -> EngineRequest:
-    return EngineRequest(
-        request_id="hop-1",
-        request_data=request_data,
-        arrival_time=0.0,
-        artifacts=artifacts,
-    )
+    return EngineRequest(request_id="hop-1", request_data=request_data, arrival_time=0.0, artifacts=artifacts)
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +78,9 @@ def test_embedding_forward_carries_speaker_artifact_by_reference():
         input_audio="legacy-audio",
     )
     engine_request = _engine_request(input_data, {"input_audio": _artifact()})
-    engine = _engine_shell(_cfg("cb-embed", "ChatterboxEmbedding"), _cfg("cb-tts", "ChatterboxTTS"), requests=[engine_request])
+    engine = _engine_shell(
+        _cfg("cb-embed", "ChatterboxEmbedding"), _cfg("cb-tts", "ChatterboxTTS"), requests=[engine_request]
+    )
 
     result = ExecutorResult(
         request_id="hop-1",
@@ -144,24 +141,17 @@ def test_vad_forward_carries_vad_artifact():
     vad = VadArtifact(segments=[{"start": 0.0, "end": 1.0, "text": "hi"}], info={"language": "en"})
     payload = json.dumps({"text": "hi", "segments": vad.segments, "info": vad.info})
     input_data = SpeechEmbeddingRequestInput(
-        request_id="hop-3",
-        requested_model="openvoice_v2",
-        model="whisper",
-        input_audio="legacy-audio",
+        request_id="hop-3", requested_model="openvoice_v2", model="whisper", input_audio="legacy-audio"
     )
     engine_request = _engine_request(input_data, {"input_audio": _artifact()})
     engine = _engine_shell(
-        _cfg("whisper", "FasterWhisper"),
-        _cfg("tce", "OpenVoiceV2ToneConverterEncoder"),
-        requests=[engine_request],
+        _cfg("whisper", "FasterWhisper"), _cfg("tce", "OpenVoiceV2ToneConverterEncoder"), requests=[engine_request]
     )
 
     result = ExecutorResult(
         request_id="hop-3",
         input_data=input_data,
-        result_data=SpeechTranscriptionRequestOutput(
-            request_id="hop-3", output=payload, vad_artifact=vad
-        ),
+        result_data=SpeechTranscriptionRequestOutput(request_id="hop-3", output=payload, vad_artifact=vad),
     )
 
     status, _ = engine.check_forward_processing(result)
@@ -188,9 +178,7 @@ def test_synthesis_forward_carries_audio_artifact():
     )
     engine_request = _engine_request(input_data)
     engine = _engine_shell(
-        _cfg("ov2-synth", "MeloTTSSynthesizer"),
-        _cfg("ov2-tc", "OpenVoiceV2ToneConverter"),
-        requests=[engine_request],
+        _cfg("ov2-synth", "MeloTTSSynthesizer"), _cfg("ov2-tc", "OpenVoiceV2ToneConverter"), requests=[engine_request]
     )
 
     result = ExecutorResult(
@@ -219,9 +207,7 @@ def test_harmonyspeech_synthesis_forward_carries_mel_artifact():
     )
     engine_request = _engine_request(input_data)
     engine = _engine_shell(
-        _cfg("hs-synth", "HarmonySpeechSynthesizer"),
-        _cfg("hs-voc", "HarmonySpeechVocoder"),
-        requests=[engine_request],
+        _cfg("hs-synth", "HarmonySpeechSynthesizer"), _cfg("hs-voc", "HarmonySpeechVocoder"), requests=[engine_request]
     )
 
     result = ExecutorResult(
@@ -241,16 +227,11 @@ def test_harmonyspeech_synthesis_forward_carries_mel_artifact():
 def test_voicefixer_forward_carries_mel_artifact():
     mel = MelArtifact.from_numpy(np.zeros((128, 9), dtype=np.float32), 44100, 441)
     input_data = AudioConversionRequestInput(
-        request_id="hop-6",
-        requested_model="voicefixer",
-        model="vf-restore",
-        source_audio="legacy-audio",
+        request_id="hop-6", requested_model="voicefixer", model="vf-restore", source_audio="legacy-audio"
     )
     engine_request = _engine_request(input_data)
     engine = _engine_shell(
-        _cfg("vf-restore", "VoiceFixerRestorer"),
-        _cfg("vf-voc", "VoiceFixerVocoder"),
-        requests=[engine_request],
+        _cfg("vf-restore", "VoiceFixerRestorer"), _cfg("vf-voc", "VoiceFixerVocoder"), requests=[engine_request]
     )
 
     result = ExecutorResult(
@@ -270,10 +251,7 @@ def test_voicefixer_forward_carries_mel_artifact():
 def test_voicefixer_vocoder_completion_does_not_forward():
     audio = _artifact(seconds=0.1, sample_rate=44100)
     input_data = AudioConversionRequestInput(
-        request_id="hop-7",
-        requested_model="voicefixer",
-        model="vf-voc",
-        source_audio="legacy-audio",
+        request_id="hop-7", requested_model="voicefixer", model="vf-voc", source_audio="legacy-audio"
     )
     engine = _engine_shell(
         _cfg("vf-restore", "VoiceFixerRestorer"),
@@ -301,11 +279,7 @@ def test_voicefixer_vocoder_completion_does_not_forward():
 def test_final_tts_result_keeps_audio_artifact():
     audio = _artifact()
     input_data = TextToSpeechRequestInput(
-        request_id="hop-8",
-        requested_model="harmonyspeech",
-        model="hs-voc",
-        input_text="hello",
-        mode="voice_cloning",
+        request_id="hop-8", requested_model="harmonyspeech", model="hs-voc", input_text="hello", mode="voice_cloning"
     )
     engine = _engine_shell(
         _cfg("hs-voc", "HarmonySpeechVocoder"),
@@ -353,11 +327,7 @@ def test_encoder_handler_produces_speaker_artifact(monkeypatch):
     monkeypatch.setattr(runner_module, "preprocess_wav", lambda wav, source_sr=None: wav)
     monkeypatch.setattr(runner_module, "get_input_frames", lambda wav: np.zeros((2, 3, 40), dtype=np.float32))
     request = TextToSpeechRequestInput(
-        request_id="enc-1",
-        requested_model="harmonyspeech",
-        model="m",
-        input_text="hello",
-        mode="voice_cloning",
+        request_id="enc-1", requested_model="harmonyspeech", model="m", input_text="hello", mode="voice_cloning"
     )
     engine_request = _engine_request(request)
 
@@ -383,9 +353,7 @@ def test_voicefixer_hop_never_serializes_mel(monkeypatch):
     monkeypatch.setattr(runner_module.json, "dumps", MagicMock(side_effect=AssertionError("json used")))
     assert not hasattr(runner_module, "base64"), "model runner must not serialize audio"
 
-    request = AudioConversionRequestInput(
-        request_id="vf-1", requested_model="voicefixer", model="m", source_audio="x"
-    )
+    request = AudioConversionRequestInput(request_id="vf-1", requested_model="voicefixer", model="m", source_audio="x")
     engine_request = _engine_request(request)
 
     (restored,) = runner._execute_voicefixer_restorer([_artifact(seconds=0.1, sample_rate=44100)], [engine_request])
@@ -422,11 +390,7 @@ def test_chatterbox_tts_consumes_conditionals_by_reference():
     text = "hello"
     inputs = [(text, SpeakerArtifact(conditionals=conditionals, backend="chatterbox"), 0.5, 0.5, 0.8, 1.2, 1.0, 0.05)]
     request = TextToSpeechRequestInput(
-        request_id="cb-1",
-        requested_model="chatterbox",
-        model="m",
-        input_text=text,
-        mode="single_speaker_tts",
+        request_id="cb-1", requested_model="chatterbox", model="m", input_text=text, mode="single_speaker_tts"
     )
 
     (result,) = runner._execute_chatterbox_tts(inputs, [_engine_request(request)])

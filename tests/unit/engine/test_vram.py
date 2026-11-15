@@ -116,9 +116,7 @@ def test_check_health_surfaces_effective_s3gen_precision(monkeypatch):
 
     # A family whose vocode does not use S3Gen carries no such field.
     monkeypatch.delenv("HSE_S3GEN_AUTOCAST", raising=False)
-    engine.model_executors = {
-        "embedding": _fake_executor("embedding", model_type="ChatterboxEmbedding")
-    }
+    engine.model_executors = {"embedding": _fake_executor("embedding", model_type="ChatterboxEmbedding")}
     assert "s3gen_precision" not in engine.check_health()["models"]["embedding"]
 
 
@@ -137,9 +135,7 @@ def test_check_health_marks_failure_but_keeps_vram():
 
 def test_render_vram_metrics_emits_the_required_series():
     stats = {
-        "models": {
-            "chatterbox": {"vram_bytes": 1024, "weights_bytes": 2048, "model_type": "ChatterboxTTS"},
-        },
+        "models": {"chatterbox": {"vram_bytes": 1024, "weights_bytes": 2048, "model_type": "ChatterboxTTS"}},
         "allocated_bytes": 4096,
         "reserved_bytes": 8192,
         "peak_allocated_bytes": 9000,
@@ -153,10 +149,10 @@ def test_render_vram_metrics_emits_the_required_series():
     text = render_vram_metrics(stats)
 
     for required in (
-        "hse_model_vram_bytes{model=\"chatterbox\",model_type=\"ChatterboxTTS\"} 1024",
+        'hse_model_vram_bytes{model="chatterbox",model_type="ChatterboxTTS"} 1024',
         "hse_vram_reserved_bytes 8192",
         "hse_resident_models 1",
-        "hse_shared_backbone_bytes{group=\"chatterbox-base\"} 512",
+        'hse_shared_backbone_bytes{group="chatterbox-base"} 512',
     ):
         assert required in text
     assert text.count("# TYPE") >= 8

@@ -85,18 +85,13 @@ def _fake_hf_config():
     import types
 
     return types.SimpleNamespace(
-        data=types.SimpleNamespace(sampling_rate=SAMPLE_RATE, hop_length=HOP),
-        speakers={"default": 0},
+        data=types.SimpleNamespace(sampling_rate=SAMPLE_RATE, hop_length=HOP), speakers={"default": 0}
     )
 
 
 def _request(request_id: str, text: str) -> EngineRequest:
     request_data = TextToSpeechRequestInput(
-        request_id=request_id,
-        requested_model="ov1",
-        model="ov1",
-        input_text=text,
-        mode="single_speaker_tts",
+        request_id=request_id, requested_model="ov1", model="ov1", input_text=text, mode="single_speaker_tts"
     )
     return EngineRequest(request_id=request_id, request_data=request_data, arrival_time=0.0)
 
@@ -142,11 +137,11 @@ def test_four_mixed_length_requests_produce_four_correct_length_outputs():
     for request_id, text in texts.items():
         engine.add_request(request_id, _request(request_id, text).request_data)
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_for_lengths
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_for_lengths),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         collected: dict[str, list] = {}
         for _ in range(8):
             if not engine.has_unfinished_requests():
@@ -197,11 +192,11 @@ def test_two_similar_length_requests_share_one_padded_forward():
     for request_id, text in (("pa", "a" * 10), ("pb", "b" * 11)):
         engine.add_request(request_id, _request(request_id, text).request_data)
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_for_lengths
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_for_lengths),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         outputs = []
         for _ in range(4):
             if not engine.has_unfinished_requests():
@@ -238,9 +233,7 @@ def _fake_encoder_hf_config():
 
 def _tiny_reference_encoder():
     torch.manual_seed(0)
-    return ReferenceEncoder(
-        spec_channels=ENC_FILTER_LENGTH // 2 + 1, gin_channels=ENC_GIN_CHANNELS
-    ).eval()
+    return ReferenceEncoder(spec_channels=ENC_FILTER_LENGTH // 2 + 1, gin_channels=ENC_GIN_CHANNELS).eval()
 
 
 def _reference_clip(samples: int, freq: float) -> AudioArtifact:
@@ -287,12 +280,11 @@ def _run_encoder_engine(references: dict[str, object], batched: bool) -> dict[st
         engine.add_request(request_id, request_data, artifacts={"input_audio": artifact})
 
     collected: dict[str, object] = {}
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_clone_segments
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config",
-        return_value=_fake_encoder_hf_config(),
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_clone_segments),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_encoder_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         for _ in range(8):
             if not engine.has_unfinished_requests():
                 break
@@ -431,9 +423,7 @@ def _prepare_tc_triples(clips: dict[str, AudioArtifact]):
             triples.append(
                 (
                     clip,
-                    SpeakerArtifact(
-                        embedding=torch.full((1, TC_GIN_CHANNELS, 1), 10.0 + index), backend="openvoice"
-                    ),
+                    SpeakerArtifact(embedding=torch.full((1, TC_GIN_CHANNELS, 1), 10.0 + index), backend="openvoice"),
                     SpeakerArtifact(
                         embedding=torch.full((1, TC_GIN_CHANNELS, 1), float(index + 1)), backend="openvoice"
                     ),
@@ -469,13 +459,11 @@ def _run_tone_converter_engine(clips: dict[str, AudioArtifact], batched: bool) -
         engine.add_request(request_id, _tc_request(request_id).request_data)
 
     collected: dict[str, object] = {}
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs",
-        side_effect=_prepare_tc_triples(clips),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config",
-        return_value=_fake_tc_hf_config(),
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", side_effect=_prepare_tc_triples(clips)),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_tc_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         for _ in range(8):
             if not engine.has_unfinished_requests():
                 break
@@ -579,9 +567,7 @@ def _hs_vocoder_mel(request_id: str, frames: int) -> "object":
 
     t = np.arange(4 * frames, dtype=np.float32) / 7.0 + float(len(request_id))
     return MelArtifact.from_numpy(
-        (0.1 * np.sin(t)).reshape(1, 4, frames).astype(np.float32),
-        sample_rate=16000,
-        hop_length=200,
+        (0.1 * np.sin(t)).reshape(1, 4, frames).astype(np.float32), sample_rate=16000, hop_length=200
     )
 
 
@@ -763,4 +749,3 @@ def test_four_voicefixer_restoration_requests_pair_their_own_mels():
 
     # Distinct clip lengths keep a swapped pairing from passing by accident.
     assert len(shapes) == 4
-

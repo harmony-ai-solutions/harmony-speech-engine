@@ -9,11 +9,7 @@ two VC target kinds distinct.
 import pytest
 from pydantic import ValidationError
 
-from harmonyspeech.endpoints.openai.protocol import (
-    ModelVoiceCatalogEntry,
-    VoiceCatalogList,
-    VoiceDescriptor,
-)
+from harmonyspeech.endpoints.openai.protocol import ModelVoiceCatalogEntry, VoiceCatalogList, VoiceDescriptor
 
 pytestmark = pytest.mark.unit
 
@@ -26,19 +22,11 @@ def test_voice_descriptor_field_names_and_source_vocabulary():
     assert set(VoiceDescriptor.model_fields) == {"name", "source", "languages"}
 
     native = VoiceDescriptor(name="Bella", source="native", languages=["default"])
-    assert native.model_dump() == {
-        "name": "Bella",
-        "source": "native",
-        "languages": ["default"],
-    }
+    assert native.model_dump() == {"name": "Bella", "source": "native", "languages": ["default"]}
 
     # Pack clips are language-agnostic references: no language label.
     standard = VoiceDescriptor(name="Abigail", source="standard")
-    assert standard.model_dump() == {
-        "name": "Abigail",
-        "source": "standard",
-        "languages": None,
-    }
+    assert standard.model_dump() == {"name": "Abigail", "source": "standard", "languages": None}
 
     with pytest.raises(ValidationError):
         VoiceDescriptor(name="Abigail", source="pack")

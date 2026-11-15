@@ -49,9 +49,7 @@ from harmonyspeech.endpoints.openai.streaming import (
 pytestmark = pytest.mark.unit
 
 #: Golden fixture: 24 kHz mono s16le streaming header, byte for byte.
-GOLDEN_HEADER_24K_MONO_S16 = (
-    "52494646ffffffff57415645666d74201000000001000100c05d000080bb00000200100064617461ffffffff"
-)
+GOLDEN_HEADER_24K_MONO_S16 = "52494646ffffffff57415645666d74201000000001000100c05d000080bb00000200100064617461ffffffff"
 
 #: A small waveform whose float32 -> s16le -> WAV -> s16le round trip is exact
 #: (0.5 / -0.5 land on 16384 / -16384, which re-encode unchanged).
@@ -107,9 +105,7 @@ class TestWavStreamHeader:
         assert data[8:12] == b"WAVE"
 
         assert data[12:16] == b"fmt "
-        fmt_size, audio_format, channels, rate, byte_rate, block_align, bits = struct.unpack_from(
-            "<IHHIIHH", data, 16
-        )
+        fmt_size, audio_format, channels, rate, byte_rate, block_align, bits = struct.unpack_from("<IHHIIHH", data, 16)
         assert fmt_size == 16
         assert audio_format == 1  # PCM
         assert channels == 1
@@ -122,13 +118,12 @@ class TestWavStreamHeader:
         assert struct.unpack_from("<I", data, 40)[0] == 0xFFFFFFFF
 
     @pytest.mark.parametrize(
-        ("rate", "channels", "bits"),
-        [(8000, 1, 16), (16000, 1, 16), (24000, 1, 16), (44100, 2, 16), (48000, 2, 24)],
+        ("rate", "channels", "bits"), [(8000, 1, 16), (16000, 1, 16), (24000, 1, 16), (44100, 2, 16), (48000, 2, 24)]
     )
     def test_byte_rate_and_block_align_arithmetic(self, rate, channels, bits):
         data = wav_stream_header(rate, channels, bits)
-        _fmt_size, _audio_format, got_channels, got_rate, byte_rate, block_align, got_bits = (
-            struct.unpack_from("<IHHIIHH", data, 16)
+        _fmt_size, _audio_format, got_channels, got_rate, byte_rate, block_align, got_bits = struct.unpack_from(
+            "<IHHIIHH", data, 16
         )
         assert got_channels == channels
         assert got_rate == rate
@@ -258,14 +253,7 @@ class TestStreamResampler:
         assert hasattr(soxr, "ResampleStream")
 
         init_params = inspect.signature(soxr.ResampleStream.__init__).parameters
-        assert list(init_params) == [
-            "self",
-            "in_rate",
-            "out_rate",
-            "num_channels",
-            "dtype",
-            "quality",
-        ]
+        assert list(init_params) == ["self", "in_rate", "out_rate", "num_channels", "dtype", "quality"]
         assert init_params["dtype"].default == "float32"
         assert init_params["quality"].default == "HQ"
 
@@ -273,10 +261,7 @@ class TestStreamResampler:
         assert list(chunk_params) == ["self", "x", "last"]
         assert chunk_params["last"].default is False
 
-    @pytest.mark.parametrize(
-        ("in_rate", "out_rate"),
-        [(48000, 16000), (44100, 8000), (24000, 22050), (16000, 48000)],
-    )
+    @pytest.mark.parametrize(("in_rate", "out_rate"), [(48000, 16000), (44100, 8000), (24000, 22050), (16000, 48000)])
     @pytest.mark.parametrize("spec", list(SPLIT_SPECS), ids=list(SPLIT_SPECS))
     def test_streamed_output_matches_one_shot_resample(self, in_rate, out_rate, spec):
         import soxr
@@ -358,8 +343,7 @@ class TestStreamResampler:
             stereo.feed(np.zeros(10, dtype=np.float32))
 
     @pytest.mark.parametrize(
-        ("in_rate", "out_rate"),
-        [(0, 16000), (48000, 0), (-1, 16000), (48000, -1), ("48000", 16000), (True, 16000)],
+        ("in_rate", "out_rate"), [(0, 16000), (48000, 0), (-1, 16000), (48000, -1), ("48000", 16000), (True, 16000)]
     )
     def test_rejects_invalid_rates(self, in_rate, out_rate):
         with pytest.raises(ValueError, match="rate"):
@@ -389,11 +373,7 @@ class TestSseEvent:
         assert payload["audio"] == "AAAA"
 
     def test_newlines_and_quotes_are_escaped_and_stay_parseable(self):
-        payload = {
-            "type": SSE_EVENT_DELTA,
-            "text": 'line1\nline2\r\n"quoted" \\ backslash',
-            "unicode": "héllo 😀",
-        }
+        payload = {"type": SSE_EVENT_DELTA, "text": 'line1\nline2\r\n"quoted" \\ backslash', "unicode": "héllo 😀"}
         frame = sse_event(SSE_EVENT_DELTA, payload)
 
         # The JSON escapes the line breaks, so the frame never grows a second
@@ -431,11 +411,7 @@ class TestSseEvent:
 class TestSsePayloads:
     def test_delta_payload_uses_audio_not_delta(self):
         payload = delta_payload("QUJD", 7)
-        assert payload == {
-            "type": SSE_EVENT_DELTA,
-            "audio": "QUJD",
-            "chunk_index": 7,
-        }
+        assert payload == {"type": SSE_EVENT_DELTA, "audio": "QUJD", "chunk_index": 7}
         assert "delta" not in payload
 
     def test_delta_payload_rejects_negative_chunk_index(self):
@@ -489,15 +465,8 @@ class TestSsePayloads:
         assert payload["duration_s"] == 0.666667
 
     def test_done_payload_keeps_foreign_usage_keys(self):
-        payload = done_payload(
-            "id", "model", 0, 24000, "pcm", 2, 1.0, {"type": "duration", "seconds": 1}
-        )
-        assert payload["usage"] == {
-            "type": "duration",
-            "seconds": 1,
-            "audio_seconds": 1.0,
-            "input_characters": 0,
-        }
+        payload = done_payload("id", "model", 0, 24000, "pcm", 2, 1.0, {"type": "duration", "seconds": 1})
+        assert payload["usage"] == {"type": "duration", "seconds": 1, "audio_seconds": 1.0, "input_characters": 0}
 
     def test_error_payload_from_exception(self):
         assert error_payload(ValueError("bad input")) == {
@@ -514,21 +483,17 @@ class TestSsePayloads:
         assert error_payload(RuntimeError())["error"]["message"] == "RuntimeError"
 
     def test_error_payload_from_string(self):
-        assert error_payload("boom") == {
-            "error": {"message": "boom", "type": "server_error", "code": None}
-        }
+        assert error_payload("boom") == {"error": {"message": "boom", "type": "server_error", "code": None}}
 
     def test_error_payload_from_mapping(self):
-        assert error_payload(
-            {"message": "nope", "type": "invalid_request_error", "code": "bad_request"}
-        ) == {
+        assert error_payload({"message": "nope", "type": "invalid_request_error", "code": "bad_request"}) == {
             "error": {"message": "nope", "type": "invalid_request_error", "code": "bad_request"}
         }
 
     def test_error_payload_from_already_shaped_mapping(self):
-        assert error_payload(
-            {"error": {"message": "nope", "type": "invalid_request_error", "code": None}}
-        ) == {"error": {"message": "nope", "type": "invalid_request_error", "code": None}}
+        assert error_payload({"error": {"message": "nope", "type": "invalid_request_error", "code": None}}) == {
+            "error": {"message": "nope", "type": "invalid_request_error", "code": None}
+        }
 
     def test_error_event_frame_round_trips(self):
         frame = sse_event(SSE_EVENT_ERROR, error_payload(ValueError("bad")))

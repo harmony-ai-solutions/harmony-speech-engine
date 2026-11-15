@@ -147,12 +147,7 @@ from harmonyspeech.task_handler.batching import (
     trim_decoder_output,
     trim_feature_output,
 )
-from harmonyspeech.task_handler.inputs import (
-    as_request_input,
-    get_audio_artifact,
-    get_vad_artifact,
-    prepare_inputs,
-)
+from harmonyspeech.task_handler.inputs import as_request_input, get_audio_artifact, get_vad_artifact, prepare_inputs
 from harmonyspeech.task_handler.whisper_batching import (
     WHISPER_WINDOW_BATCH_SIZE,
     WhisperRequestAbortedError,
@@ -285,14 +280,11 @@ def _pad_mel_batch(mels, device):
     channels = int(mels[0].shape[1])
     bins = int(mels[0].shape[3])
     lengths = [int(mel.shape[2]) for mel in mels]
-    padded = torch.zeros(
-        (len(mels), channels, max(lengths), bins), dtype=mels[0].dtype, device=device
-    )
+    padded = torch.zeros((len(mels), channels, max(lengths), bins), dtype=mels[0].dtype, device=device)
     for row, mel in enumerate(mels):
         if int(mel.shape[1]) != channels or int(mel.shape[3]) != bins:
             raise ValueError(
-                f"_pad_mel_batch: inconsistent mel shape {tuple(mel.shape)} vs "
-                f"{(channels, bins)} channels/bins"
+                f"_pad_mel_batch: inconsistent mel shape {tuple(mel.shape)} vs {(channels, bins)} channels/bins"
             )
         padded[row, :, : lengths[row]] = mel[0].to(device)
     return padded, torch.tensor(lengths, dtype=torch.long, device=device)
@@ -351,8 +343,7 @@ def _finalize_encoder_embedding(partial_embeds) -> SpeakerArtifact:
     raw_embed = np.mean(partial_embeds, axis=0)
     embed = raw_embed / np.linalg.norm(raw_embed, 2)
     return SpeakerArtifact(
-        embedding=torch.from_numpy(np.ascontiguousarray(embed, dtype=np.float32)),
-        backend="harmonyspeech",
+        embedding=torch.from_numpy(np.ascontiguousarray(embed, dtype=np.float32)), backend="harmonyspeech"
     )
 
 
@@ -446,10 +437,7 @@ class WhisperLanePool:
             return self._pool
         with self._pool_lock:
             if self._pool is None:
-                self._pool = ThreadPoolExecutor(
-                    max_workers=self.num_workers,
-                    thread_name_prefix="whisper-worker",
-                )
+                self._pool = ThreadPoolExecutor(max_workers=self.num_workers, thread_name_prefix="whisper-worker")
             return self._pool
 
     def close(self) -> None:
@@ -536,11 +524,7 @@ class WhisperLanePool:
         task, language, prompt = whisper_request_options(initial_request)
         pipeline.last_speech_timestamp = 0.0
         segments, info = pipeline.transcribe(
-            audio_ref,
-            batch_size=self.clip_batch_size,
-            task=task,
-            language=language,
-            initial_prompt=prompt,
+            audio_ref, batch_size=self.clip_batch_size, task=task, language=language, initial_prompt=prompt
         )
 
         text = ""
@@ -742,9 +726,7 @@ class ModelRunnerBase:
             cost = bytes_per_unit if bytes_per_unit is not None else bytes_per_unit_for(axis)
             free_bytes = self._device_free_bytes() if cost is not None else None
             if free_bytes is not None:
-                decision = allowed_padded_area(
-                    int(requested_area), free_bytes, axis, bytes_per_unit=cost
-                )
+                decision = allowed_padded_area(int(requested_area), free_bytes, axis, bytes_per_unit=cost)
                 budget = int(decision["allowed_area"])
         groups = plan_batches(lengths, batch_size, budget)
         if decision is not None:
@@ -787,13 +769,9 @@ class ModelRunnerBase:
         last[axis] = signature
         model_name = getattr(self.model_config, "name", None) or "?"
         if shrunk:
-            logger.warning(
-                format_padded_batch_warning(model_name, decision, width, max_batch_size)
-            )
+            logger.warning(format_padded_batch_warning(model_name, decision, width, max_batch_size))
         elif previous_state in ("shrunk", "floor"):
-            logger.info(
-                format_padded_batch_restored(model_name, decision, width, max_batch_size)
-            )
+            logger.info(format_padded_batch_restored(model_name, decision, width, max_batch_size))
 
     def padded_batch_stats(self) -> dict:
         """Per-axis governance state for ``/metrics`` + ``/health`` (Phase 14-6).
@@ -810,16 +788,8 @@ class ModelRunnerBase:
             for axis, entry in state.items()
             if not str(axis).startswith("_") and isinstance(entry, dict)
         }
-        headroom = max(
-            (int(entry.get("headroom_bytes", 0) or 0) for entry in axes.values()),
-            default=0,
-        )
-        return {
-            "enabled": device.startswith("cuda"),
-            "device": device,
-            "headroom_bytes": int(headroom),
-            "axes": axes,
-        }
+        headroom = max((int(entry.get("headroom_bytes", 0) or 0) for entry in axes.values()), default=0)
+        return {"enabled": device.startswith("cuda"), "device": device, "headroom_bytes": int(headroom), "axes": axes}
 
     def _load_model(self):
         # Every load (first boot or reload) starts a fresh cache generation:
@@ -864,11 +834,7 @@ class ModelRunnerBase:
         cache = getattr(self, "embedding_cache", None)
         if cache is None or audio_artifact is None or self.model_identity is None:
             return None, None
-        key = cache.make_key(
-            model_identity=self.model_identity,
-            audio_hash=audio_artifact.content_hash,
-            params=params,
-        )
+        key = cache.make_key(model_identity=self.model_identity, audio_hash=audio_artifact.content_hash, params=params)
         return key, cache.get(key)
 
     @staticmethod
@@ -945,10 +911,7 @@ class ModelRunnerBase:
         if hasattr(model, "ref_dict"):
             ref_dict = model.ref_dict
             state["ref_dict"] = (
-                {
-                    key: value.detach().clone() if torch.is_tensor(value) else value
-                    for key, value in ref_dict.items()
-                }
+                {key: value.detach().clone() if torch.is_tensor(value) else value for key, value in ref_dict.items()}
                 if isinstance(ref_dict, dict)
                 else ref_dict
             )
@@ -1070,17 +1033,7 @@ class ModelRunnerBase:
             _text, speaker, _temperature, _repetition, _top_p, _top_k, norm_loudness = params
             exaggeration = None
         elif multilingual:
-            (
-                _text,
-                _language_id,
-                speaker,
-                exaggeration,
-                _cfg,
-                _temperature,
-                _repetition,
-                _top_p,
-                _min_p,
-            ) = params
+            (_text, _language_id, speaker, exaggeration, _cfg, _temperature, _repetition, _top_p, _min_p) = params
             norm_loudness = None
         else:
             _text, speaker, exaggeration, _cfg, _temperature, _repetition, _top_p, _min_p = params
@@ -1091,13 +1044,9 @@ class ModelRunnerBase:
             previous = getattr(self.model, "conds", None)
             try:
                 if turbo:
-                    self.model.prepare_conditionals(
-                        _wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness
-                    )
+                    self.model.prepare_conditionals(_wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness)
                 else:
-                    self.model.prepare_conditionals(
-                        _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
-                    )
+                    self.model.prepare_conditionals(_wav_buffer(speaker.reference_audio), exaggeration=exaggeration)
                 conditionals = self.model.conds
             finally:
                 if hasattr(self.model, "conds"):
@@ -1150,8 +1099,7 @@ class ModelRunnerBase:
         new_indices = [
             index
             for index, request in enumerate(requests_to_batch)
-            if not runner.has_row(request.request_id)
-            and not runner.has_pending_vocode(request.request_id)
+            if not runner.has_row(request.request_id) and not runner.has_pending_vocode(request.request_id)
         ]
         # The single-request fast path stays 9-1's cleaned sequential loop.
         if len(inputs) == 1 and new_indices:
@@ -1166,9 +1114,7 @@ class ModelRunnerBase:
                 # (9-4 already released anything that existed).
                 continue
             try:
-                conditionals = self._ar_conditionals(
-                    params, request, turbo=turbo, multilingual=multilingual
-                )
+                conditionals = self._ar_conditionals(params, request, turbo=turbo, multilingual=multilingual)
                 text_tokens = _text_tokens_for(self.model, params)
                 options = getattr(request.request_data, "generation_options", None)
                 seed = getattr(options, "seed", None)
@@ -1271,9 +1217,7 @@ class ModelRunnerBase:
                         results[index] = ExecutorResult(
                             request.request_id,
                             request.request_data,
-                            UnfinishedRequestOutput(
-                                request_id=request.request_id, progress=dict(pending[3])
-                            ),
+                            UnfinishedRequestOutput(request_id=request.request_id, progress=dict(pending[3])),
                         )
                         continue
                     raise RuntimeError(f"AR row for request {request.request_id} disappeared")
@@ -1290,23 +1234,17 @@ class ModelRunnerBase:
                         continue
                     # Hold the vocode; its KV slot is already released by
                     # `_take_ar_row`, so active rows are never stalled.
-                    runner.put_pending_vocode(
-                        request.request_id, (tokens, conds, seed, dict(outcome.progress))
-                    )
+                    runner.put_pending_vocode(request.request_id, (tokens, conds, seed, dict(outcome.progress)))
                     results[index] = ExecutorResult(
                         request.request_id,
                         request.request_data,
-                        UnfinishedRequestOutput(
-                            request_id=request.request_id, progress=dict(outcome.progress)
-                        ),
+                        UnfinishedRequestOutput(request_id=request.request_id, progress=dict(outcome.progress)),
                     )
                 else:
                     results[index] = ExecutorResult(
                         request.request_id,
                         request.request_data,
-                        UnfinishedRequestOutput(
-                            request_id=request.request_id, progress=dict(outcome.progress)
-                        ),
+                        UnfinishedRequestOutput(request_id=request.request_id, progress=dict(outcome.progress)),
                     )
             except Exception as error:  # noqa: BLE001 - errors this request alone
                 runner.pop(request.request_id)
@@ -1315,8 +1253,7 @@ class ModelRunnerBase:
         # Phase 12-8: defer S3Gen until the batch's active rows finish decoding,
         # then vocode every held row together (one padded `inference_batched`).
         still_decoding = any(
-            runner.has_row(request.request_id) and not _request_finished(request)
-            for request in requests_to_batch
+            runner.has_row(request.request_id) and not _request_finished(request) for request in requests_to_batch
         )
         if not still_decoding:
             finished: list[tuple] = []
@@ -1385,18 +1322,14 @@ class ModelRunnerBase:
                 with torch.no_grad():
                     waveforms = inference_batched(s3gen, rows)
             except Exception as error:  # noqa: BLE001 - degrade this group to the loop
-                logger.warning(
-                    f"Chatterbox S3Gen padded batch failed ({error}); falling back to per-row vocode"
-                )
+                logger.warning(f"Chatterbox S3Gen padded batch failed ({error}); falling back to per-row vocode")
                 for row in group_rows:
                     self._finish_ar_row(results, *row[:5], row[5], turbo=turbo)
                 continue
             for row, waveform in zip(group_rows, waveforms, strict=True):
                 index, request, _tokens, _conds, _seed, progress = row
                 try:
-                    artifact = self._artifact_from_waveform(
-                        waveform, watermark=not _watermark_suppressed(request)
-                    )
+                    artifact = self._artifact_from_waveform(waveform, watermark=not _watermark_suppressed(request))
                     result = self._build_result(request, "", TextToSpeechRequestOutput)
                     result.result_data.audio_artifact = artifact
                     result.result_data.progress = progress
@@ -1449,13 +1382,9 @@ class ModelRunnerBase:
             if turbo:
                 from chatterbox.models.s3gen.const import S3GEN_SIL
 
-                silence = torch.tensor(
-                    [S3GEN_SIL, S3GEN_SIL, S3GEN_SIL], dtype=torch.long, device=self.device
-                )
+                silence = torch.tensor([S3GEN_SIL, S3GEN_SIL, S3GEN_SIL], dtype=torch.long, device=self.device)
                 speech_tokens = torch.cat([tokens.to(self.device), silence])
-                wav, _ = s3gen.inference(
-                    speech_tokens=speech_tokens, ref_dict=conds.gen, n_cfm_timesteps=2
-                )
+                wav, _ = s3gen.inference(speech_tokens=speech_tokens, ref_dict=conds.gen, n_cfm_timesteps=2)
             else:
                 wav, _ = s3gen.inference(speech_tokens=tokens.to(self.device), ref_dict=conds.gen)
             # Phase 11-2: blanket autocast around the upstream call (the loader's
@@ -1569,8 +1498,7 @@ class ModelRunnerBase:
                     new_inputs = prepare_inputs(self.model_config, new_requests)
                 except Exception as e:
                     logger.opt(exception=e).error(
-                        f"Failed to prepare inputs for model "
-                        f"{getattr(self.model_config, 'model_type', '?')}: {e}"
+                        f"Failed to prepare inputs for model {getattr(self.model_config, 'model_type', '?')}: {e}"
                     )
                     return [self._build_error_result(req, e) for req in requests_to_batch]
             else:
@@ -1578,17 +1506,13 @@ class ModelRunnerBase:
                 # call prepare_inputs at all (the decode steady state).
                 new_inputs = []
             new_iter = iter(new_inputs)
-            inputs = [
-                None if _continuing_ar(request) else next(new_iter)
-                for request in requests_to_batch
-            ]
+            inputs = [None if _continuing_ar(request) else next(new_iter) for request in requests_to_batch]
         else:
             try:
                 inputs = prepare_inputs(self.model_config, requests_to_batch)
             except Exception as e:
                 logger.opt(exception=e).error(
-                    f"Failed to prepare inputs for model "
-                    f"{getattr(self.model_config, 'model_type', '?')}: {e}"
+                    f"Failed to prepare inputs for model {getattr(self.model_config, 'model_type', '?')}: {e}"
                 )
                 return [self._build_error_result(req, e) for req in requests_to_batch]
 
@@ -1695,9 +1619,7 @@ class ModelRunnerBase:
         metrics.finished_time = time.time()
         # Log full stack trace so the server-side cause is always visible in logs.
         if log_exception:
-            logger.opt(exception=exception).error(
-                f"Inference error for request {request_id}: {exception}"
-            )
+            logger.opt(exception=exception).error(f"Inference error for request {request_id}: {exception}")
         else:
             logger.info(f"Request {request_id} did not complete: {exception}")
         error_output = RequestOutput(
@@ -1777,9 +1699,7 @@ class ModelRunnerBase:
                     partials: dict[int, list[np.ndarray]] = {index: [] for index in misses}
                     plan_lengths = [int(row[1].shape[0]) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                    groups = self._plan_padded_batches(
-                        plan_lengths, batch_size, axis="mel_frame"
-                    )
+                    groups = self._plan_padded_batches(plan_lengths, batch_size, axis="mel_frame")
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         with torch.no_grad():
@@ -1868,12 +1788,7 @@ class ModelRunnerBase:
 
             # Typed mel artifact (with the vocoder's breaks) replaces the
             # wire JSON envelope; nothing is serialized on this hop.
-            return MelArtifact.from_numpy(
-                full_spectogram,
-                sample_rate=16000,
-                hop_length=200,
-                breaks=breaks,
-            )
+            return MelArtifact.from_numpy(full_spectogram, sample_rate=16000, hop_length=200, breaks=breaks)
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -1904,9 +1819,7 @@ class ModelRunnerBase:
                 b_starts = np.concatenate(([0], b_ends[:-1]))
                 wavs = [wav[start:end] for start, end in zip(b_starts, b_ends, strict=False)]
                 syn_breaks = [np.zeros(int(0.15 * 16000))] * len(breaks)  # Sample Rate 16000
-                wav = np.concatenate(
-                    [i for w, b in zip(wavs, syn_breaks, strict=False) for i in (w, b)]
-                )
+                wav = np.concatenate([i for w, b in zip(wavs, syn_breaks, strict=False) for i in (w, b)])
 
             # Normalize
             wav = wav / np.abs(wav).max() * 0.97
@@ -1946,22 +1859,16 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                groups = self._plan_padded_batches(
-                    frame_lengths, batch_size, axis="mel_frame"
-                )
+                groups = self._plan_padded_batches(frame_lengths, batch_size, axis="mel_frame")
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
                     try:
                         with torch.no_grad():
                             padded, padded_lengths = pad_feature_batch(
-                                [mel for _index, mel in group_rows],
-                                device=self.device,
-                                return_lengths=True,
+                                [mel for _index, mel in group_rows], device=self.device, return_lengths=True
                             )
-                            waveform, sample_lengths = self.model.inference_batched(
-                                padded, padded_lengths
-                            )
+                            waveform, sample_lengths = self.model.inference_batched(padded, padded_lengths)
                             trimmed = trim_decoder_output(waveform, sample_lengths, 1)
                     except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
                         logger.warning(
@@ -1983,8 +1890,7 @@ class ModelRunnerBase:
                             )
                 if batched:
                     logger.debug(
-                        f"HarmonySpeech vocoder: {forwarded} request(s) forwarded in "
-                        f"{len(groups)} padded sub-batch(es)"
+                        f"HarmonySpeech vocoder: {forwarded} request(s) forwarded in {len(groups)} padded sub-batch(es)"
                     )
 
         outputs = []
@@ -2041,9 +1947,7 @@ class ModelRunnerBase:
             into a 400 (Phase 12-4 finding, 2026-11-09).
             """
             if not vad_audio_segments:
-                raise ValueError(
-                    "reference clip contains no detectable speech (VAD segments empty)"
-                )
+                raise ValueError("reference clip contains no detectable speech (VAD segments empty)")
             gs = []
             for segment in vad_audio_segments:
                 y = segment_spectrogram(segment)
@@ -2093,26 +1997,18 @@ class ModelRunnerBase:
                         plan_lengths,
                         batch_size,
                         axis="mel_frame",
-                        bytes_per_unit=bytes_per_unit_for(
-                            "mel_frame", units_per_frame=hop_length
-                        ),
+                        bytes_per_unit=bytes_per_unit_for("mel_frame", units_per_frame=hop_length),
                     )
                     for group in groups:
                         group_rows = [rows[index] for index in group]
                         specs = [segment_spectrogram(segment) for _row, segment in group_rows]
                         with torch.no_grad():
                             padded, padded_lengths = pad_feature_batch(
-                                [spec[0] for spec in specs],
-                                device=self.device,
-                                return_lengths=True,
+                                [spec[0] for spec in specs], device=self.device, return_lengths=True
                             )
-                            g = self.model.ref_enc.forward_batched(
-                                padded.transpose(1, 2).contiguous(), padded_lengths
-                            )
+                            g = self.model.ref_enc.forward_batched(padded.transpose(1, 2).contiguous(), padded_lengths)
                         for position, absolute in enumerate(group):
-                            segment_gs[rows[absolute][0]].append(
-                                g[position].detach().unsqueeze(-1).unsqueeze(0)
-                            )
+                            segment_gs[rows[absolute][0]].append(g[position].detach().unsqueeze(-1).unsqueeze(0))
                     for index in misses:
                         if not segment_gs[index]:
                             # No segment survived the VAD filters: the loop below
@@ -2247,10 +2143,7 @@ class ModelRunnerBase:
                 frame_lengths = [int(spec.size(-1)) for _index, spec in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
                 groups = self._plan_padded_batches(
-                    frame_lengths,
-                    batch_size,
-                    axis="mel_frame",
-                    max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET,
+                    frame_lengths, batch_size, axis="mel_frame", max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
                 )
                 forwarded = 0
                 for group in groups:
@@ -2258,25 +2151,15 @@ class ModelRunnerBase:
                     try:
                         with torch.no_grad():
                             padded, padded_lengths = pad_feature_batch(
-                                [spec[0] for _index, spec in group_rows],
-                                device=self.device,
-                                return_lengths=True,
+                                [spec[0] for _index, spec in group_rows], device=self.device, return_lengths=True
                             )
-                            embeddings = [
-                                speaker_embeddings(inputs[index]) for index, _spec in group_rows
-                            ]
+                            embeddings = [speaker_embeddings(inputs[index]) for index, _spec in group_rows]
                             sid_src = torch.cat([source for source, _target in embeddings], dim=0)
                             sid_tgt = torch.cat([target for _source, target in embeddings], dim=0)
                             output_audio, _y_mask, _ = self.model.voice_conversion_batched(
-                                padded,
-                                padded_lengths,
-                                sid_src=sid_src,
-                                sid_tgt=sid_tgt,
-                                tau=0.3,
+                                padded, padded_lengths, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3
                             )
-                            trimmed = trim_decoder_output(
-                                output_audio, padded_lengths, samples_per_frame
-                            )
+                            trimmed = trim_decoder_output(output_audio, padded_lengths, samples_per_frame)
                     except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
                         logger.warning(
                             f"OpenVoice tone converter batched forward failed ({e}); "
@@ -2338,9 +2221,7 @@ class ModelRunnerBase:
         """
         model = getattr(self, "model", None)
         batcher = getattr(self, "_whisper_batcher_obj", None)
-        window_batch_size = getattr(
-            self.model_config, "whisper_window_batch_size", WHISPER_WINDOW_BATCH_SIZE
-        )
+        window_batch_size = getattr(self.model_config, "whisper_window_batch_size", WHISPER_WINDOW_BATCH_SIZE)
         if (
             batcher is None
             or batcher.model is not model
@@ -2520,10 +2401,7 @@ class ModelRunnerBase:
                     lengths = [int(row[1].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
                     groups = self._plan_padded_batches(
-                        lengths,
-                        batch_size,
-                        axis="phone",
-                        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
+                        lengths, batch_size, axis="phone", max_budget=DEFAULT_PHONE_BATCH_BUDGET
                     )
                     for group in groups:
                         group_rows = [rows[index] for index in group]
@@ -2531,9 +2409,7 @@ class ModelRunnerBase:
                             padded, padded_lengths = pad_phone_batch(
                                 [row[1] for row in group_rows], pad_id=0, device=self.device
                             )
-                            sid = torch.tensor(
-                                [row[2] for row in group_rows], dtype=torch.long, device=self.device
-                            )
+                            sid = torch.tensor([row[2] for row in group_rows], dtype=torch.long, device=self.device)
                             waveforms, y_lengths, _, _, _ = self.model.infer_batched(
                                 padded,
                                 padded_lengths,
@@ -2541,15 +2417,11 @@ class ModelRunnerBase:
                                 noise_scale=collapse_per_sample(row[4]["noise_scale"] for row in group_rows),
                                 noise_scale_w=collapse_per_sample(row[4]["noise_scale_w"] for row in group_rows),
                                 sdp_ratio=collapse_per_sample(row[4]["sdp_ratio"] for row in group_rows),
-                                length_scale=collapse_per_sample(
-                                    1.0 / row[3] for row in group_rows
-                                ),
+                                length_scale=collapse_per_sample(1.0 / row[3] for row in group_rows),
                             )
                             trimmed = trim_decoder_output(waveforms, y_lengths, hop_length)
                         for position, absolute in enumerate(group):
-                            segment_audio[rows[absolute][0]].append(
-                                trimmed[position][0].detach().cpu().float().numpy()
-                            )
+                            segment_audio[rows[absolute][0]].append(trimmed[position][0].detach().cpu().float().numpy())
                     logger.debug(
                         f"OpenVoice V1: {len(rows)} sentence(s) from {len(inputs)} request(s) "
                         f"forwarded in {len(groups)} padded sub-batch(es)"
@@ -2562,9 +2434,7 @@ class ModelRunnerBase:
                         for index, segments in enumerate(segment_audio)
                     ]
                 except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
-                    logger.warning(
-                        f"OpenVoice V1 batched synthesis failed ({e}); falling back to the per-request loop"
-                    )
+                    logger.warning(f"OpenVoice V1 batched synthesis failed ({e}); falling back to the per-request loop")
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -2583,7 +2453,6 @@ class ModelRunnerBase:
         result = self._build_result(initial_request, "", SpeechSynthesisRequestOutput)
         result.result_data.audio_artifact = audio_artifact
         return result
-
 
     def _execute_melotts_synthesizer(self, inputs, requests_to_batch):
         assert_batch_aligned("_execute_melotts_synthesizer", inputs, requests_to_batch)
@@ -2667,10 +2536,7 @@ class ModelRunnerBase:
                     lengths = [int(row[1][2].numel()) for row in rows]
                     batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
                     groups = self._plan_padded_batches(
-                        lengths,
-                        batch_size,
-                        axis="phone",
-                        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
+                        lengths, batch_size, axis="phone", max_budget=DEFAULT_PHONE_BATCH_BUDGET
                     )
                     for group in groups:
                         group_rows = [rows[index] for index in group]
@@ -2708,9 +2574,7 @@ class ModelRunnerBase:
                             )
                             trimmed = trim_decoder_output(waveforms, y_lengths, hop_length)
                         for position, absolute in enumerate(group):
-                            segment_audio[rows[absolute][0]].append(
-                                trimmed[position][0].detach().cpu().float().numpy()
-                            )
+                            segment_audio[rows[absolute][0]].append(trimmed[position][0].detach().cpu().float().numpy())
                     logger.debug(
                         f"MeloTTS: {len(rows)} sentence(s) from {len(inputs)} request(s) "
                         f"forwarded in {len(groups)} padded sub-batch(es)"
@@ -2723,9 +2587,7 @@ class ModelRunnerBase:
                         for index, segments in enumerate(segment_audio)
                     ]
                 except Exception as e:  # noqa: BLE001 - degrade to the per-item loop
-                    logger.warning(
-                        f"MeloTTS batched synthesis failed ({e}); falling back to the per-request loop"
-                    )
+                    logger.warning(f"MeloTTS batched synthesis failed ({e}); falling back to the per-request loop")
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -2738,7 +2600,6 @@ class ModelRunnerBase:
                 result = self._build_error_result(initial_request, e)
             outputs.append(result)
         return outputs
-
 
     def _execute_voicefixer_restorer(self, inputs, requests_to_batch):
         """Execute VoiceFixerRestorer model to enhance audio quality."""
@@ -2774,9 +2635,7 @@ class ModelRunnerBase:
             more than one; a single slice is returned as-is. Both shapes are
             preserved here verbatim.
             """
-            enhanced = (
-                segment_mels[0] if len(segment_mels) == 1 else torch.cat(segment_mels, dim=3)
-            )
+            enhanced = segment_mels[0] if len(segment_mels) == 1 else torch.cat(segment_mels, dim=3)
             # VoiceFixer emits [batch, channels, frames, bins]; the vocoder only
             # consumes channel 0, so store the canonical [1, bins, frames].
             mel = enhanced.detach().cpu().float()
@@ -2786,11 +2645,7 @@ class ModelRunnerBase:
                 mel = mel.transpose(-1, -2)
             else:
                 raise ValueError(f"VoiceFixerRestorer returned an unexpected mel shape {tuple(mel.shape)}")
-            return MelArtifact(
-                mel=mel.contiguous(),
-                sample_rate=44100,
-                hop_length=441,
-            )
+            return MelArtifact(mel=mel.contiguous(), sample_rate=44100, hop_length=441)
 
         def restore_audio(audio_artifact, initial_request):
             """Per-item loop: the ``len == 1`` fast path and the fallback."""
@@ -2825,18 +2680,14 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[2]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                groups = self._plan_padded_batches(
-                    frame_lengths, batch_size, axis="mel_frame"
-                )
+                groups = self._plan_padded_batches(frame_lengths, batch_size, axis="mel_frame")
                 per_request: dict[int, list[torch.Tensor]] = {index: [] for index, _ in rows}
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
                     try:
                         with torch.no_grad():
-                            padded, padded_lengths = _pad_mel_batch(
-                                [mel for _index, mel in group_rows], self.device
-                            )
+                            padded, padded_lengths = _pad_mel_batch([mel for _index, mel in group_rows], self.device)
                             restored = self.model.forward_batched(padded, padded_lengths)
                             trimmed = trim_feature_output(restored, padded_lengths, dim=2)
                     except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
@@ -2930,23 +2781,17 @@ class ModelRunnerBase:
             if rows:
                 frame_lengths = [int(mel.shape[-1]) for _index, mel in rows]
                 batch_size = max(1, int(getattr(self.model_config, "max_batch_size", 1)))
-                groups = self._plan_padded_batches(
-                    frame_lengths, batch_size, axis="mel_frame"
-                )
+                groups = self._plan_padded_batches(frame_lengths, batch_size, axis="mel_frame")
                 forwarded = 0
                 for group in groups:
                     group_rows = [rows[position] for position in group]
                     try:
                         with torch.no_grad():
                             padded, padded_lengths = pad_feature_batch(
-                                [mel for _index, mel in group_rows],
-                                device=self.device,
-                                return_lengths=True,
+                                [mel for _index, mel in group_rows], device=self.device, return_lengths=True
                             )
                             mel_batch = padded.transpose(-1, -2).unsqueeze(1)
-                            audio, sample_lengths = self.model.forward_batched(
-                                mel_batch, padded_lengths
-                            )
+                            audio, sample_lengths = self.model.forward_batched(mel_batch, padded_lengths)
                             trimmed = trim_decoder_output(audio, sample_lengths, 1)
                     except Exception as e:  # noqa: BLE001 - degrade this sub-batch to the loop
                         logger.warning(
@@ -2961,8 +2806,7 @@ class ModelRunnerBase:
                         batched[index] = AudioArtifact.from_numpy(normalize(audio_np), 44100)
                 if batched:
                     logger.debug(
-                        f"VoiceFixer vocoder: {forwarded} request(s) forwarded in "
-                        f"{len(groups)} padded sub-batch(es)"
+                        f"VoiceFixer vocoder: {forwarded} request(s) forwarded in {len(groups)} padded sub-batch(es)"
                     )
 
         outputs = []
@@ -3041,9 +2885,7 @@ class ModelRunnerBase:
             # The artifact always carries whisper-schema segments (Phase 3-4):
             # the response shape stays request-dependent, but a pipeline VAD
             # step needs the segments regardless of the endpoint's flags.
-            return json.dumps(response), VadArtifact.from_silero_timestamps(
-                timestamps, return_seconds=return_seconds
-            )
+            return json.dumps(response), VadArtifact.from_silero_timestamps(timestamps, return_seconds=return_seconds)
 
         outputs = []
         for i, x in enumerate(inputs):
@@ -3139,9 +2981,7 @@ class ModelRunnerBase:
                 self.model.conds = conditionals
             elif speaker is not None and speaker.reference_audio is not None:
                 # Clone from the already-decoded reference artifact (no wire encoding/tempfile)
-                self.model.prepare_conditionals(
-                    _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
-                )
+                self.model.prepare_conditionals(_wav_buffer(speaker.reference_audio), exaggeration=exaggeration)
             else:
                 # No per-request conditioning: use the voice loaded with the model
                 # (Chatterbox bundles `conds.pt`). A deep copy keeps the baseline
@@ -3155,9 +2995,7 @@ class ModelRunnerBase:
             self._align_chatterbox_conditionals(exaggeration)
 
             suppression = (
-                self._without_watermark()
-                if _watermark_suppressed(initial_request)
-                else contextlib.nullcontext()
+                self._without_watermark() if _watermark_suppressed(initial_request) else contextlib.nullcontext()
             )
             with suppression:
                 wav = self.model.generate(
@@ -3205,9 +3043,7 @@ class ModelRunnerBase:
             if conditionals is not None:
                 self.model.conds = conditionals
             elif speaker is not None and speaker.reference_audio is not None:
-                self.model.prepare_conditionals(
-                    _wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness
-                )
+                self.model.prepare_conditionals(_wav_buffer(speaker.reference_audio), norm_loudness=norm_loudness)
             else:
                 baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
                 if baseline is None and getattr(self.model, "conds", None) is None:
@@ -3218,9 +3054,7 @@ class ModelRunnerBase:
             self._align_chatterbox_conditionals()
 
             suppression = (
-                self._without_watermark()
-                if _watermark_suppressed(initial_request)
-                else contextlib.nullcontext()
+                self._without_watermark() if _watermark_suppressed(initial_request) else contextlib.nullcontext()
             )
             with suppression:
                 wav = self.model.generate(
@@ -3254,9 +3088,7 @@ class ModelRunnerBase:
         runner = self._get_ar_runner()
         if runner is None or not runner.enabled:
             return self._execute_chatterbox_multilingual_tts_sequential(inputs, requests_to_batch)
-        return self._execute_chatterbox_tts_ar(
-            runner, inputs, requests_to_batch, turbo=False, multilingual=True
-        )
+        return self._execute_chatterbox_tts_ar(runner, inputs, requests_to_batch, turbo=False, multilingual=True)
 
     def _execute_chatterbox_multilingual_tts_sequential(self, inputs, requests_to_batch):
         """Per-request loop: the ``len == 1`` fast path and the fallback."""
@@ -3271,9 +3103,7 @@ class ModelRunnerBase:
             if conditionals is not None:
                 self.model.conds = conditionals
             elif speaker is not None and speaker.reference_audio is not None:
-                self.model.prepare_conditionals(
-                    _wav_buffer(speaker.reference_audio), exaggeration=exaggeration
-                )
+                self.model.prepare_conditionals(_wav_buffer(speaker.reference_audio), exaggeration=exaggeration)
             else:
                 baseline = (getattr(self, "_baseline_state", None) or {}).get("conds")
                 if baseline is None and getattr(self.model, "conds", None) is None:
@@ -3284,9 +3114,7 @@ class ModelRunnerBase:
             self._align_chatterbox_conditionals(exaggeration)
 
             suppression = (
-                self._without_watermark()
-                if _watermark_suppressed(initial_request)
-                else contextlib.nullcontext()
+                self._without_watermark() if _watermark_suppressed(initial_request) else contextlib.nullcontext()
             )
             # Phase 12-7: upstream's multilingual `generate` forgets the OOV
             # filter English applies (`speech_tokens < 6561`). Wrap only this
@@ -3367,9 +3195,7 @@ class ModelRunnerBase:
         slots = self._resolve_cache_slots(
             cache,
             requests_to_batch,
-            lambda i: self._embedding_cache_lookup(
-                inputs[i], self._chatterbox_embedding_params(requests_to_batch[i])
-            ),
+            lambda i: self._embedding_cache_lookup(inputs[i], self._chatterbox_embedding_params(requests_to_batch[i])),
         )
 
         outputs = []
@@ -3442,8 +3268,7 @@ class ModelRunnerBase:
                 # Use the already-decoded target audio artifact to set the target voice
                 self.model.set_target_voice(_wav_buffer(_bind_to_device(target_audio_artifact, "cpu")))
                 self._store_embedding_cache_entry(
-                    key,
-                    SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox"),
+                    key, SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox")
                 )
             else:
                 raise ValueError("voice conversion requires target_audio or target_embedding")
@@ -3453,9 +3278,7 @@ class ModelRunnerBase:
             # performance fallback, not an audio change.
             seed = self._request_seed(initial_request)
             with self._seeded_rng(seed):
-                wav = self.model.generate(
-                    audio=_wav_buffer(_bind_to_device(source_artifact, "cpu"))
-                )
+                wav = self.model.generate(audio=_wav_buffer(_bind_to_device(source_artifact, "cpu")))
 
             return _audio_artifact_from_tensor(wav, self.model.sr)
 
@@ -3492,9 +3315,7 @@ class ModelRunnerBase:
         import librosa
         from chatterbox.models.s3tokenizer import S3_SR
 
-        audio_16, _ = librosa.load(
-            _wav_buffer(_bind_to_device(source_artifact, "cpu")), sr=S3_SR
-        )
+        audio_16, _ = librosa.load(_wav_buffer(_bind_to_device(source_artifact, "cpu")), sr=S3_SR)
         return torch.from_numpy(audio_16).float()
 
     def _try_batched_chatterbox_vc(self, inputs, requests_to_batch, slots):
@@ -3531,19 +3352,14 @@ class ModelRunnerBase:
                 elif cached is not None:
                     ref_dict = cached.conditionals
                 elif target_audio_artifact is not None:
-                    self.model.set_target_voice(
-                        _wav_buffer(_bind_to_device(target_audio_artifact, "cpu"))
-                    )
+                    self.model.set_target_voice(_wav_buffer(_bind_to_device(target_audio_artifact, "cpu")))
                     ref_dict = dict(self.model.ref_dict)
                     self._store_embedding_cache_entry(
-                        key,
-                        SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox"),
+                        key, SpeakerArtifact(conditionals=self.model.ref_dict, backend="chatterbox")
                     )
                 else:
                     raise ValueError("voice conversion requires target_audio or target_embedding")
-                prepared.append(
-                    (index, ref_dict, self._request_seed(requests_to_batch[index]))
-                )
+                prepared.append((index, ref_dict, self._request_seed(requests_to_batch[index])))
                 clips.append(self._chatterbox_vc_clip(source_artifact))
             # One batched source-tokenizer pass for the whole step (Phase 11-1).
             tokens = tokenize_batched(tokenizer, clips)
@@ -3564,11 +3380,7 @@ class ModelRunnerBase:
         for group in groups:
             try:
                 rows = [
-                    S3GenRow(
-                        tokens=tokens[position],
-                        ref_dict=prepared[position][1],
-                        seed=prepared[position][2],
-                    )
+                    S3GenRow(tokens=tokens[position], ref_dict=prepared[position][1], seed=prepared[position][2])
                     for position in group
                 ]
                 with torch.no_grad():
@@ -3580,12 +3392,9 @@ class ModelRunnerBase:
                 index = prepared[position][0]
                 try:
                     artifact = self._artifact_from_waveform(
-                        waveform,
-                        watermark=not _watermark_suppressed(requests_to_batch[index]),
+                        waveform, watermark=not _watermark_suppressed(requests_to_batch[index])
                     )
-                    result = self._build_result(
-                        requests_to_batch[index], "", VoiceConversionRequestOutput
-                    )
+                    result = self._build_result(requests_to_batch[index], "", VoiceConversionRequestOutput)
                     result.result_data.audio_artifact = artifact
                     results[index] = result
                 except Exception as error:  # noqa: BLE001 - errors this request alone

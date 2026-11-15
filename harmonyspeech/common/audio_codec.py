@@ -187,10 +187,7 @@ def resample(waveform: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
 
         return np.asarray(
             librosa.resample(
-                np.asarray(waveform, dtype=np.float32),
-                orig_sr=sr_from,
-                target_sr=sr_to,
-                res_type="soxr_hq",
+                np.asarray(waveform, dtype=np.float32), orig_sr=sr_from, target_sr=sr_to, res_type="soxr_hq"
             ),
             dtype=np.float32,
         )
@@ -200,10 +197,7 @@ def _read_with_soundfile(data: bytes) -> tuple[np.ndarray, int]:
     with sf.SoundFile(io.BytesIO(data)) as handle:
         samplerate = int(handle.samplerate)
         frames = handle.read(dtype="float32", always_2d=True)
-    if frames.shape[1] > 1:
-        frames = frames.mean(axis=1)
-    else:
-        frames = frames[:, 0]
+    frames = frames.mean(axis=1) if frames.shape[1] > 1 else frames[:, 0]
     return np.asarray(frames, dtype=np.float32), samplerate
 
 
@@ -252,9 +246,7 @@ def decode_audio(data: bytes, target_sr: int | None = None) -> tuple[np.ndarray,
     if target_sr is not None and (not isinstance(target_sr, int) or target_sr <= 0):
         raise ValueError(f"target_sr must be a positive integer, got {target_sr!r}")
     if not data:
-        raise AudioDecodeError(
-            "Input audio is empty. Supported input formats: " + _INPUT_FORMAT_HINT + "."
-        )
+        raise AudioDecodeError("Input audio is empty. Supported input formats: " + _INPUT_FORMAT_HINT + ".")
 
     probed = sniff_format(data)
     attempts: list[str] = []

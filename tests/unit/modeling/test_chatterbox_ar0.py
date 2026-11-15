@@ -35,10 +35,7 @@ from chatterbox.models.t3.modules.cond_enc import T3Cond
 from chatterbox.models.t3.modules.t3_config import T3Config
 
 from harmonyspeech.modeling.models.chatterbox import factory
-from harmonyspeech.modeling.models.chatterbox.t3_ar import (
-    ChatterboxT3AR,
-    _SafeAlignmentStreamAnalyzer,
-)
+from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR, _SafeAlignmentStreamAnalyzer
 
 #: Tiny Llama topology for the gate: small enough to build in a second, deep
 #: enough (2 layers) that the KV cache and position embeddings are exercised.
@@ -130,9 +127,7 @@ def _text_tokens(hp, *, batch: int = 2) -> torch.Tensor:
 def _run(module, hp, *, seed: int = 7, conds: T3Cond | None = None) -> torch.Tensor:
     torch.manual_seed(seed)
     return module.inference(
-        t3_cond=conds if conds is not None else _conditionals(hp),
-        text_tokens=_text_tokens(hp),
-        **_DECODE,
+        t3_cond=conds if conds is not None else _conditionals(hp), text_tokens=_text_tokens(hp), **_DECODE
     )
 
 
@@ -317,9 +312,7 @@ def test_load_t3_turbo_branch_builds_a_valid_config(monkeypatch):
     monkeypatch.setattr(factory, "load_file", lambda path: {})
     monkeypatch.setattr(factory, "T3", _FakeT3)
 
-    t3 = factory.load_t3(
-        "resemble-ai/chatterbox-turbo", None, "cpu", torch.float32, role=factory.ROLE_TURBO
-    )
+    t3 = factory.load_t3("resemble-ai/chatterbox-turbo", None, "cpu", torch.float32, role=factory.ROLE_TURBO)
 
     assert t3.hp.text_tokens_dict_size == 50276
     assert t3.hp.speech_tokens_dict_size == 6563
@@ -463,9 +456,7 @@ def test_multilingual_analyzer_is_on_by_default_and_never_leaks_hooks(monkeypatc
     # A full decode also ends on SDPA with zero hooks.
     torch.manual_seed(7)
     model.inference(
-        t3_cond=_conditionals(hp),
-        text_tokens=_tiny_multilingual_text(hp),
-        **{**_DECODE, "max_new_tokens": 3},
+        t3_cond=_conditionals(hp), text_tokens=_tiny_multilingual_text(hp), **{**_DECODE, "max_new_tokens": 3}
     )
     assert model.tfmr.config._attn_implementation == "sdpa"
     assert model.tfmr.config.output_attentions is False
@@ -492,9 +483,7 @@ def test_multilingual_analyzer_can_be_disabled(monkeypatch):
 
     torch.manual_seed(7)
     model.inference(
-        t3_cond=_conditionals(hp),
-        text_tokens=_tiny_multilingual_text(hp),
-        **{**_DECODE, "max_new_tokens": 3},
+        t3_cond=_conditionals(hp), text_tokens=_tiny_multilingual_text(hp), **{**_DECODE, "max_new_tokens": 3}
     )
     assert model.tfmr.config._attn_implementation == "sdpa"
     assert _forward_hook_count(model) == 0

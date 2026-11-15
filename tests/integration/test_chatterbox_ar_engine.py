@@ -125,9 +125,7 @@ def _tts_request(request_id, *, text="hello world", seed=7):
         model=AR_MODEL,
         input_text=text,
         mode="single_speaker_tts",
-        generation_options=TextToSpeechGenerationOptions(
-            seed=seed, style=None, speed=None, pitch=None, energy=None
-        ),
+        generation_options=TextToSpeechGenerationOptions(seed=seed, style=None, speed=None, pitch=None, energy=None),
     )
 
 
@@ -152,10 +150,7 @@ def engine_and_model(monkeypatch):
     config = _model_config()
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
         engine = HarmonySpeechEngine(
-            model_configs=[config],
-            log_stats=False,
-            ar_cache_enabled=True,
-            ar_cache_budget_bytes=ARENA_BUDGET,
+            model_configs=[config], log_stats=False, ar_cache_enabled=True, ar_cache_budget_bytes=ARENA_BUDGET
         )
 
     pool = ARCachePool(budget_bytes=ARENA_BUDGET, device="cpu", default_cap_tokens=64)

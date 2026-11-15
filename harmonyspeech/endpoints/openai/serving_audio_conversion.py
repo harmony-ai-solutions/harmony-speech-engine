@@ -48,11 +48,7 @@ class OpenAIServingAudioConversion(OpenAIServing):
 
         request_data = AudioConversionRequestInput.from_openai(request_id=request_id, request=request)
         artifacts = from_wire_audio(request_data)
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.audio_conversion_full_generator(request, raw_request, result_generator, request_id)
@@ -87,11 +83,7 @@ class OpenAIServingAudioConversion(OpenAIServing):
 
         encoded = to_wire_audio(final_res, request.output_options)
         response = AudioConversionResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            data=encoded.data,
-            sample_rate=encoded.sample_rate,
+            id=request_id, created=created_time, model=model_name, data=encoded.data, sample_rate=encoded.sample_rate
         )
 
         return response

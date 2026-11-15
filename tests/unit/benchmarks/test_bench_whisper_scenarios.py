@@ -58,9 +58,7 @@ def test_flood_scenario_is_heterogeneous():
     assert {spec["response_format"] for spec in specs} == set(bench.WHISPER_RESPONSE_FORMATS)
     assert {spec["language"] for spec in specs} == set(bench.WHISPER_LANGUAGES)
     for spec in specs:
-        expected_path = (
-            "/v1/audio/translations" if spec["task"] == "translate" else "/v1/audio/transcriptions"
-        )
+        expected_path = "/v1/audio/translations" if spec["task"] == "translate" else "/v1/audio/transcriptions"
         assert spec["path"] == expected_path
         assert spec["index"] >= 0
 
@@ -126,35 +124,26 @@ class _FakeResponse:
 def test_response_validation_distinguishes_formats_and_errors():
     json_spec = {"response_format": "json"}
     assert bench._whisper_response_ok(json_spec, _FakeResponse(body={"text": "hi"})) == (True, None)
-    assert bench._whisper_response_ok(json_spec, _FakeResponse(body={})) == (
-        False,
-        "missing_text_field",
-    )
+    assert bench._whisper_response_ok(json_spec, _FakeResponse(body={})) == (False, "missing_text_field")
     assert bench._whisper_response_ok(json_spec, _FakeResponse(body=None))[0] is False
-    assert bench._whisper_response_ok(json_spec, _FakeResponse(status_code=500)) == (
-        False,
-        "http_500",
-    )
+    assert bench._whisper_response_ok(json_spec, _FakeResponse(status_code=500)) == (False, "http_500")
 
     assert bench._whisper_response_ok(
-        {"response_format": "text"},
-        _FakeResponse(text="hello", content_type="text/plain; charset=utf-8"),
+        {"response_format": "text"}, _FakeResponse(text="hello", content_type="text/plain; charset=utf-8")
     ) == (True, None)
     assert bench._whisper_response_ok(
         {"response_format": "srt"},
         _FakeResponse(text="1\n00:00:00,000 --> 00:00:01,000\nhi\n", content_type="text/plain"),
     ) == (True, None)
     assert bench._whisper_response_ok(
-        {"response_format": "srt"},
-        _FakeResponse(text="not a subtitle", content_type="text/plain"),
+        {"response_format": "srt"}, _FakeResponse(text="not a subtitle", content_type="text/plain")
     ) == (False, "invalid_srt")
     assert bench._whisper_response_ok(
         {"response_format": "vtt"},
         _FakeResponse(text="WEBVTT\n\n00:00.000 --> 00:01.000\nhi\n", content_type="text/plain"),
     ) == (True, None)
     assert bench._whisper_response_ok(
-        {"response_format": "vtt"},
-        _FakeResponse(text="nope", content_type="text/plain"),
+        {"response_format": "vtt"}, _FakeResponse(text="nope", content_type="text/plain")
     ) == (False, "invalid_vtt")
 
 
@@ -213,12 +202,16 @@ def test_summary_reports_loss_timeouts_format_errors_and_short_percentiles():
     samples = [
         {
             "t_s": 0.0,
-            "models": {"whisper": {"in_flight": 2, "lane_short_depth": 5, "queue_wait_sum": 0.0, "queue_wait_count": 0}},
+            "models": {
+                "whisper": {"in_flight": 2, "lane_short_depth": 5, "queue_wait_sum": 0.0, "queue_wait_count": 0}
+            },
             "device": {"device_used_bytes": 100},
         },
         {
             "t_s": 1.0,
-            "models": {"whisper": {"in_flight": 1, "lane_short_depth": 1, "queue_wait_sum": 1.5, "queue_wait_count": 3}},
+            "models": {
+                "whisper": {"in_flight": 1, "lane_short_depth": 1, "queue_wait_sum": 1.5, "queue_wait_count": 3}
+            },
             "device": {"device_used_bytes": 200},
         },
     ]

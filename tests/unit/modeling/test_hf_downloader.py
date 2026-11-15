@@ -1,19 +1,18 @@
 """Unit tests for harmonyspeech/modeling/hf_downloader.py — caching and resolution."""
 
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 
 import pytest
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from harmonyspeech.modeling.hf_downloader import (
-    load_or_download_config,
-    load_or_download_file,
-    load_or_download_model,
-    _resolve_file_path,
+    HParams,
     _config_cache,
     _file_cache,
-    HParams,
+    _resolve_file_path,
+    load_or_download_config,
+    load_or_download_file,
 )
-from huggingface_hub.errors import LocalEntryNotFoundError
 
 
 @pytest.fixture(autouse=True)
@@ -194,9 +193,7 @@ def test_resolve_tier3_network_fallback(mock_dl):
 def test_resolve_tier3_logs_download_message(mock_dl):
     """A one-time INFO log is emitted when a network download is triggered."""
     mock_dl.side_effect = lambda **kw: (
-        (_ for _ in ()).throw(LocalEntryNotFoundError("miss"))
-        if kw.get("local_files_only")
-        else "/fake/path"
+        (_ for _ in ()).throw(LocalEntryNotFoundError("miss")) if kw.get("local_files_only") else "/fake/path"
     )
 
     with patch("harmonyspeech.modeling.hf_downloader.logger") as mock_logger:

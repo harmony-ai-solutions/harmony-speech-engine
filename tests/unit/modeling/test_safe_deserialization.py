@@ -90,12 +90,7 @@ def _make_tone_converter_runner() -> ModelRunnerBase:
 
 
 _OV_CONFIG = SimpleNamespace(
-    data=SimpleNamespace(
-        filter_length=1024,
-        sampling_rate=22050,
-        hop_length=256,
-        win_length=1024,
-    )
+    data=SimpleNamespace(filter_length=1024, sampling_rate=22050, hop_length=256, win_length=1024)
 )
 
 

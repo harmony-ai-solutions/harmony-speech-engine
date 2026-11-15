@@ -66,11 +66,7 @@ def _runner(config, model):
 
     pool = ARCachePool(budget_bytes=4 * 1024**3, device=model.t3.device, default_cap_tokens=768)
     runner = ARBatchRunner(
-        t3=model.t3,
-        pool=pool,
-        model_key=config.name,
-        model_config=config,
-        model_type=config.model_type,
+        t3=model.t3, pool=pool, model_key=config.name, model_config=config, model_type=config.model_type
     )
     assert runner.register(), "the parity pool must fit the gate's 4-request arena"
     return runner
@@ -80,13 +76,7 @@ def _decode(runner, model, text: str, request_id: str, *, turbo: bool, seed: int
     from harmonyspeech.task_handler.ar_runner import english_text_tokens, turbo_text_tokens
 
     tokens = (turbo_text_tokens if turbo else english_text_tokens)(model, text)
-    row = runner.begin(
-        request_id,
-        conds=model.conds,
-        text_tokens=tokens,
-        seed=seed,
-        max_new_tokens=max_new_tokens,
-    )
+    row = runner.begin(request_id, conds=model.conds, text_tokens=tokens, seed=seed, max_new_tokens=max_new_tokens)
     assert row is not None, f"runner refused the row for {request_id}"
     for _ in range(max_new_tokens + 8):
         outcome = runner.step([request_id])[0]
@@ -112,18 +102,12 @@ def _assert_row_is_batch_invariant(model_path: str, model_type: str, *, turbo: b
     assert model.conds is baseline_conds
 
     runner.begin(
-        "row-a",
-        conds=model.conds,
-        text_tokens=text_tokens_for(model, "Hello there."),
-        seed=0,
-        max_new_tokens=64,
+        "row-a", conds=model.conds, text_tokens=text_tokens_for(model, "Hello there."), seed=0, max_new_tokens=64
     )
     runner.begin(
         "row-b",
         conds=model.conds,
-        text_tokens=text_tokens_for(
-            model, "This is a much longer sentence that should decode for more tokens."
-        ),
+        text_tokens=text_tokens_for(model, "This is a much longer sentence that should decode for more tokens."),
         seed=0,
         max_new_tokens=64,
     )

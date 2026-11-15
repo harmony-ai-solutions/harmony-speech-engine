@@ -48,11 +48,7 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
 
         request_data = DetectVoiceActivityRequestInput.from_openai(request_id=request_id, request=request)
         artifacts = from_wire_audio(request_data)
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.voice_activity_check_full_generator(request, raw_request, result_generator, request_id)
@@ -84,9 +80,7 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
         assert final_res is not None
         if final_res.finish_reason == "error":
             return self.create_error_response(final_res.error or "Internal inference error")
-        assert isinstance(final_res, DetectVoiceActivityRequestOutput) or isinstance(
-            final_res, SpeechTranscriptionRequestOutput
-        )
+        assert isinstance(final_res, (DetectVoiceActivityRequestOutput, SpeechTranscriptionRequestOutput))
 
         # load result data and determine what will be returned
         result_data = json.loads(final_res.output)
@@ -100,7 +94,7 @@ class OpenAIServingVoiceActivityDetection(OpenAIServing):
             id=request_id,
             created=created_time,
             model=model_name,
-            speech_activity=result_data["speech_activity"] if "speech_activity" in result_data else False,
+            speech_activity=result_data.get("speech_activity", False),
             timestamps=result_data["segments"] if "segments" in result_data and request.get_timestamps else None,
         )
 

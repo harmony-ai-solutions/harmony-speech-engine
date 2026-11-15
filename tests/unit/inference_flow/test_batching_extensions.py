@@ -240,9 +240,7 @@ def test_default_token_budget_applies_on_the_frame_axis():
 def test_default_token_budget_caps_the_frame_area():
     lengths = [3660] * 8
     assert default_token_budget(lengths, max_batch_size=8) == 8 * 3660
-    budget = default_token_budget(
-        lengths, max_batch_size=8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
-    )
+    budget = default_token_budget(lengths, max_batch_size=8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET)
 
     assert budget == DEFAULT_MEL_FRAME_BATCH_BUDGET == 7500
     groups = plan_batches(lengths, max_batch_size=8, token_budget=budget)
@@ -253,9 +251,7 @@ def test_default_token_budget_caps_the_frame_area():
 @pytest.mark.unit
 def test_default_token_budget_phone_cap_keeps_short_chunk_width():
     lengths = [128] * 8
-    budget = default_token_budget(
-        lengths, max_batch_size=8, max_budget=DEFAULT_PHONE_BATCH_BUDGET
-    )
+    budget = default_token_budget(lengths, max_batch_size=8, max_budget=DEFAULT_PHONE_BATCH_BUDGET)
 
     assert budget == 8 * 128 <= DEFAULT_PHONE_BATCH_BUDGET
     groups = plan_batches(lengths, max_batch_size=8, token_budget=budget)

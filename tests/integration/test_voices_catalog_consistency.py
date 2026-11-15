@@ -103,12 +103,10 @@ def test_endpoint_serves_the_same_catalog_as_the_routing_layer(configs, listing)
         assert wire_entry["model_type"] == entry.model_type
         assert wire_entry["cloning_capable"] is entry.cloning_capable
         assert wire_entry["vc_target_kind"] == entry.vc_target_kind
-        assert [
-            voice["name"] for voice in wire_entry["voices"] if voice["source"] == "standard"
-        ] == _standard(entry)
-        assert [
-            voice["name"] for voice in wire_entry["voices"] if voice["source"] == "native"
-        ] == [voice.name for voice in entry.voices if voice.source == "native"]
+        assert [voice["name"] for voice in wire_entry["voices"] if voice["source"] == "standard"] == _standard(entry)
+        assert [voice["name"] for voice in wire_entry["voices"] if voice["source"] == "native"] == [
+            voice.name for voice in entry.voices if voice.source == "native"
+        ]
 
 
 @pytest.mark.parametrize("model", sorted(EXPECTED_VOICE_IDS))
@@ -144,9 +142,7 @@ def test_every_listed_standard_voice_resolves_through_the_routing_path(configs, 
                 assert lookup.resolution.kind == "standard"
                 assert lookup.resolution.wav_path is not None
             if vc_kind is not None:
-                target = catalog.lookup_standard_voice(
-                    configs, entry.model, name, target=True
-                )
+                target = catalog.lookup_standard_voice(configs, entry.model, name, target=True)
                 assert target.error is None, (entry.model, name, target.error)
                 assert target.resolution is not None
                 assert target.resolution.kind == "standard"

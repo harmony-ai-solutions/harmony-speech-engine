@@ -20,7 +20,7 @@ from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.models.kittentts.kittentts import KittenTTSSynthesizer
 from harmonyspeech.modeling.models.kittentts.onnx_model import (
     KITTEN_TTS_INTRA_OP_NUM_THREADS,
-    KittenTTS_1_Onnx,
+    KittenTTS1Onnx,
     build_session_options,
 )
 from harmonyspeech.task_handler import model_runner_base
@@ -34,17 +34,7 @@ from harmonyspeech.task_handler.batching import lane_count, run_in_lanes
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("requests", "max_batch_size", "expected"),
-    [
-        (1, 4, 1),
-        (3, 4, 3),
-        (4, 4, 4),
-        (8, 4, 4),
-        (8, 8, 8),
-        (5, 1, 1),
-        (0, 4, 1),
-        (5, 0, 1),
-        (5, -3, 1),
-    ],
+    [(1, 4, 1), (3, 4, 3), (4, 4, 4), (8, 4, 4), (8, 8, 8), (5, 1, 1), (0, 4, 1), (5, 0, 1), (5, -3, 1)],
 )
 def test_lane_count_is_min_of_work_width_and_admission(requests, max_batch_size, expected):
     """``min(len(inputs), max_batch_size)``, never below one lane."""
@@ -54,6 +44,7 @@ def test_lane_count_is_min_of_work_width_and_admission(requests, max_batch_size,
 @pytest.mark.unit
 def test_run_in_lanes_preserves_input_order_with_variable_latency():
     """A slow early item must not shift a later item's result."""
+
     def work(item):
         time.sleep(0.05 if item == 0 else 0.005)
         return item * 10
@@ -67,6 +58,7 @@ def test_run_in_lanes_preserves_input_order_with_variable_latency():
 @pytest.mark.unit
 def test_run_in_lanes_isolates_a_failing_item():
     """One lane's exception becomes that item's error only."""
+
     def work(item):
         if item == "poison":
             raise RuntimeError("lane exploded")
@@ -144,9 +136,9 @@ class _RecordingPhonemizer:
         return ["h ɛ l oʊ" for _ in texts]
 
 
-def _bare_kitten(phonemizer_backend) -> KittenTTS_1_Onnx:
-    """A ``KittenTTS_1_Onnx`` without the ONNX session, for pure-python paths."""
-    model = KittenTTS_1_Onnx.__new__(KittenTTS_1_Onnx)
+def _bare_kitten(phonemizer_backend) -> KittenTTS1Onnx:
+    """A ``KittenTTS1Onnx`` without the ONNX session, for pure-python paths."""
+    model = KittenTTS1Onnx.__new__(KittenTTS1Onnx)
     model.voices = {"expr-voice-5-m": np.zeros((64, 256), dtype=np.float32)}
     model.available_voices = ["expr-voice-5-m"]
     model.voice_aliases = {}
@@ -214,13 +206,12 @@ def test_kitten_warmup_runs_once_at_load(monkeypatch):
 @pytest.mark.unit
 def test_kitten_warmup_failure_does_not_fail_the_load(monkeypatch):
     """A broken warmup is logged and ignored; the model still loads."""
+
     class BrokenModel:
         def warmup(self):
             raise RuntimeError("warmup probe failed")
 
-    monkeypatch.setattr(
-        KittenTTSSynthesizer, "_load_model", lambda self, repo_id, cache_dir: BrokenModel()
-    )
+    monkeypatch.setattr(KittenTTSSynthesizer, "_load_model", lambda self, repo_id, cache_dir: BrokenModel())
 
     synthesizer = KittenTTSSynthesizer("KittenML/kitten-tts-mini-0.8")
 
@@ -236,7 +227,7 @@ def test_kitten_onnx_wrapper_has_a_tiny_warmup():
         calls.append((text, kwargs))
         return np.zeros(8, dtype=np.float32)
 
-    model = KittenTTS_1_Onnx.__new__(KittenTTS_1_Onnx)
+    model = KittenTTS1Onnx.__new__(KittenTTS1Onnx)
     model.generate = fake_generate
 
     model.warmup()
@@ -286,22 +277,23 @@ def test_silero_vad_step_stays_on_the_calling_thread(monkeypatch):
 
     runner = _vad_runner(max_batch_size=8)
     inputs = [
-        (AudioArtifact.from_numpy(np.zeros(3200, dtype=np.float32), 16000), {
-            "threshold": 0.5,
-            "min_speech_duration_ms": 250,
-            "min_silence_duration_ms": 100,
-            "speech_pad_ms": 30,
-            "return_seconds": False,
-            "get_timestamps": True,
-        })
+        (
+            AudioArtifact.from_numpy(np.zeros(3200, dtype=np.float32), 16000),
+            {
+                "threshold": 0.5,
+                "min_speech_duration_ms": 250,
+                "min_silence_duration_ms": 100,
+                "speech_pad_ms": 30,
+                "return_seconds": False,
+                "get_timestamps": True,
+            },
+        )
         for _ in range(4)
     ]
     requests = [
         EngineRequest(
             request_id=f"vad-{index}",
-            request_data=DetectVoiceActivityRequestInput(
-                request_id=f"vad-{index}", requested_model="vad", model="vad"
-            ),
+            request_data=DetectVoiceActivityRequestInput(request_id=f"vad-{index}", requested_model="vad", model="vad"),
             arrival_time=0.0,
         )
         for index in range(4)

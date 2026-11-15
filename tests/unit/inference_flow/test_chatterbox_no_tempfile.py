@@ -4,6 +4,7 @@ REQ-PERF-01: No filesystem I/O (tempfiles, open()) during Chatterbox inference.
 All audio processing uses in-memory BytesIO objects exclusively.
 """
 
+import contextlib
 import io
 from unittest.mock import MagicMock, patch
 
@@ -117,10 +118,9 @@ class TestChatterboxNoTempfile:
             patch("tempfile.NamedTemporaryFile") as mock_tmp,
             patch("tempfile.mkstemp") as mock_mkstemp,
         ):
-            try:
+            with contextlib.suppress(Exception):
+                # model mock may not produce full output; we only care about file I/O
                 runner._execute_chatterbox_tts(inputs, requests)
-            except Exception:
-                pass  # model mock may not produce full output; we only care about file I/O
             mock_open.assert_not_called()
             mock_tmp.assert_not_called()
             mock_mkstemp.assert_not_called()
@@ -138,10 +138,9 @@ class TestChatterboxNoTempfile:
             patch("tempfile.NamedTemporaryFile") as mock_tmp,
             patch("tempfile.mkstemp") as mock_mkstemp,
         ):
-            try:
+            with contextlib.suppress(Exception):
+                # model mock may not produce full output; we only care about file I/O
                 runner._execute_chatterbox_embedding(inputs, requests)
-            except Exception:
-                pass  # model mock may not produce full output; we only care about file I/O
             mock_open.assert_not_called()
             mock_tmp.assert_not_called()
             mock_mkstemp.assert_not_called()
@@ -162,10 +161,7 @@ class TestChatterboxNoTempfile:
             bytesio_calls.append(obj)
             return obj
 
-        with patch("io.BytesIO", side_effect=tracking_bytesio):
-            try:
-                runner._execute_chatterbox_embedding(inputs, requests)
-            except Exception:
-                pass
+        with patch("io.BytesIO", side_effect=tracking_bytesio), contextlib.suppress(Exception):
+            runner._execute_chatterbox_embedding(inputs, requests)
         # At least one BytesIO should have been created for in-memory audio processing
         assert len(bytesio_calls) >= 1, "Expected io.BytesIO to be used for in-memory audio processing"

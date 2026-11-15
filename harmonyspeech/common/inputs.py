@@ -154,10 +154,7 @@ def decode_mel_field(payload: str | None, field_name: str) -> np.ndarray:
 
 
 def get_audio_artifact(
-    request: Any,
-    entry: Any = None,
-    field: str = "input_audio",
-    target_sr: int | None = None,
+    request: Any, entry: Any = None, field: str = "input_audio", target_sr: int | None = None
 ) -> AudioArtifact:
     """Return the audio artifact for ``field``.
 
@@ -182,10 +179,7 @@ def get_audio_artifact(
 
 
 def get_speaker_artifact(
-    request: Any,
-    entry: Any = None,
-    field: str = "input_embedding",
-    backend: str = "openvoice",
+    request: Any, entry: Any = None, field: str = "input_embedding", backend: str = "openvoice"
 ) -> SpeakerArtifact:
     """Return the speaker artifact for ``field`` (embedding or conditionals).
 
@@ -202,20 +196,11 @@ def get_speaker_artifact(
     if payload is None or payload == "":
         raise ValueError(f"{field}: missing embedding payload")
     if backend == "chatterbox":
-        artifact = SpeakerArtifact(
-            conditionals=decode_conditionals_field(payload, field),
-            backend="chatterbox",
-        )
+        artifact = SpeakerArtifact(conditionals=decode_conditionals_field(payload, field), backend="chatterbox")
     elif backend == "harmonyspeech":
-        artifact = SpeakerArtifact(
-            embedding=decode_float32_field(payload, field),
-            backend="harmonyspeech",
-        )
+        artifact = SpeakerArtifact(embedding=decode_float32_field(payload, field), backend="harmonyspeech")
     else:
-        artifact = SpeakerArtifact(
-            embedding=decode_embedding_field(payload, field),
-            backend="openvoice",
-        )
+        artifact = SpeakerArtifact(embedding=decode_embedding_field(payload, field), backend="openvoice")
     if store is not None:
         store[field] = artifact
     return artifact
@@ -289,9 +274,7 @@ def prefill_audio_artifacts(request: Any, artifacts: dict | None = None) -> dict
     vad_payload = getattr(request, "input_vad_data", None)
     if isinstance(vad_payload, str) and vad_payload and "input_vad_data" not in artifacts:
         with contextlib.suppress(ValueError):
-            artifacts["input_vad_data"] = VadArtifact.from_payload(
-                decode_json_field(vad_payload, "input_vad_data")
-            )
+            artifacts["input_vad_data"] = VadArtifact.from_payload(decode_json_field(vad_payload, "input_vad_data"))
 
     mel_payload = getattr(request, "input_mel_spectrogram", None)
     if isinstance(mel_payload, str) and mel_payload and "input_mel_spectrogram" not in artifacts:
@@ -304,7 +287,6 @@ def prefill_audio_artifacts(request: Any, artifacts: dict | None = None) -> dict
                 array[None, ...], sample_rate=44100, hop_length=441
             )
     return artifacts
-
 
 
 @dataclass

@@ -39,7 +39,7 @@ class OpenAIServing:
             asyncio.run(self._post_init())
 
     async def _post_init(self):
-        engine_model_config = await self.engine.get_model_configs()
+        await self.engine.get_model_configs()
 
     async def show_available_models(self) -> ModelList:
         return ModelList(data=self.available_models)
@@ -114,7 +114,7 @@ class OpenAIServing:
                     status_code=HTTPStatus.BAD_REQUEST,
                 )
 
-            allowed_languages = [l.language for l in model.languages]
+            allowed_languages = [lang.language for lang in model.languages]
             if request.language not in allowed_languages:
                 return self.create_error_response(
                     message=f"The model `{request.model}` only supports the following languages: {','.join(allowed_languages)}.",
@@ -182,7 +182,7 @@ class OpenAIServing:
         if config.model_type == "ChatterboxMultilingualTTS":
             from harmonyspeech.modeling.models.chatterbox.chatterbox import ChatterboxMultilingualTTSModel
 
-            for lang_code, lang_name in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES.items():
+            for lang_code in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES:
                 lang_option = LanguageOptions(language=lang_code)
                 if card.languages is None:
                     card.languages = []
@@ -286,9 +286,7 @@ class OpenAIServing:
                 card = ModelCard(id=spec.id, root=spec.id, object="toolchain")
                 cards.append(card)
             card.capabilities = sorted(spec.capabilities)
-            card.models = [
-                config.name for config in configured_models if config.model_type in spec.member_types
-            ]
+            card.models = [config.name for config in configured_models if config.model_type in spec.member_types]
             for config in configured_models:
                 if config.model_type not in spec.member_types:
                     continue

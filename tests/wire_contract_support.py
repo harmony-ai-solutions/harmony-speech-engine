@@ -151,9 +151,7 @@ class FakeEngine:
             if isinstance(request_data, SpeechTranscribeRequestInput):
                 self._decode(request_data.input_audio, target_sr=16000)
                 return SpeechTranscriptionRequestOutput(
-                    request_id=request_id,
-                    output=json.dumps(TRANSCRIPTION_PAYLOAD),
-                    finish_reason="stop",
+                    request_id=request_id, output=json.dumps(TRANSCRIPTION_PAYLOAD), finish_reason="stop"
                 )
             if isinstance(request_data, DetectVoiceActivityRequestInput):
                 self._decode(request_data.input_audio, target_sr=16000)
@@ -164,9 +162,7 @@ class FakeEngine:
                 )
             if isinstance(request_data, SpeechEmbeddingRequestInput):
                 self._decode(request_data.input_audio, target_sr=16000)
-                return SpeechEmbeddingRequestOutput(
-                    request_id=request_id, output="ZGF0YQ==", finish_reason="stop"
-                )
+                return SpeechEmbeddingRequestOutput(request_id=request_id, output="ZGF0YQ==", finish_reason="stop")
             if isinstance(request_data, VoiceConversionRequestInput):
                 self._decode(request_data.source_audio)
                 self._decode(request_data.target_audio)
@@ -222,9 +218,7 @@ class WireApp:
         standard_voice_pack: bool = True,
     ):
         self.engine = FakeEngine(
-            decode_inputs=decode_inputs,
-            model_configs=model_configs,
-            standard_voice_pack=standard_voice_pack,
+            decode_inputs=decode_inputs, model_configs=model_configs, standard_voice_pack=standard_voice_pack
         )
         self.max_upload_bytes = max_upload_bytes
         self._stack: ExitStack | None = None
@@ -232,22 +226,19 @@ class WireApp:
         self.client: TestClient | None = None
 
     def __enter__(self):
+        from types import SimpleNamespace
+
         from harmonyspeech.endpoints.openai import api_server
         from harmonyspeech.endpoints.openai.args import make_arg_parser
         from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
         from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
         from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
-        from harmonyspeech.endpoints.openai.serving_voice_activity_detection import (
-            OpenAIServingVoiceActivityDetection,
-        )
+        from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
         from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
         from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
-        from types import SimpleNamespace
 
         serving = {
-            "openai_serving_tts": OpenAIServingTextToSpeech(
-                self.engine, [ModelCard(id=self.MODEL_IDS["tts"])]
-            ),
+            "openai_serving_tts": OpenAIServingTextToSpeech(self.engine, [ModelCard(id=self.MODEL_IDS["tts"])]),
             "openai_serving_stt": OpenAIServingSpeechToText(self.engine, [ModelCard(id=self.MODEL_IDS["stt"])]),
             "openai_serving_vc": OpenAIServingVoiceConversion(self.engine, [ModelCard(id=self.MODEL_IDS["vc"])]),
             "openai_serving_embedding": OpenAIServingVoiceEmbedding(
@@ -263,9 +254,7 @@ class WireApp:
         for name, instance in serving.items():
             self._stack.enter_context(_patch_attr(api_server, name, instance))
         self._stack.enter_context(_patch_attr(api_server, "engine", self.engine))
-        self._stack.enter_context(
-            _patch_attr(api_server, "engine_args", SimpleNamespace(disable_log_stats=True))
-        )
+        self._stack.enter_context(_patch_attr(api_server, "engine_args", SimpleNamespace(disable_log_stats=True)))
 
         args = make_arg_parser().parse_args([])
         self.app = api_server.build_app(args)

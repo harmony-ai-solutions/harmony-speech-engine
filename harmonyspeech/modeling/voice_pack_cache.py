@@ -55,6 +55,7 @@ byte-identical.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -62,7 +63,7 @@ import sys
 import tempfile
 import threading
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -73,11 +74,7 @@ from harmonyspeech.common.artifacts import AudioArtifact, SpeakerArtifact
 from harmonyspeech.common.audio_codec import decode_audio
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput
 from harmonyspeech.common.serialization import conditionals_to_payload
-from harmonyspeech.modeling.voice_catalog import (
-    spec_is_tts_cloning_capable,
-    standard_voice_names,
-    standard_voice_path,
-)
+from harmonyspeech.modeling.voice_catalog import spec_is_tts_cloning_capable, standard_voice_names, standard_voice_path
 from harmonyspeech.processing.pipeline_registry import PIPELINE_SPECS
 
 __all__ = [
@@ -101,12 +98,7 @@ DEFAULT_EXAGGERATION = 0.5
 
 #: Model types whose embed-step artifact is Chatterbox conditionals.
 _CHATTERBOX_EMBED_TYPES: frozenset[str] = frozenset(
-    {
-        "ChatterboxEmbedding",
-        "ChatterboxTTS",
-        "ChatterboxTurboTTS",
-        "ChatterboxMultilingualTTS",
-    }
+    {"ChatterboxEmbedding", "ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"}
 )
 
 #: Model types whose embed-step artifact is the OpenVoice speaker-encoder output.
@@ -141,13 +133,7 @@ def default_voice_pack_cache_dir() -> Path:
 
 
 def disk_key(
-    *,
-    model_type: str,
-    model_repo: str,
-    revision: str | None,
-    voice: str,
-    wav_hash: str,
-    params: dict | None,
+    *, model_type: str, model_repo: str, revision: str | None, voice: str, wav_hash: str, params: dict | None
 ) -> str:
     """Stable content-addressed key for one persisted artifact.
 
@@ -244,11 +230,7 @@ def _payload_to_artifact(payload: dict) -> SpeakerArtifact | None:
         conditionals = _conditionals_from_payload(conditionals_payload)
     if embedding is None and conditionals is None:
         return None
-    return SpeakerArtifact(
-        embedding=embedding,
-        conditionals=conditionals,
-        backend=payload.get("backend"),
-    )
+    return SpeakerArtifact(embedding=embedding, conditionals=conditionals, backend=payload.get("backend"))
 
 
 # ---------------------------------------------------------------------------
@@ -299,18 +281,14 @@ class VoicePackDiskCache:
         try:
             self.root.mkdir(parents=True, exist_ok=True)
             path = self.path_for(key)
-            fd, tmp_name = tempfile.mkstemp(
-                prefix=f"{key}.", suffix=".tmp", dir=str(self.root)
-            )
+            fd, tmp_name = tempfile.mkstemp(prefix=f"{key}.", suffix=".tmp", dir=str(self.root))
             try:
                 with os.fdopen(fd, "wb") as handle:
                     torch.save(payload, handle)
                 os.replace(tmp_name, path)
             except Exception:
-                try:
+                with contextlib.suppress(OSError):  # pragma: no cover - best effort cleanup
                     os.unlink(tmp_name)
-                except OSError:  # pragma: no cover - best effort cleanup
-                    pass
                 raise
         except Exception as exc:  # noqa: BLE001 - the cache must never fail warm-up
             logger.warning(f"Voice pack cache: could not write entry {key[:12]}…: {exc}")
@@ -344,7 +322,7 @@ class VoicePackDiskCache:
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=None)
+@cache
 def _pack_audio(path_str: str) -> AudioArtifact:
     """Decode a pack WAV exactly like admission does (same content hash)."""
     waveform, sample_rate = decode_audio(Path(path_str).read_bytes())
@@ -512,11 +490,7 @@ def build_warmup_targets(engine) -> list[WarmupTarget]:
                 params=params,
             )
             cache_key = (
-                cache.make_key(
-                    model_identity=model_identity,
-                    audio_hash=wav_hash,
-                    params=params,
-                )
+                cache.make_key(model_identity=model_identity, audio_hash=wav_hash, params=params)
                 if model_identity
                 else None
             )
@@ -577,10 +551,7 @@ def hydrate_embedding_cache(engine, disk_cache: VoicePackDiskCache | None = None
             cache.put(target.cache_key, artifact, model_identity=target.model_identity)
             restored += 1
         except Exception as exc:  # noqa: BLE001 - hydration is an optimization
-            logger.warning(
-                f"Voice pack cache: could not hydrate voice {target.voice!r} on "
-                f"{target.model_name}: {exc}"
-            )
+            logger.warning(f"Voice pack cache: could not hydrate voice {target.voice!r} on {target.model_name}: {exc}")
     if restored:
         logger.info(f"Voice pack cache: hydrated {restored} embedding(s) from {disk.root}")
     return restored
@@ -630,9 +601,7 @@ async def warm_up_voice_packs(engine) -> dict:
                         stats["persisted"] += 1
                 continue
 
-            stream = await engine.add_request(
-                target.request_id, target.request, artifacts=dict(target.artifacts)
-            )
+            stream = await engine.add_request(target.request_id, target.request, artifacts=dict(target.artifacts))
             final = None
             async for output in stream:
                 final = output
@@ -647,8 +616,7 @@ async def warm_up_voice_packs(engine) -> dict:
             if artifact is None:
                 stats["failed"] += 1
                 logger.warning(
-                    f"Voice pack warm-up: voice {target.voice!r} on {target.model_name} "
-                    "produced no embedding"
+                    f"Voice pack warm-up: voice {target.voice!r} on {target.model_name} produced no embedding"
                 )
                 continue
             stats["computed"] += 1
@@ -656,10 +624,7 @@ async def warm_up_voice_packs(engine) -> dict:
                 stats["persisted"] += 1
         except Exception as exc:  # noqa: BLE001 - one voice must never fail warm-up
             stats["failed"] += 1
-            logger.warning(
-                f"Voice pack warm-up: voice {target.voice!r} on {target.model_name} "
-                f"failed: {exc}"
-            )
+            logger.warning(f"Voice pack warm-up: voice {target.voice!r} on {target.model_name} failed: {exc}")
     logger.info(
         "Voice pack warm-up: "
         f"{stats['computed']} computed, {stats['cache_hits']} cache hits, "

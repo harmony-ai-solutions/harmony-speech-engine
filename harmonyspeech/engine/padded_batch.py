@@ -62,10 +62,7 @@ GIB = 2**30
 #: ``B=8`` of ~128-phone chunks (1,024 phones) stays at ≤ 1.8 GiB while 3,624
 #: phones reserved 6,512 MiB. 1.8 GiB / 1,024 phones = 1,887,436 B/phone
 #: ≈ 1.8 MiB/phone.
-PADDED_AXIS_BYTES_PER_UNIT: dict[str, int] = {
-    "phone": 1_887_436,
-    "mel_frame": 372_230,
-}
+PADDED_AXIS_BYTES_PER_UNIT: dict[str, int] = {"phone": 1_887_436, "mel_frame": 372_230}
 
 #: Which padding axes each batched model family consumes through
 #: ``default_token_budget``. Used by the engine to zero-fill the Prometheus
@@ -109,11 +106,7 @@ def bytes_per_unit_for(axis: str, *, units_per_frame: int | None = None) -> int 
 
 
 def allowed_padded_area(
-    requested_area: int,
-    free_headroom_bytes: int,
-    axis: str,
-    *,
-    bytes_per_unit: int | None = None,
+    requested_area: int, free_headroom_bytes: int, axis: str, *, bytes_per_unit: int | None = None
 ) -> dict:
     """Cap a requested padded-area budget by the live device headroom.
 

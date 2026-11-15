@@ -29,10 +29,7 @@ from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 from harmonyspeech.processing import pipeline_registry as registry
 from harmonyspeech.task_handler import inputs as prepare_module
 from harmonyspeech.task_handler import model_runner_base as runner_module
-from harmonyspeech.task_handler.inputs import (
-    prepare_openvoice_tone_converter_encoder_inputs,
-    prepare_silero_vad_inputs,
-)
+from harmonyspeech.task_handler.inputs import prepare_openvoice_tone_converter_encoder_inputs, prepare_silero_vad_inputs
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 # ---------------------------------------------------------------------------
@@ -51,9 +48,7 @@ def test_silero_timestamps_are_normalized_to_seconds_with_empty_text():
 
 @pytest.mark.unit
 def test_silero_timestamps_in_seconds_are_passed_through():
-    artifact = VadArtifact.from_silero_timestamps(
-        [{"start": 0.5, "end": 1.5}], sample_rate=16000, return_seconds=True
-    )
+    artifact = VadArtifact.from_silero_timestamps([{"start": 0.5, "end": 1.5}], sample_rate=16000, return_seconds=True)
 
     assert artifact.segments == [{"start": 0.5, "end": 1.5, "text": ""}]
 
@@ -185,9 +180,7 @@ def test_whisper_segments_with_text_still_pass(monkeypatch):
         (1, 0),
     ],
 )
-def test_whisper_segment_transcript_floor_without_the_legacy_length_cap(
-    monkeypatch, text_length, expected_segments
-):
+def test_whisper_segment_transcript_floor_without_the_legacy_length_cap(monkeypatch, text_length, expected_segments):
     """Whisper segments are kept by duration, not transcript length.
 
     This incident was *not* a VAD detection failure: whisper emits one segment
@@ -197,9 +190,7 @@ def test_whisper_segment_transcript_floor_without_the_legacy_length_cap(
     characters. The cap is gone; only the non-empty-transcript floor remains.
     Silero segments carry no text and bypass the filter entirely.
     """
-    vad = VadArtifact(
-        segments=[{"start": 0.0, "end": 3.0, "text": "x" * text_length}], source="whisper"
-    )
+    vad = VadArtifact(segments=[{"start": 0.0, "end": 3.0, "text": "x" * text_length}], source="whisper")
 
     assert len(_encoder_segments(monkeypatch, vad)) == expected_segments
 
@@ -214,9 +205,7 @@ def test_silero_vad_step_receives_16khz_audio_from_a_44khz_reference():
     """
     reference = AudioArtifact.from_numpy(np.zeros(44100 * 3, dtype=np.float32), 44100)
     request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="openvoice_v2", model="ov2-enc")
-    engine_request = SimpleNamespace(
-        request_id="emb-1", request_data=request, artifacts={"input_audio": reference}
-    )
+    engine_request = SimpleNamespace(request_id="emb-1", request_data=request, artifacts={"input_audio": reference})
 
     (audio, _params) = prepare_silero_vad_inputs([engine_request])[0]
 

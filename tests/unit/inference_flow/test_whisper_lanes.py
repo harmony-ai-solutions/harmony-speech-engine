@@ -29,12 +29,7 @@ from harmonyspeech.common.config import DeviceConfig, EngineConfig, ModelConfig
 from harmonyspeech.common.inputs import SpeechTranscribeRequestInput
 from harmonyspeech.common.request import EngineRequest, RequestStatus
 from harmonyspeech.engine.whisper_lane_metrics import render_whisper_lane_metrics
-from harmonyspeech.processing.scheduler import (
-    LaneCredits,
-    Scheduler,
-    plan_lane_admission,
-    whisper_lane,
-)
+from harmonyspeech.processing.scheduler import LaneCredits, Scheduler, plan_lane_admission, whisper_lane
 from harmonyspeech.task_handler import model_runner_base
 from harmonyspeech.task_handler.model_runner_base import (
     ModelRunnerBase,
@@ -224,9 +219,7 @@ def test_shipped_configs_carry_the_approved_initial_worker_counts():
 
     import yaml
 
-    repo_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    )
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
     def workers(config_name: str) -> dict[str, int]:
         with open(os.path.join(repo_root, config_name), encoding="utf-8") as handle:
@@ -270,9 +263,7 @@ def test_whisper_lane_uses_artifact_duration(seconds, expected):
 def test_whisper_lane_treats_unknown_duration_as_long():
     request = EngineRequest(
         request_id="r",
-        request_data=SpeechTranscribeRequestInput(
-            request_id="r", requested_model="whisper", model="whisper"
-        ),
+        request_data=SpeechTranscribeRequestInput(request_id="r", requested_model="whisper", model="whisper"),
         arrival_time=0.0,
     )
     assert whisper_lane(request) == "long"
@@ -304,9 +295,7 @@ def test_lane_credits_serve_the_only_available_lane():
 def test_long_first_queue_does_not_starve_the_short_lane():
     """A long request queued first cannot fill the step ahead of shorts."""
     credits = LaneCredits()
-    candidates = [(_request("long", 60.0), "long")] + [
-        (_request(f"short-{index}", 5.0), "short") for index in range(6)
-    ]
+    candidates = [(_request("long", 60.0), "long")] + [(_request(f"short-{index}", 5.0), "short") for index in range(6)]
 
     selected, leftover = plan_lane_admission(candidates, 3, credits)
 
@@ -399,11 +388,7 @@ def test_worker_consumes_the_generator_fully_inside_the_worker():
     pool = WhisperLanePool(object(), num_workers=2)
     request = _request("r", 1.0)
     with patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline):
-        pairs = pool.run(
-            [request.artifacts["input_audio"]],
-            [request],
-            pool.transcribe,
-        )
+        pairs = pool.run([request.artifacts["input_audio"]], [request], pool.transcribe)
 
     payload, error = pairs[0]
     assert error is None
@@ -463,9 +448,7 @@ def test_abort_between_segments_raises_and_stops_consuming():
 
     pool = WhisperLanePool(object(), num_workers=1)
     with patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline):
-        _payload, error = pool.run(
-            [request.artifacts["input_audio"]], [request], pool.transcribe
-        )[0]
+        _payload, error = pool.run([request.artifacts["input_audio"]], [request], pool.transcribe)[0]
 
     assert isinstance(error, WhisperRequestAbortedError)
     # The second segment was pulled to learn the request was aborted; the third
@@ -544,10 +527,7 @@ def test_handler_abort_errors_only_the_aborted_request():
 @pytest.mark.unit
 def test_scheduler_whisper_admission_composes_with_memory_governor():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 2},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 2})
     for index in range(5):
         scheduler.add_request(_request(f"r{index}", 1.0))
 
@@ -559,10 +539,7 @@ def test_scheduler_whisper_admission_composes_with_memory_governor():
 @pytest.mark.unit
 def test_scheduler_memory_governor_subtracts_running_windows():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 1},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 1})
     running = _request("running", 1.0)
     running.set_running()
     scheduler.running.append(running)
@@ -576,10 +553,7 @@ def test_scheduler_memory_governor_subtracts_running_windows():
 @pytest.mark.unit
 def test_scheduler_disabled_governor_falls_back_to_capacity():
     config = _whisper_config(max_batch_size=3)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": False, "allowed_windows": 0},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": False, "allowed_windows": 0})
     for index in range(5):
         scheduler.add_request(_request(f"r{index}", 1.0))
 
@@ -600,18 +574,14 @@ def test_scheduler_keeps_boolean_admission_for_non_whisper_models():
     scheduler = Scheduler([config])
     running = EngineRequest(
         request_id="running",
-        request_data=SpeechTranscribeRequestInput(
-            request_id="running", requested_model="synth", model="synth"
-        ),
+        request_data=SpeechTranscribeRequestInput(request_id="running", requested_model="synth", model="synth"),
         arrival_time=0.0,
     )
     running.set_running()
     scheduler.running.append(running)
     waiting = EngineRequest(
         request_id="waiting",
-        request_data=SpeechTranscribeRequestInput(
-            request_id="waiting", requested_model="synth", model="synth"
-        ),
+        request_data=SpeechTranscribeRequestInput(request_id="waiting", requested_model="synth", model="synth"),
         arrival_time=0.0,
     )
     scheduler.add_request(waiting)
@@ -681,8 +651,7 @@ def test_engine_get_whisper_lane_stats_aggregates_models():
     engine = HarmonySpeechEngine.__new__(HarmonySpeechEngine)
     engine.model_executors = {
         "whisper": SimpleNamespace(
-            model_config=_whisper_config(num_workers=2),
-            driver_worker=SimpleNamespace(model_runner=runner),
+            model_config=_whisper_config(num_workers=2), driver_worker=SimpleNamespace(model_runner=runner)
         ),
         "synth": SimpleNamespace(
             model_config=ModelConfig(

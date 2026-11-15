@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.modeling.loader import _check_ctranslate2_cuda_available, _get_model_cls
+from harmonyspeech.modeling.loader import _get_model_cls
 
 
 @pytest.fixture
@@ -59,12 +59,14 @@ def test_get_model_cls_passes_model_type_to_registry(model_config_factory):
 
 def test_get_model_cls_error_mentions_model_type(model_config_factory):
     """ValueError message includes the unsupported model_type name."""
-    with patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None):
-        with patch("harmonyspeech.modeling.models.ModelRegistry.get_supported_archs", return_value=[]):
-            cfg = model_config_factory("NonExistentModel")
-            with pytest.raises(ValueError) as exc_info:
-                _get_model_cls(cfg)
-            assert "NonExistentModel" in str(exc_info.value)
+    with (
+        patch("harmonyspeech.modeling.models.ModelRegistry.load_model_cls", return_value=None),
+        patch("harmonyspeech.modeling.models.ModelRegistry.get_supported_archs", return_value=[]),
+    ):
+        cfg = model_config_factory("NonExistentModel")
+        with pytest.raises(ValueError) as exc_info:
+            _get_model_cls(cfg)
+        assert "NonExistentModel" in str(exc_info.value)
 
 
 def test_get_model_cls_error_includes_supported_list(model_config_factory):

@@ -16,11 +16,7 @@ import os
 
 import pytest
 
-from harmonyspeech.endpoints.openai.protocol import (
-    GenerationOptions,
-    TextToSpeechRequest,
-    TextToSpeechResponse,
-)
+from harmonyspeech.endpoints.openai.protocol import GenerationOptions, TextToSpeechRequest, TextToSpeechResponse
 
 pytestmark = [
     pytest.mark.e2e,
@@ -61,9 +57,7 @@ def _assert_growth(serving_tts, raw_request, model, *, extra):
                 model=model,
                 input=TEXT,
                 mode="single_speaker_tts",
-                generation_options=GenerationOptions(
-                    split_text=True, chunk_size=40, sentence_pause_ms=PAUSE_MS
-                ),
+                generation_options=GenerationOptions(split_text=True, chunk_size=40, sentence_pause_ms=PAUSE_MS),
                 **extra,
             ),
             raw_request,
@@ -94,32 +88,17 @@ def test_chatterbox_multilingual_chunked_growth(chatterbox_multilingual_engine, 
 
 def test_kittentts_chunked_growth(kittentts_mini_engine, mock_raw_request):
     _engine, serving_tts = kittentts_mini_engine
-    _assert_growth(
-        serving_tts,
-        mock_raw_request,
-        "kitten-tts-mini",
-        extra={"language": "default", "voice": "Jasper"},
-    )
+    _assert_growth(serving_tts, mock_raw_request, "kitten-tts-mini", extra={"language": "default", "voice": "Jasper"})
 
 
 def test_melotts_chunked_growth(melotts_en_engine, mock_raw_request):
     _engine, serving_tts, _embed, _vc = melotts_en_engine
-    _assert_growth(
-        serving_tts,
-        mock_raw_request,
-        "ov2-synthesizer-en",
-        extra={"language": "EN", "voice": "EN-Newest"},
-    )
+    _assert_growth(serving_tts, mock_raw_request, "ov2-synthesizer-en", extra={"language": "EN", "voice": "EN-Newest"})
 
 
 def test_openvoice_v1_chunked_growth(openvoice_v1_en_engine, mock_raw_request):
     _engine, serving_tts, _embed, _vc = openvoice_v1_en_engine
-    _assert_growth(
-        serving_tts,
-        mock_raw_request,
-        "ov1-synthesizer-en",
-        extra={"language": "EN", "voice": "EN-Newest"},
-    )
+    _assert_growth(serving_tts, mock_raw_request, "ov1-synthesizer-en", extra={"language": "EN", "voice": "EN-Newest"})
 
 
 def test_harmonyspeech_clone_chunked_growth(harmonyspeech_engine, mock_raw_request):
@@ -203,32 +182,22 @@ def test_chatterbox_turbo_output_filters_smoke(chatterbox_turbo_engine, mock_raw
     _assert_filters_valid(serving_tts, mock_raw_request, "chatterbox_turbo", extra={})
 
 
-def test_chatterbox_multilingual_output_filters_smoke(
-    chatterbox_multilingual_engine, mock_raw_request
-):
+def test_chatterbox_multilingual_output_filters_smoke(chatterbox_multilingual_engine, mock_raw_request):
     _engine, serving_tts, _embed = chatterbox_multilingual_engine
-    _assert_filters_valid(
-        serving_tts, mock_raw_request, "chatterbox_multilingual", extra={"language": "en"}
-    )
+    _assert_filters_valid(serving_tts, mock_raw_request, "chatterbox_multilingual", extra={"language": "en"})
 
 
 def test_kittentts_output_filters_smoke(kittentts_mini_engine, mock_raw_request):
     _engine, serving_tts = kittentts_mini_engine
     _assert_filters_valid(
-        serving_tts,
-        mock_raw_request,
-        "kitten-tts-mini",
-        extra={"language": "default", "voice": "Jasper"},
+        serving_tts, mock_raw_request, "kitten-tts-mini", extra={"language": "default", "voice": "Jasper"}
     )
 
 
 def test_melotts_output_filters_smoke(melotts_en_engine, mock_raw_request):
     _engine, serving_tts, _embed, _vc = melotts_en_engine
     _assert_filters_valid(
-        serving_tts,
-        mock_raw_request,
-        "ov2-synthesizer-en",
-        extra={"language": "EN", "voice": "EN-Newest"},
+        serving_tts, mock_raw_request, "ov2-synthesizer-en", extra={"language": "EN", "voice": "EN-Newest"}
     )
 
 
@@ -258,8 +227,5 @@ def test_harmonyspeech_output_filters_smoke(harmonyspeech_engine, mock_raw_reque
 def test_openvoice_v1_output_filters_smoke(openvoice_v1_en_engine, mock_raw_request):
     _engine, serving_tts, _embed, _vc = openvoice_v1_en_engine
     _assert_filters_valid(
-        serving_tts,
-        mock_raw_request,
-        "ov1-synthesizer-en",
-        extra={"language": "EN", "voice": "EN-Newest"},
+        serving_tts, mock_raw_request, "ov1-synthesizer-en", extra={"language": "EN", "voice": "EN-Newest"}
     )

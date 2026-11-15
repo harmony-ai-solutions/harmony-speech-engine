@@ -113,7 +113,7 @@ def number_to_words(n: int) -> str:
             return f"{_ONES[hundreds]} hundred"
 
     parts = []
-    for i, scale in enumerate(_SCALE):
+    for scale in _SCALE:
         chunk = n % 1000
         if chunk:
             chunk_words = _three_digits_to_words(chunk)
@@ -450,7 +450,7 @@ def expand_roman_numerals(text: str, context_words: bool = True) -> str:
         "Louis XIV"        → "Louis fourteen"
         "mix I with V"     → left unchanged (ambiguous single letters)
     """
-    _TITLE_WORDS = re.compile(
+    _title_words = re.compile(
         r"\b(war|chapter|part|volume|act|scene|book|section|article|"
         r"king|queen|pope|louis|henry|edward|george|william|james|"
         r"phase|round|level|stage|class|type|version|episode|season)\b",
@@ -466,7 +466,7 @@ def expand_roman_numerals(text: str, context_words: bool = True) -> str:
             # Only expand if preceded by a title word
             start = m.start()
             preceding = text[max(0, start - 30) : start]
-            if not _TITLE_WORDS.search(preceding):
+            if not _title_words.search(preceding):
                 return roman
         try:
             val = roman_to_int(roman)

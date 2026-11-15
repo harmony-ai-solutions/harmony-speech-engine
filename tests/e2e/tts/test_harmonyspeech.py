@@ -62,9 +62,7 @@ async def _get_vocode(engine, vocode_req, mel_artifact: MelArtifact):
     request_id = f"vocode-{id(vocode_req)}"
     request_data = VocodeRequestInput.from_openai(request_id, vocode_req)
     result_generator = engine.generate(
-        request_id=request_id,
-        request_data=request_data,
-        artifacts={"input_audio": mel_artifact},
+        request_id=request_id, request_data=request_data, artifacts={"input_audio": mel_artifact}
     )
 
     final_res = None

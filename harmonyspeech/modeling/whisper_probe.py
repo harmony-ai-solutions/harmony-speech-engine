@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -42,6 +43,9 @@ from harmonyspeech.engine.vram_budget import (
     per_window_bytes,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - typing only; numpy stays a lazy runtime import
+    import numpy as np
+
 _SAMPLE_RATE = 16000
 #: faster-whisper chunks audio into 30 s clips before batching.
 _CLIP_SECONDS = 30.0
@@ -49,7 +53,7 @@ _CLIP_SECONDS = 30.0
 _SAMPLE_INTERVAL_S = 0.02
 
 
-def _probe_audio(max_audio_seconds: float) -> "np.ndarray":
+def _probe_audio(max_audio_seconds: float) -> np.ndarray:
     """Deterministic speech-like probe audio for the max-shape run.
 
     All-zero audio used to make the batched pipeline raise
@@ -94,14 +98,7 @@ def _probe_clip_timestamps(max_audio_seconds: float) -> list[dict]:
     return clips
 
 
-def _skip_record(
-    reason: str,
-    *,
-    workers: int,
-    window_batch: int,
-    beam_size: int,
-    max_audio_seconds: float,
-) -> dict:
+def _skip_record(reason: str, *, workers: int, window_batch: int, beam_size: int, max_audio_seconds: float) -> dict:
     return {
         "measured": False,
         "reason": reason,
@@ -185,7 +182,9 @@ def probe_whisper_peak(
         return _skip_record(f"model-device:{model_device or 'unknown'}", **shape)
 
     try:
-        import numpy as np
+        # Availability probe for the lazy numpy import inside _probe_audio: a
+        # missing numpy must still yield a skip record rather than a raise.
+        import numpy as np  # noqa: F401 - availability probe for the lazy import in _probe_audio
         from faster_whisper import BatchedInferencePipeline
     except Exception as exc:  # pragma: no cover - faster-whisper is a hard dependency in practice
         return _skip_record(f"faster-whisper-import-failed: {type(exc).__name__}", **shape)
@@ -261,8 +260,7 @@ def probe_whisper_peak(
         used_after = max(0, total - int(free_after))
     except Exception as exc:
         logger.warning(
-            f"Whisper max-shape probe failed ({type(exc).__name__}: {exc}); "
-            "VRAM attribution stays unmeasured."
+            f"Whisper max-shape probe failed ({type(exc).__name__}: {exc}); VRAM attribution stays unmeasured."
         )
         return _skip_record(f"probe-failed: {type(exc).__name__}: {exc}", **shape)
 

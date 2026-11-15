@@ -63,13 +63,9 @@ class GPUModelRunner(ModelRunnerBase):
         return probe_whisper_peak(
             self.model,
             workers=getattr(self.model_config, "num_workers", 1),
-            window_batch=getattr(
-                self.model_config, "window_batch", getattr(self.model_config, "max_batch_size", 1)
-            ),
+            window_batch=getattr(self.model_config, "window_batch", getattr(self.model_config, "max_batch_size", 1)),
             beam_size=getattr(self.model_config, "beam_size", 5),
-            max_audio_seconds=getattr(
-                self.model_config, "whisper_max_audio_seconds", 300.0
-            ),
+            max_audio_seconds=getattr(self.model_config, "whisper_max_audio_seconds", 300.0),
             # Phase 11-0: probe the model's own device (``cuda:1`` stays 1).
             device_index=cuda_index(self.device),
         )

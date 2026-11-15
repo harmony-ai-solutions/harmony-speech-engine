@@ -11,7 +11,7 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 from loguru import logger
 
-from harmonyspeech.modeling.models.kittentts.onnx_model import KittenTTS_1_Onnx
+from harmonyspeech.modeling.models.kittentts.onnx_model import KittenTTS1Onnx
 
 # Available KittenTTS HuggingFace model repositories
 KITTENTTS_MODEL_REPOS = {
@@ -68,12 +68,10 @@ class KittenTTSSynthesizer:
         try:
             self._model.warmup()
         except Exception as error:  # noqa: BLE001 - best-effort warmup
-            logger.warning(
-                f"KittenTTS warmup generate failed ({error}); the first request will pay the cold start"
-            )
+            logger.warning(f"KittenTTS warmup generate failed ({error}); the first request will pay the cold start")
 
-    def _load_model(self, repo_id: str, cache_dir: str | None) -> KittenTTS_1_Onnx:
-        """Download and initialize KittenTTS_1_Onnx from HuggingFace."""
+    def _load_model(self, repo_id: str, cache_dir: str | None) -> KittenTTS1Onnx:
+        """Download and initialize KittenTTS1Onnx from HuggingFace."""
         # Download config
         config_path = hf_hub_download(repo_id=repo_id, filename="config.json", cache_dir=cache_dir)
         with open(config_path) as f:
@@ -88,7 +86,7 @@ class KittenTTSSynthesizer:
         # Download voices NPZ file
         voices_path = hf_hub_download(repo_id=repo_id, filename=config["voices"], cache_dir=cache_dir)
 
-        return KittenTTS_1_Onnx(
+        return KittenTTS1Onnx(
             model_path=model_path,
             voices_path=voices_path,
             speed_priors=config.get("speed_priors", {}),

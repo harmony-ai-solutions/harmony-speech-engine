@@ -119,9 +119,7 @@ def test_identity_axis_texts_fit_in_one_chunk_at_the_serving_budget():
                 assert not case.get("skip_reason"), (family, case["name"], chunks)
 
     # The current corpus is all single-chunk, so the gate really runs today.
-    runnable, skipped = ar.partition_optional_cases(
-        ar._cases_for_axis(axis, "kittentts"), available=lambda _name: True
-    )
+    runnable, skipped = ar.partition_optional_cases(ar._cases_for_axis(axis, "kittentts"), available=lambda _name: True)
     assert runnable and not skipped
 
 
@@ -139,12 +137,7 @@ def test_identity_axis_excludes_a_multi_chunk_text_with_a_recorded_reason(monkey
         "fake_multi",
         {
             "cases": [
-                {
-                    "name": "many_sentences",
-                    "kind": "tts",
-                    "model": "fake",
-                    "text_literal": ar.LONGFORM_CHUNKED_TEXT,
-                }
+                {"name": "many_sentences", "kind": "tts", "model": "fake", "text_literal": ar.LONGFORM_CHUNKED_TEXT}
             ]
         },
     )
@@ -161,9 +154,7 @@ def test_identity_axis_excludes_a_multi_chunk_text_with_a_recorded_reason(monkey
 
 def test_identity_axis_retargets_a_vad_undetectable_reference(monkeypatch):
     """OpenVoice clone cases use a real-speech clip (the VAD cannot hear tones)."""
-    monkeypatch.setattr(
-        ar, "VAD_CARRIED_FAMILIES", ar.VAD_CARRIED_FAMILIES | {"fake_ov"}
-    )
+    monkeypatch.setattr(ar, "VAD_CARRIED_FAMILIES", ar.VAD_CARRIED_FAMILIES | {"fake_ov"})
     monkeypatch.setitem(
         ar.FAMILY_SPECS,
         "fake_ov",

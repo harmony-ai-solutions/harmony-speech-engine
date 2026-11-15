@@ -42,13 +42,7 @@ from loguru import logger
 
 from harmonyspeech.common import audio_codec
 
-__all__ = [
-    "AudioArtifact",
-    "MelArtifact",
-    "SpeakerArtifact",
-    "VadArtifact",
-    "SpeakerBackend",
-]
+__all__ = ["AudioArtifact", "MelArtifact", "SpeakerArtifact", "VadArtifact", "SpeakerBackend"]
 
 
 SpeakerBackend = Literal["openvoice", "chatterbox", "harmonyspeech"]
@@ -190,9 +184,7 @@ class AudioArtifact:
         target = torch.device(device)
         if _same_device(self.device, target):
             return self
-        logger.debug(
-            f"AudioArtifact: moving waveform {tuple(self.waveform.shape)} {self.device} -> {target}"
-        )
+        logger.debug(f"AudioArtifact: moving waveform {tuple(self.waveform.shape)} {self.device} -> {target}")
         waveform = self.waveform.to(target)
         return replace(self, waveform=waveform, device=waveform.device)
 
@@ -235,9 +227,7 @@ class MelArtifact:
         else:
             self.device = torch.device(self.device)
             if not _same_device(self.device, self.mel.device):
-                raise ValueError(
-                    f"MelArtifact device mismatch: device={self.device} but mel is on {self.mel.device}"
-                )
+                raise ValueError(f"MelArtifact device mismatch: device={self.device} but mel is on {self.mel.device}")
             self.device = self.mel.device
         if self.breaks is not None:
             self.breaks = [int(value) for value in self.breaks]
@@ -253,11 +243,7 @@ class MelArtifact:
     ) -> MelArtifact:
         array = np.ascontiguousarray(np.asarray(mel, dtype=np.float32))
         return cls(
-            mel=torch.from_numpy(array),
-            sample_rate=sample_rate,
-            hop_length=hop_length,
-            device=device,
-            breaks=breaks,
+            mel=torch.from_numpy(array), sample_rate=sample_rate, hop_length=hop_length, device=device, breaks=breaks
         )
 
     @property
@@ -323,12 +309,7 @@ class SpeakerArtifact:
             device_value = embedding.device
         elif reference_audio is not None:
             device_value = reference_audio.device
-        return replace(
-            self,
-            embedding=embedding,
-            reference_audio=reference_audio,
-            device=device_value,
-        )
+        return replace(self, embedding=embedding, reference_audio=reference_audio, device=device_value)
 
 
 @dataclass
@@ -369,20 +350,11 @@ class VadArtifact:
         if info is not None and not isinstance(info, dict):
             # whisper's ``info`` is serialized with dataclasses.asdict, but accept objects too.
             info = getattr(info, "__dict__", None)
-        return cls(
-            segments=list(segments),
-            info=info,
-            text=payload.get("text"),
-            source=payload.get("source") or source,
-        )
+        return cls(segments=list(segments), info=info, text=payload.get("text"), source=payload.get("source") or source)
 
     @classmethod
     def from_silero_timestamps(
-        cls,
-        timestamps: list[dict],
-        *,
-        sample_rate: int = 16000,
-        return_seconds: bool = False,
+        cls, timestamps: list[dict], *, sample_rate: int = 16000, return_seconds: bool = False
     ) -> VadArtifact:
         """Normalize ``get_speech_timestamps`` output to whisper-schema segments.
 

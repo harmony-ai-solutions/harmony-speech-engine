@@ -1,11 +1,11 @@
+import contextlib
 import threading
-
-from misaki import en, espeak  # noqa: F401
 
 import numpy as np
 import onnxruntime as ort
 import phonemizer
 import soundfile as sf
+from misaki import en, espeak  # noqa: F401
 
 from harmonyspeech.modeling.models.kittentts.preprocess import TextPreprocessor
 
@@ -132,16 +132,14 @@ class TextCleaner:
     def __call__(self, text):
         indexes = []
         for char in text:
-            try:
+            with contextlib.suppress(KeyError):
                 indexes.append(self.word_index_dictionary[char])
-            except KeyError:
-                pass
         return indexes
 
 
-class KittenTTS_1_Onnx:
+class KittenTTS1Onnx:
     def __init__(
-        self, model_path="kitten_tts_nano_preview.onnx", voices_path="voices.npz", speed_priors={}, voice_aliases={}
+        self, model_path="kitten_tts_nano_preview.onnx", voices_path="voices.npz", speed_priors=None, voice_aliases=None
     ):
         """Initialize KittenTTS with model and voice data.
 
@@ -160,7 +158,7 @@ class KittenTTS_1_Onnx:
             language="en-us", preserve_punctuation=True, with_stress=True
         )
         self.text_cleaner = TextCleaner()
-        self.speed_priors = speed_priors
+        self.speed_priors = speed_priors or {}
 
         # Available voices
         self.available_voices = [
@@ -174,7 +172,7 @@ class KittenTTS_1_Onnx:
             "expr-voice-5-f",
         ]
         self.all_voice_names = ["Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo"]
-        self.voice_aliases = voice_aliases
+        self.voice_aliases = voice_aliases or {}
 
         self.preprocessor = TextPreprocessor(remove_punctuation=False)
 

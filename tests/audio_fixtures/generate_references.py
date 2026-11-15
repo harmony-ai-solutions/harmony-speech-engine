@@ -70,7 +70,7 @@ def synthesize(cfg: dict) -> np.ndarray:
 
     # Amplitude envelope with syllable-rate pauses so it is not a drone.
     envelope = 0.55 + 0.45 * np.sin(2 * np.pi * 2.7 * t) ** 2
-    envelope *= (np.sin(np.pi * np.clip(t / SECONDS, 0, 1)) ** 0.35)
+    envelope *= np.sin(np.pi * np.clip(t / SECONDS, 0, 1)) ** 0.35
     source *= envelope
 
     voiced = np.zeros(n)

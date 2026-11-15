@@ -44,12 +44,7 @@ from harmonyspeech.engine.ar_cache_metrics import render_ar_cache_metrics
 from harmonyspeech.engine.ar_decode_metrics import render_ar_decode_metrics
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
-from tests.integration.test_chatterbox_ar_engine import (
-    _TINY_LLAMA,
-    _StubModel,
-    _tiny_hp,
-    _drive,
-)
+from tests.integration.test_chatterbox_ar_engine import _TINY_LLAMA, _drive, _StubModel, _tiny_hp
 
 AR_MODEL = "chatterbox-ar"
 EMBED_MODEL = "chatterbox-embedding"
@@ -108,9 +103,7 @@ def _tts_request(request_id: str, *, marker: int | None = None, seed: int = 7, r
         model=requested_model,
         input_text="hi",
         mode="single_speaker_tts",
-        generation_options=TextToSpeechGenerationOptions(
-            seed=seed, style=None, speed=None, pitch=None, energy=None
-        ),
+        generation_options=TextToSpeechGenerationOptions(seed=seed, style=None, speed=None, pitch=None, energy=None),
     )
 
 
@@ -157,11 +150,7 @@ def _build_engine(monkeypatch, *, pool_slots: int, max_batch_size: int, with_emb
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
         engine = HarmonySpeechEngine(model_configs=configs, log_stats=False, request_timeout_s=600.0)
 
-    pool = ARCachePool(
-        budget_bytes=_budget_for_slots(pool_slots),
-        device="cpu",
-        default_cap_tokens=CAP_TOKENS,
-    )
+    pool = ARCachePool(budget_bytes=_budget_for_slots(pool_slots), device="cpu", default_cap_tokens=CAP_TOKENS)
     engine.ar_cache_pool = pool
 
     tts_runner = _make_runner(config, _t3_model(), pool, embedding_cache=engine.embedding_cache)
@@ -173,9 +162,7 @@ def _build_engine(monkeypatch, *, pool_slots: int, max_batch_size: int, with_emb
     if with_embedding:
         embed_config = configs[1]
         embed_model = _StubEmbeddingModel()
-        executors[EMBED_MODEL] = _make_runner(
-            embed_config, embed_model, None, embedding_cache=engine.embedding_cache
-        )
+        executors[EMBED_MODEL] = _make_runner(embed_config, embed_model, None, embedding_cache=engine.embedding_cache)
     engine.model_executors = executors
     return engine, tts_runner, pool
 
@@ -226,9 +213,7 @@ def test_tight_pool_100_distinct_voice_flood_zero_loss_zero_pairing(monkeypatch)
     for index in range(count):
         request_id = f"voice-{index}"
         engine.add_request(
-            request_id,
-            _tts_request(request_id, seed=1000 + index),
-            artifacts=_conditionals_artifact(index + 1),
+            request_id, _tts_request(request_id, seed=1000 + index), artifacts=_conditionals_artifact(index + 1)
         )
 
     outputs = _drive(engine, max_steps=4000)
@@ -281,9 +266,7 @@ def test_deadline_under_pool_exhaustion_errors_only_expired_request(monkeypatch)
     for index in range(count):
         request_id = f"deadline-{index}"
         engine.add_request(
-            request_id,
-            _tts_request(request_id, seed=2000 + index),
-            artifacts=_conditionals_artifact(index + 1),
+            request_id, _tts_request(request_id, seed=2000 + index), artifacts=_conditionals_artifact(index + 1)
         )
 
     first_outputs, _forwarded = engine.step()
@@ -338,9 +321,7 @@ def test_abort_storm_mid_decode_loses_no_survivor(monkeypatch):
     for index in range(count):
         request_id = f"abort-{index}"
         engine.add_request(
-            request_id,
-            _tts_request(request_id, seed=3000 + index),
-            artifacts=_conditionals_artifact(index + 1),
+            request_id, _tts_request(request_id, seed=3000 + index), artifacts=_conditionals_artifact(index + 1)
         )
 
     # Decode a few steps so some rows are in flight and the rest wait.
@@ -383,9 +364,7 @@ def test_abort_storm_mid_decode_loses_no_survivor(monkeypatch):
 
 @pytest.mark.integration
 def test_combined_pool_full_and_cold_embedding_cache_zero_loss(monkeypatch):
-    engine, runner, pool = _build_engine(
-        monkeypatch, pool_slots=8, max_batch_size=20, with_embedding=True
-    )
+    engine, runner, pool = _build_engine(monkeypatch, pool_slots=8, max_batch_size=20, with_embedding=True)
 
     count = 20
     for index in range(count):
@@ -432,15 +411,11 @@ def test_combined_pool_full_and_cold_embedding_cache_zero_loss(monkeypatch):
 
 
 def _steps_to_finish(monkeypatch, *, pool_slots: int, count: int) -> tuple[int, dict]:
-    engine, _runner, pool = _build_engine(
-        monkeypatch, pool_slots=pool_slots, max_batch_size=count
-    )
+    engine, _runner, pool = _build_engine(monkeypatch, pool_slots=pool_slots, max_batch_size=count)
     for index in range(count):
         request_id = f"degrade-{index}"
         engine.add_request(
-            request_id,
-            _tts_request(request_id, seed=5000 + index),
-            artifacts=_conditionals_artifact(index + 1),
+            request_id, _tts_request(request_id, seed=5000 + index), artifacts=_conditionals_artifact(index + 1)
         )
     steps = 0
     collected: dict = {}

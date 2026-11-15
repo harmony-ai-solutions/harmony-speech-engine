@@ -57,9 +57,7 @@ def patched_factory(monkeypatch):
     monkeypatch.setattr(factory, "load_t3", fake_load_t3)
     monkeypatch.setattr(factory, "_load_tokenizer", lambda role, ckpt: object())
     monkeypatch.setattr(
-        factory,
-        "_load_conditionals",
-        lambda repo, revision, device, role: SimpleNamespace(t3=None, gen={}),
+        factory, "_load_conditionals", lambda repo, revision, device, role: SimpleNamespace(t3=None, gen={})
     )
     monkeypatch.setattr(factory, "ChatterboxTTS", _FakeRole)
     monkeypatch.setattr(factory, "ChatterboxMultilingualTTS", _FakeRole)
@@ -130,8 +128,12 @@ def test_t3_dtype_is_part_of_the_key(patched_factory):
     registry = WeightRegistry()
     # "cuda" so the CPU float32 guard in `_resolve_load_dtype` does not collapse
     # both requests to the same dtype.
-    fp32 = factory.build_backbone("resemble-ai/chatterbox", None, "cuda", torch.float32, registry, role=factory.ROLE_TTS)
-    fp16 = factory.build_backbone("resemble-ai/chatterbox", None, "cuda", torch.float16, registry, role=factory.ROLE_TTS)
+    fp32 = factory.build_backbone(
+        "resemble-ai/chatterbox", None, "cuda", torch.float32, registry, role=factory.ROLE_TTS
+    )
+    fp16 = factory.build_backbone(
+        "resemble-ai/chatterbox", None, "cuda", torch.float16, registry, role=factory.ROLE_TTS
+    )
 
     # T3 is distinct per dtype; shared float32 components are reused.
     assert fp32.t3 is not fp16.t3

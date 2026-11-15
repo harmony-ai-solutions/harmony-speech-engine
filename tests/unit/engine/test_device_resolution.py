@@ -95,13 +95,7 @@ def test_device_key_and_cuda_index(monkeypatch):
 # ---------------------------------------------------------------------------
 def _descriptor(key: str, *, slots: int = 1) -> ARCacheDescriptor:
     return ARCacheDescriptor(
-        model_key=key,
-        layers=2,
-        kv_heads=2,
-        head_dim=4,
-        dtype=torch.float32,
-        cap_tokens=8,
-        slots=slots,
+        model_key=key, layers=2, kv_heads=2, head_dim=4, dtype=torch.float32, cap_tokens=8, slots=slots
     )
 
 
@@ -174,11 +168,7 @@ class _FakeT3:
     def __init__(self, device: str) -> None:
         self.device = torch.device(device)
         self.cfg = SimpleNamespace(
-            num_hidden_layers=2,
-            num_key_value_heads=4,
-            head_dim=8,
-            hidden_size=32,
-            num_attention_heads=4,
+            num_hidden_layers=2, num_key_value_heads=4, head_dim=8, hidden_size=32, num_attention_heads=4
         )
 
     def parameters(self):

@@ -195,11 +195,11 @@ class SchedulingBudget:
 
     def can_schedule(self, model: str, num_requests: int):
         assert num_requests != 0
-        current_requests = 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
+        current_requests = self._num_per_model_requests.get(model, 0)
         return current_requests + num_requests <= self.request_per_model_budget[model]
 
     def current_num_requests(self, model: str):
-        return 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
+        return self._num_per_model_requests.get(model, 0)
 
     def remaining_request_budget(self, model: str):
         if model not in self.request_per_model_budget:
@@ -207,11 +207,11 @@ class SchedulingBudget:
         return self.request_per_model_budget[model] - self.num_per_model_requests[model]
 
     def add_num_requests(self, model: str, num_requests: int):
-        current_requests = 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
+        current_requests = self._num_per_model_requests.get(model, 0)
         self._num_per_model_requests[model] = current_requests + num_requests
 
     def subtract_num_requests(self, model: str, num_requests: int):
-        current_requests = 0 if model not in self._num_per_model_requests else self._num_per_model_requests[model]
+        current_requests = self._num_per_model_requests.get(model, 0)
         assert current_requests >= num_requests
         self._num_per_model_requests[model] = current_requests - num_requests
 
@@ -249,12 +249,7 @@ class SchedulerWaitingOutputs:
 
 
 class Scheduler:
-    def __init__(
-        self,
-        model_configs: list[ModelConfig] | None,
-        whisper_admission=None,
-        ar_admission=None,
-    ) -> None:
+    def __init__(self, model_configs: list[ModelConfig] | None, whisper_admission=None, ar_admission=None) -> None:
         self.model_configs = model_configs
 
         # Requests in the WAITING state.
@@ -278,8 +273,7 @@ class Scheduler:
         # before 9-3 registers an arena — behaves exactly as before.
         self.ar_admission = ar_admission
         self._model_types = {
-            getattr(config, "name", None): getattr(config, "model_type", None)
-            for config in (model_configs or [])
+            getattr(config, "name", None): getattr(config, "model_type", None) for config in (model_configs or [])
         }
         self._whisper_credits: dict[str, LaneCredits] = {}
 
@@ -381,7 +375,7 @@ class Scheduler:
         requests: list[EngineRequest] = []
         # We don't sort waiting queue because we assume it is sorted.
         # Copy the queue so that the input queue is not modified.
-        waiting_queue = deque([s for s in waiting_queue])
+        waiting_queue = deque(list(waiting_queue))
 
         # Group in arrival order so per-model FIFO order (and the old boolean
         # rule) is untouched; only the inter-lane selection is new.
@@ -458,9 +452,7 @@ class Scheduler:
         # queue. Returning the (popped) input deque here used to drop every
         # request above the model's `max_batch_size` on the floor — it never
         # ran, was never reported, and the caller hung until its deadline.
-        return leftover_waiting_requests, SchedulerWaitingOutputs(
-            requests=requests, ignored_requests=ignored_requests
-        )
+        return leftover_waiting_requests, SchedulerWaitingOutputs(requests=requests, ignored_requests=ignored_requests)
 
     # ------------------------------------------------------------------
     # AR multi-step decode admission (Phase 9-4)
@@ -505,9 +497,7 @@ class Scheduler:
             # No arena for this family yet (9-3). Not an error — fall back.
             return None
         except Exception as error:  # noqa: BLE001 - admission must never break scheduling
-            logger.warning(
-                f"AR capacity hook failed for '{model_name}' ({error}); using boolean admission"
-            )
+            logger.warning(f"AR capacity hook failed for '{model_name}' ({error}); using boolean admission")
             return None
         if not decision.get("enabled"):
             return None

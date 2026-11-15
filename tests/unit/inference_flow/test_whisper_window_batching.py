@@ -35,12 +35,7 @@ from harmonyspeech.common.artifacts import AudioArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import SpeechTranscribeRequestInput
 from harmonyspeech.common.request import EngineRequest, RequestStatus
-from harmonyspeech.processing.scheduler import (
-    LaneCredits,
-    Scheduler,
-    plan_lane_admission,
-    whisper_window_count,
-)
+from harmonyspeech.processing.scheduler import LaneCredits, Scheduler, plan_lane_admission, whisper_window_count
 from harmonyspeech.task_handler import model_runner_base, whisper_batching
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase, WhisperRequestAbortedError
 from harmonyspeech.task_handler.whisper_batching import (
@@ -291,8 +286,9 @@ def _fixed_clips(*spans):
 
 
 def _run_batcher(batcher, artifacts, requests, *, clips=None, suppress_tokens=(1, 2, 3)):
-    with patch.object(whisper_batching, "get_speech_timestamps", clips or _clips_for(0)), patch.object(
-        whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: suppress_tokens
+    with (
+        patch.object(whisper_batching, "get_speech_timestamps", clips or _clips_for(0)),
+        patch.object(whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: suppress_tokens),
     ):
         return batcher.transcribe_batch(artifacts, requests)
 
@@ -308,9 +304,7 @@ def test_multi_window_request_forms_three_windows_and_stitches_offsets():
     batcher = WhisperWindowBatcher(model)
     request = _request("long", 65.0)
 
-    pairs = _run_batcher(
-        batcher, [request.artifacts["input_audio"]], [request], clips=_clips_for(65.0)
-    )
+    pairs = _run_batcher(batcher, [request.artifacts["input_audio"]], [request], clips=_clips_for(65.0))
 
     payload, error = pairs[0]
     assert error is None
@@ -335,10 +329,7 @@ def test_window_offsets_restore_original_audio_time_across_vad_gaps():
 
     # 20 s speech, 5 s silence, 25 s speech, 5 s silence, 10 s speech.
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"]],
-        [request],
-        clips=_fixed_clips((0, 20), (25, 50), (55, 65)),
+        batcher, [request.artifacts["input_audio"]], [request], clips=_fixed_clips((0, 20), (25, 50), (55, 65))
     )
 
     payload, error = pairs[0]
@@ -382,10 +373,7 @@ def test_one_batch_carries_a_prompt_per_request_language():
     requests = [_request("de", 4.0), _request("en", 5.0)]
 
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"] for request in requests],
-        requests,
-        clips=_clips_for(5.0),
+        batcher, [request.artifacts["input_audio"] for request in requests], requests, clips=_clips_for(5.0)
     )
 
     assert all(error is None for _payload, error in pairs)
@@ -444,10 +432,7 @@ def test_mixed_task_batch_carries_one_prompt_per_row():
     requests = [_request("asr", 0.2), _request("mt", 0.3, task="translate")]
 
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"] for request in requests],
-        requests,
-        clips=_clips_for(1.0),
+        batcher, [request.artifacts["input_audio"] for request in requests], requests, clips=_clips_for(1.0)
     )
 
     assert all(error is None for _payload, error in pairs)
@@ -512,10 +497,7 @@ def test_poisoned_request_collection_errors_alone():
     requests = [_request("ok-1", 0.2), _request("poison", 0.3), _request("ok-2", 0.4)]
 
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"] for request in requests],
-        requests,
-        clips=_clips_for(1.0),
+        batcher, [request.artifacts["input_audio"] for request in requests], requests, clips=_clips_for(1.0)
     )
 
     assert pairs[0][1] is None and pairs[0][0]["text"] == "r200"
@@ -544,10 +526,7 @@ def test_poisoned_window_decode_errors_only_its_request():
     batcher._tokenizer_for = tokenizer_for
 
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"] for request in requests],
-        requests,
-        clips=_clips_for(1.0),
+        batcher, [request.artifacts["input_audio"] for request in requests], requests, clips=_clips_for(1.0)
     )
 
     assert pairs[0][1] is None and pairs[0][0]["text"] == "r200"
@@ -563,10 +542,7 @@ def test_aborted_request_errors_alone_without_generating_its_windows():
     requests[1].status = RequestStatus.FINISHED_ABORTED
 
     pairs = _run_batcher(
-        batcher,
-        [request.artifacts["input_audio"] for request in requests],
-        requests,
-        clips=_clips_for(1.0),
+        batcher, [request.artifacts["input_audio"] for request in requests], requests, clips=_clips_for(1.0)
     )
 
     assert pairs[0][1] is None
@@ -603,9 +579,7 @@ def test_batched_payload_matches_sequential_payload_structure():
     assert payload["info"]["transcription_options"]["without_timestamps"] is True
     assert payload["info"]["transcription_options"]["condition_on_previous_text"] is False
     assert payload["info"]["transcription_options"]["temperatures"] == [0.0]
-    assert payload["info"]["transcription_options"]["clip_timestamps"] == [
-        {"start": 0, "end": int(0.2 * SAMPLE_RATE)}
-    ]
+    assert payload["info"]["transcription_options"]["clip_timestamps"] == [{"start": 0, "end": int(0.2 * SAMPLE_RATE)}]
     # The dict is JSON-serialisable with exactly the keys the handler emits.
     assert json.loads(json.dumps(payload))["text"] == "r200"
 
@@ -657,9 +631,11 @@ def test_handler_uses_batched_path_for_multiple_requests():
     requests = [_request("a", 0.2), _request("b", 0.3)]
     inputs = [request.artifacts["input_audio"] for request in requests]
 
-    with patch.object(whisper_batching, "get_speech_timestamps", _clips_for(1.0)), patch.object(
-        whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1,)
-    ), patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline):
+    with (
+        patch.object(whisper_batching, "get_speech_timestamps", _clips_for(1.0)),
+        patch.object(whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1,)),
+        patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline),
+    ):
         outputs = runner._execute_faster_whisper(inputs, requests)
 
     assert [output.request_id for output in outputs] == ["a", "b"]
@@ -674,8 +650,9 @@ def test_handler_len_one_takes_the_sequential_pipeline_path():
     runner = _runner(_FakeWhisperModel(), config)
     request = _request("solo", 0.2)
 
-    with patch.object(model_runner_base, "WhisperWindowBatcher") as batcher_cls, patch.object(
-        model_runner_base, "BatchedInferencePipeline", _Pipeline
+    with (
+        patch.object(model_runner_base, "WhisperWindowBatcher") as batcher_cls,
+        patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline),
     ):
         batcher_cls.side_effect = AssertionError("batcher must not run for one request")
         outputs = runner._execute_faster_whisper([request.artifacts["input_audio"]], [request])
@@ -691,16 +668,14 @@ def test_handler_flag_off_always_takes_the_sequential_path():
     requests = [_request("a", 0.2), _request("b", 0.3)]
     inputs = [request.artifacts["input_audio"] for request in requests]
 
-    with patch.object(model_runner_base, "WhisperWindowBatcher") as batcher_cls, patch.object(
-        model_runner_base, "BatchedInferencePipeline", _Pipeline
+    with (
+        patch.object(model_runner_base, "WhisperWindowBatcher") as batcher_cls,
+        patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline),
     ):
         batcher_cls.side_effect = AssertionError("batcher must not run when the flag is off")
         outputs = runner._execute_faster_whisper(inputs, requests)
 
-    assert [json.loads(output.result_data.output)["text"] for output in outputs] == [
-        "sequential",
-        "sequential",
-    ]
+    assert [json.loads(output.result_data.output)["text"] for output in outputs] == ["sequential", "sequential"]
 
 
 @pytest.mark.unit
@@ -718,15 +693,13 @@ def test_handler_batcher_failure_falls_back_to_per_request_pipeline():
         def transcribe_batch(self, audio_artifacts, requests_to_batch):
             raise RuntimeError("CT2 exploded")
 
-    with patch.object(model_runner_base, "WhisperWindowBatcher", _ExplodingBatcher), patch.object(
-        model_runner_base, "BatchedInferencePipeline", _Pipeline
+    with (
+        patch.object(model_runner_base, "WhisperWindowBatcher", _ExplodingBatcher),
+        patch.object(model_runner_base, "BatchedInferencePipeline", _Pipeline),
     ):
         outputs = runner._execute_faster_whisper(inputs, requests)
 
-    assert [json.loads(output.result_data.output)["text"] for output in outputs] == [
-        "sequential",
-        "sequential",
-    ]
+    assert [json.loads(output.result_data.output)["text"] for output in outputs] == ["sequential", "sequential"]
     assert runner._whisper_batch_fallbacks == 1
     assert runner.whisper_lane_stats()["batch_fallbacks"] == 1
     from harmonyspeech.engine.whisper_lane_metrics import render_whisper_lane_metrics
@@ -749,10 +722,7 @@ def test_batched_inference_flag_resolution():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "seconds,expected",
-    [(0.1, 1), (30.0, 1), (30.01, 2), (60.0, 2), (65.0, 3), (300.0, 10)],
-)
+@pytest.mark.parametrize("seconds,expected", [(0.1, 1), (30.0, 1), (30.01, 2), (60.0, 2), (65.0, 3), (300.0, 10)])
 def test_whisper_window_count(seconds, expected):
     assert whisper_window_count(_request("r", seconds)) == expected
 
@@ -770,10 +740,7 @@ def test_whisper_window_count_unknown_duration_costs_one():
 @pytest.mark.unit
 def test_scheduler_admits_by_window_budget_not_request_count():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 6},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 6})
     for index in range(3):
         scheduler.add_request(_request(f"long-{index}", 65.0))
 
@@ -787,10 +754,7 @@ def test_scheduler_admits_by_window_budget_not_request_count():
 @pytest.mark.unit
 def test_scheduler_window_budget_subtracts_running_windows():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 4},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 4})
     running = _request("running", 65.0)
     running.set_running()
     scheduler.running.append(running)
@@ -805,10 +769,7 @@ def test_scheduler_window_budget_subtracts_running_windows():
 @pytest.mark.unit
 def test_scheduler_window_budget_progress_floor_for_a_single_long_request():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 1},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 1})
     scheduler.add_request(_request("only-long", 65.0))
 
     scheduled = scheduler.schedule().scheduled_requests_per_model["whisper"]
@@ -821,10 +782,7 @@ def test_scheduler_window_budget_progress_floor_for_a_single_long_request():
 @pytest.mark.unit
 def test_scheduler_window_budget_respects_a_hard_stop():
     config = _whisper_config(max_batch_size=16)
-    scheduler = Scheduler(
-        [config],
-        whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 0},
-    )
+    scheduler = Scheduler([config], whisper_admission=lambda active_windows=0: {"enabled": True, "allowed_windows": 0})
     scheduler.add_request(_request("waiting", 5.0))
 
     outputs = scheduler.schedule()

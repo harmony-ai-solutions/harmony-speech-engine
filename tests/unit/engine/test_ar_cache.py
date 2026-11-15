@@ -113,13 +113,7 @@ def _decode(slot: ARCacheSlot, layer: int, query: torch.Tensor, length: int) -> 
 @pytest.mark.unit
 def test_slab_and_arena_bytes_follow_the_layout_formula():
     descriptor = ARCacheDescriptor(
-        model_key="chatterbox-t3",
-        layers=4,
-        kv_heads=8,
-        head_dim=64,
-        dtype=torch.float16,
-        cap_tokens=768,
-        slots=3,
+        model_key="chatterbox-t3", layers=4, kv_heads=8, head_dim=64, dtype=torch.float16, cap_tokens=768, slots=3
     )
     # [L, 2, B, cap, H, D] × 2 bytes per fp16 scalar.
     expected_slab = 4 * 2 * 768 * 8 * 64 * 2
@@ -145,14 +139,7 @@ def test_descriptor_without_cap_requires_one_at_use_time():
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("field", "value"),
-    [
-        ("model_key", ""),
-        ("layers", 0),
-        ("kv_heads", -1),
-        ("head_dim", 0),
-        ("cap_tokens", 0),
-        ("slots", 0),
-    ],
+    [("model_key", ""), ("layers", 0), ("kv_heads", -1), ("head_dim", 0), ("cap_tokens", 0), ("slots", 0)],
 )
 def test_descriptor_rejects_invalid_geometry(field, value):
     kwargs = {"model_key": "m", "layers": 1, "kv_heads": 1, "head_dim": 2}
@@ -403,9 +390,7 @@ def test_slot_and_arena_views_alias_the_arena_tensor():
 def test_write_copies_a_block_at_the_requested_position():
     pool, _ = _pool_with(_descriptor(cap_tokens=8, slots=1))
     slot = pool.acquire("tiny-ar")
-    keys = torch.arange(3 * slot.kv_heads * slot.head_dim, dtype=torch.float32).reshape(
-        3, slot.kv_heads, slot.head_dim
-    )
+    keys = torch.arange(3 * slot.kv_heads * slot.head_dim, dtype=torch.float32).reshape(3, slot.kv_heads, slot.head_dim)
     values = -keys
 
     slot.write(1, 2, keys, values)
@@ -676,7 +661,15 @@ def test_engine_stats_without_a_pool_are_disabled_zeros():
     stats = engine.get_ar_cache_stats()
 
     assert stats["enabled"] is False
-    for key in ("pool_bytes", "allocated_bytes", "slots", "slots_active", "slots_free", "grants_total", "refusals_total"):
+    for key in (
+        "pool_bytes",
+        "allocated_bytes",
+        "slots",
+        "slots_active",
+        "slots_free",
+        "grants_total",
+        "refusals_total",
+    ):
         assert stats[key] == 0
     assert stats["arenas"] == {}
     assert engine.get_ar_cache_capacity()["enabled"] is False
@@ -840,10 +833,7 @@ def test_cli_without_ar_flags_keeps_the_config_values():
 @pytest.mark.unit
 def test_engine_boot_creates_the_pool_with_the_configured_budget():
     engine = HarmonySpeechEngine(
-        model_configs=[],
-        log_stats=False,
-        ar_cache_budget_bytes=4096,
-        ar_cache_default_cap_tokens=16,
+        model_configs=[], log_stats=False, ar_cache_budget_bytes=4096, ar_cache_default_cap_tokens=16
     )
 
     assert engine.ar_cache_pool is not None

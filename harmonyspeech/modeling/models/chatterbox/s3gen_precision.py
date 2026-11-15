@@ -133,8 +133,7 @@ def s3gen_autocast_dtype(environ=None, configured=None) -> torch.dtype | None:
             if raw not in _WARNED:
                 _WARNED.add(raw)
                 logger.warning(
-                    f"Unknown {S3GEN_AUTOCAST_ENV}={raw!r}; expected off|bfloat16|float16 "
-                    "— S3Gen stays float32"
+                    f"Unknown {S3GEN_AUTOCAST_ENV}={raw!r}; expected off|bfloat16|float16 — S3Gen stays float32"
                 )
             return None
         return dtype

@@ -63,11 +63,7 @@ def test_audio_artifact_resample_is_transient():
 @pytest.mark.unit
 def test_audio_artifact_device_mismatch_fails_loudly():
     with pytest.raises(ValueError, match="device mismatch"):
-        AudioArtifact(
-            waveform=torch.zeros(1, 10),
-            sample_rate=16000,
-            device=torch.device("meta"),
-        )
+        AudioArtifact(waveform=torch.zeros(1, 10), sample_rate=16000, device=torch.device("meta"))
 
 
 @pytest.mark.unit
@@ -175,9 +171,7 @@ class _Conditionals:
 @pytest.mark.unit
 def test_speaker_artifact_moves_embedding_not_conditionals():
     conditionals = _Conditionals()
-    artifact = SpeakerArtifact(
-        embedding=torch.zeros(1, 8), conditionals=conditionals, backend="chatterbox"
-    )
+    artifact = SpeakerArtifact(embedding=torch.zeros(1, 8), conditionals=conditionals, backend="chatterbox")
 
     moved = artifact.to("cpu")
 
@@ -201,11 +195,7 @@ def test_speaker_artifact_keeps_conditionals_identity():
 
 @pytest.mark.unit
 def test_vad_artifact_from_payload():
-    payload = {
-        "text": "hello",
-        "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}],
-        "info": {"language": "en"},
-    }
+    payload = {"text": "hello", "segments": [{"start": 0.0, "end": 1.0, "text": "hello"}], "info": {"language": "en"}}
     artifact = VadArtifact.from_payload(payload)
 
     assert artifact.text == "hello"
@@ -224,10 +214,7 @@ def test_vad_artifact_from_payload():
 def test_engine_request_artifact_store_and_clear():
     artifact = AudioArtifact.from_numpy(_waveform(), 16000)
     request = EngineRequest(
-        request_id="req-1",
-        request_data=object(),
-        arrival_time=0.0,
-        artifacts={"input_audio": artifact},
+        request_id="req-1", request_data=object(), arrival_time=0.0, artifacts={"input_audio": artifact}
     )
 
     assert request.get_artifact("input_audio") is artifact
@@ -254,10 +241,7 @@ def test_scheduler_releases_artifacts_on_finish():
     scheduler = Scheduler(model_configs=[config])
     artifact = AudioArtifact.from_numpy(_waveform(), 16000)
     request = EngineRequest(
-        request_id="req-finish",
-        request_data=object(),
-        arrival_time=0.0,
-        artifacts={"input_audio": artifact},
+        request_id="req-finish", request_data=object(), arrival_time=0.0, artifacts={"input_audio": artifact}
     )
     scheduler.add_request(request)
 
@@ -281,10 +265,7 @@ def test_forwarded_requests_keep_their_artifact_copy():
     scheduler = Scheduler(model_configs=[config])
     artifact = AudioArtifact.from_numpy(_waveform(), 16000)
     request = EngineRequest(
-        request_id="req-forward",
-        request_data=object(),
-        arrival_time=0.0,
-        artifacts={"input_audio": artifact},
+        request_id="req-forward", request_data=object(), arrival_time=0.0, artifacts={"input_audio": artifact}
     )
     scheduler.add_request(request)
 

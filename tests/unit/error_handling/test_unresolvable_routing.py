@@ -121,11 +121,7 @@ def test_routable_request_still_schedules():
     engine = _engine_shell(_cfg("kitten", "KittenTTSSynthesizer"))
 
     request_data = TextToSpeechRequestInput(
-        request_id="ok-1",
-        requested_model="kitten",
-        model="kitten",
-        input_text="hello",
-        mode="single_speaker_tts",
+        request_id="ok-1", requested_model="kitten", model="kitten", input_text="hello", mode="single_speaker_tts"
     )
     engine.add_request("ok-1", request_data)
 
@@ -143,9 +139,7 @@ def test_routable_request_still_schedules():
 def test_scheduler_routes_unknown_model_to_ignored():
     scheduler = Scheduler(model_configs=[_cfg("kitten", "KittenTTSSynthesizer")])
     request = EngineRequest(
-        request_id="sched-ghost",
-        request_data=SimpleNamespace(model="never-configured"),
-        arrival_time=0.0,
+        request_id="sched-ghost", request_data=SimpleNamespace(model="never-configured"), arrival_time=0.0
     )
     scheduler.add_request(request)
 
@@ -161,9 +155,7 @@ def test_scheduler_routes_unknown_model_to_ignored():
 def test_ignored_unknown_model_becomes_error_output():
     engine = _engine_shell(_cfg("kitten", "KittenTTSSynthesizer"))
     request = EngineRequest(
-        request_id="ignored-1",
-        request_data=SimpleNamespace(model="never-configured"),
-        arrival_time=0.0,
+        request_id="ignored-1", request_data=SimpleNamespace(model="never-configured"), arrival_time=0.0
     )
 
     outputs, _ = engine._process_model_outputs(outputs=[], ignored_requests=[request])
@@ -176,11 +168,7 @@ def test_ignored_unknown_model_becomes_error_output():
 @pytest.mark.unit
 def test_ignored_known_model_keeps_skipped_reason():
     engine = _engine_shell(_cfg("kitten", "KittenTTSSynthesizer"))
-    request = EngineRequest(
-        request_id="ignored-2",
-        request_data=SimpleNamespace(model="kitten"),
-        arrival_time=0.0,
-    )
+    request = EngineRequest(request_id="ignored-2", request_data=SimpleNamespace(model="kitten"), arrival_time=0.0)
     # Ignored requests normally come from the waiting queue.
     engine.scheduler.add_request(request)
 

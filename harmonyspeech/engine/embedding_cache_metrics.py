@@ -26,10 +26,7 @@ _HELP = {
 }
 
 #: ``(series name, stats key)`` pairs rendered as gauges / counters.
-_GAUGES = (
-    ("hse_embedding_cache_entries", "entries"),
-    ("hse_embedding_cache_bytes", "bytes"),
-)
+_GAUGES = (("hse_embedding_cache_entries", "entries"), ("hse_embedding_cache_bytes", "bytes"))
 _COUNTERS = (
     ("hse_embedding_cache_hits_total", "hits"),
     ("hse_embedding_cache_misses_total", "misses"),

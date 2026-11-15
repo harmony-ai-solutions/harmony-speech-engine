@@ -153,9 +153,7 @@ def test_scenario_matrix_is_same_distinct_times_cache_on_off():
 def test_clone_scenario_payloads_match_the_reference_mode():
     """Each matrix cell's payloads must exercise the cache state it names."""
     for cell in bench.clone_scenario_matrix():
-        payloads = bench._reference_payloads(
-            "openvoice_v2", REFERENCE, cell["clone_reference"], 4
-        )
+        payloads = bench._reference_payloads("openvoice_v2", REFERENCE, cell["clone_reference"], 4)
         hashes = {_artifact(payload["input_audio"]).content_hash for payload in payloads}
         if cell["clone_reference"] == "same":
             # A cache-on row can only hit when the clip is identical every time.
@@ -244,10 +242,8 @@ def test_scenario_recipe_prints_two_boots_and_four_runs():
 # ── Phase 8: per-step sub-batch composition ───────────────────────────────────
 
 STEP_LOG_LINES = [
-    "DEBUG - OpenVoice tone-converter encoder: 12 segment(s) from 4 request(s) "
-    "forwarded in 2 padded sub-batch(es)",
-    "DEBUG - OpenVoice tone-converter encoder: 6 segment(s) from 2 request(s) "
-    "forwarded in 1 padded sub-batch(es)",
+    "DEBUG - OpenVoice tone-converter encoder: 12 segment(s) from 4 request(s) forwarded in 2 padded sub-batch(es)",
+    "DEBUG - OpenVoice tone-converter encoder: 6 segment(s) from 2 request(s) forwarded in 1 padded sub-batch(es)",
     "DEBUG - OpenVoice V1: 4 sentence(s) from 4 request(s) forwarded in 1 padded sub-batch(es)",
     "DEBUG - OpenVoice tone converter: 4 request(s) forwarded in 2 padded sub-batch(es)",
     "DEBUG - KittenTTS: 4 request(s) synthesised in 4 lane(s)",

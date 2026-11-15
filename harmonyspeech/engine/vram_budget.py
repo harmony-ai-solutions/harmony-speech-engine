@@ -51,13 +51,7 @@ def per_window_bytes(peak_activation_bytes: int, windows: int) -> int:
     return max(0, int(peak_activation_bytes or 0)) // windows
 
 
-def headroom_limited_units(
-    headroom_bytes: int,
-    cost_bytes: int,
-    cap: int,
-    *,
-    min_units: int = 1,
-) -> int:
+def headroom_limited_units(headroom_bytes: int, cost_bytes: int, cap: int, *, min_units: int = 1) -> int:
     """Largest number of ``cost_bytes`` units that fit the free headroom.
 
     The shared arithmetic behind every "shrink the width until it fits the
@@ -155,9 +149,7 @@ def projected_whisper_peak(entries) -> int:
 
 
 def evaluate_whisper_budget(
-    projected_peak_bytes: int,
-    free_headroom_bytes: int,
-    budget_bytes: int | None = None,
+    projected_peak_bytes: int, free_headroom_bytes: int, budget_bytes: int | None = None
 ) -> dict:
     """Classify the boot-time Whisper footprint against the budget/headroom.
 

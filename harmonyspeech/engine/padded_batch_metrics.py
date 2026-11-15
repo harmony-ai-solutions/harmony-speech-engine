@@ -78,9 +78,7 @@ def render_padded_batch_metrics(stats: dict | None) -> str:
             f"{_as_int(entry.get('shrinks_total'))}"
         )
 
-    lines.append(
-        f"# HELP hse_padded_batch_headroom_bytes {_HELP['hse_padded_batch_headroom_bytes']}"
-    )
+    lines.append(f"# HELP hse_padded_batch_headroom_bytes {_HELP['hse_padded_batch_headroom_bytes']}")
     lines.append("# TYPE hse_padded_batch_headroom_bytes gauge")
     for model, axis, device, entry in rows:
         lines.append(

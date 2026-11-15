@@ -68,11 +68,7 @@ def _mock_cuda(monkeypatch, *, free: int, total: int, allocated: int = 0, reserv
     monkeypatch.setattr(torch.cuda, "memory_allocated", lambda index=None: allocated)
     monkeypatch.setattr(torch.cuda, "memory_reserved", lambda index=None: reserved)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda index=None: peak)
-    monkeypatch.setattr(
-        torch.cuda,
-        "get_device_properties",
-        lambda index=None: SimpleNamespace(total_memory=total),
-    )
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda index=None: SimpleNamespace(total_memory=total))
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda index=None: "Fake GPU")
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda index=None: (free, total))
 
@@ -124,14 +120,7 @@ def _whisper_stats(**overrides) -> dict:
 
 
 def test_device_level_truth_uses_mem_get_info(monkeypatch):
-    _mock_cuda(
-        monkeypatch,
-        free=6 * GIB,
-        total=16 * GIB,
-        allocated=7 * GIB,
-        reserved=8 * GIB,
-        peak=9 * GIB,
-    )
+    _mock_cuda(monkeypatch, free=6 * GIB, total=16 * GIB, allocated=7 * GIB, reserved=8 * GIB, peak=9 * GIB)
 
     stats = _engine_shell().get_vram_stats()
 
@@ -218,12 +207,7 @@ def test_probe_records_device_delta(monkeypatch):
 
     model = SimpleNamespace(model=SimpleNamespace(device="cuda"))
     record = probe_whisper_peak(
-        model,
-        workers=2,
-        window_batch=2,
-        beam_size=3,
-        max_audio_seconds=60.0,
-        sample_peak=False,
+        model, workers=2, window_batch=2, beam_size=3, max_audio_seconds=60.0, sample_peak=False
     )
 
     assert record["measured"] is True
@@ -248,12 +232,7 @@ def test_probe_counts_only_real_30s_clips(monkeypatch):
     model = SimpleNamespace(model=SimpleNamespace(device="cuda"))
     # 35 s is two 30 s clips, so a batch width of 8 still exercises two windows.
     record = probe_whisper_peak(
-        model,
-        workers=1,
-        window_batch=8,
-        beam_size=3,
-        max_audio_seconds=35.0,
-        sample_peak=False,
+        model, workers=1, window_batch=8, beam_size=3, max_audio_seconds=35.0, sample_peak=False
     )
 
     assert record["windows_probed"] == 2
@@ -289,19 +268,13 @@ def test_probe_sends_speech_like_audio_with_explicit_clips(monkeypatch):
 
     model = SimpleNamespace(model=SimpleNamespace(device="cuda"))
     record = probe_whisper_peak(
-        model,
-        workers=2,
-        window_batch=8,
-        beam_size=3,
-        max_audio_seconds=60.0,
-        sample_peak=False,
+        model, workers=2, window_batch=8, beam_size=3, max_audio_seconds=60.0, sample_peak=False
     )
 
     audio, kwargs = _RecordingPipeline.calls[0]
-    assert kwargs["clip_timestamps"] == [
-        {"start": 0.0, "end": 30.0},
-        {"start": 30.0, "end": 60.0},
-    ], "the probe must synthesise clips instead of asking VAD to find speech"
+    assert kwargs["clip_timestamps"] == [{"start": 0.0, "end": 30.0}, {"start": 30.0, "end": 60.0}], (
+        "the probe must synthesise clips instead of asking VAD to find speech"
+    )
     assert audio.shape[0] == 60 * 16000
     assert float(abs(audio).max()) > 0.1, "the probe audio must not be silence"
     assert record["windows_probed"] == 4, "2 workers x 2 clips"
@@ -325,12 +298,8 @@ def test_probe_uses_the_model_device_index_when_available(monkeypatch):
 
     monkeypatch.setattr(torch.cuda, "mem_get_info", _mem_get_info)
 
-    model = SimpleNamespace(
-        model=SimpleNamespace(device="cuda", device_index=[1])
-    )
-    record = probe_whisper_peak(
-        model, workers=1, window_batch=1, max_audio_seconds=30.0, sample_peak=False
-    )
+    model = SimpleNamespace(model=SimpleNamespace(device="cuda", device_index=[1]))
+    record = probe_whisper_peak(model, workers=1, window_batch=1, max_audio_seconds=30.0, sample_peak=False)
 
     assert probed_indexes == [1, 1], f"probe read {probed_indexes}"
     assert record["measured"] is True
@@ -422,10 +391,7 @@ def test_per_window_bytes_math():
 
 
 def test_projected_whisper_peak_sums_weights_and_probe():
-    entries = [
-        {"weights_bytes": 100, "peak_activation_bytes": 50},
-        {"weights_bytes": 200, "peak_activation_bytes": 0},
-    ]
+    entries = [{"weights_bytes": 100, "peak_activation_bytes": 50}, {"weights_bytes": 200, "peak_activation_bytes": 0}]
     assert projected_whisper_peak(entries) == 350
     assert projected_whisper_peak([]) == 0
 
@@ -456,9 +422,7 @@ def test_engine_boot_check_raises_when_budget_exceeded():
     engine = _engine_shell()
     engine.whisper_vram_budget_bytes = 100
     engine.get_vram_stats = lambda: _whisper_stats(
-        free_bytes=10_000,
-        device_used_bytes=16 * GIB - 10_000,
-        headroom_bytes=10_000,
+        free_bytes=10_000, device_used_bytes=16 * GIB - 10_000, headroom_bytes=10_000
     )
 
     with pytest.raises(RuntimeError, match="whisper_vram_budget_bytes"):
@@ -467,11 +431,7 @@ def test_engine_boot_check_raises_when_budget_exceeded():
 
 def test_engine_boot_check_warns_without_budget(loguru_records):
     engine = _engine_shell()
-    engine.get_vram_stats = lambda: _whisper_stats(
-        free_bytes=100,
-        device_used_bytes=16 * GIB - 100,
-        headroom_bytes=100,
-    )
+    engine.get_vram_stats = lambda: _whisper_stats(free_bytes=100, device_used_bytes=16 * GIB - 100, headroom_bytes=100)
 
     report = engine._evaluate_whisper_memory_governance()
 
@@ -542,12 +502,7 @@ def test_get_vram_stats_includes_whisper_probe_fields():
         "method": "mem_get_info_delta",
     }
     engine.model_executors = {
-        "whisper": _fake_executor(
-            "whisper",
-            model_type="FasterWhisper",
-            max_batch_size=8,
-            whisper_probe=probe,
-        )
+        "whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=8, whisper_probe=probe)
     }
 
     detail = engine.get_vram_stats()["models"]["whisper"]
@@ -563,9 +518,7 @@ def test_get_vram_stats_marks_skipped_probe_explicitly():
     engine = _engine_shell()
     engine.model_executors = {
         "whisper": _fake_executor(
-            "whisper",
-            model_type="FasterWhisper",
-            whisper_probe={"measured": False, "reason": "cuda-unavailable"},
+            "whisper", model_type="FasterWhisper", whisper_probe={"measured": False, "reason": "cuda-unavailable"}
         )
     }
 
@@ -582,12 +535,7 @@ def test_check_health_carries_probe_annotation():
         "whisper": _fake_executor(
             "whisper",
             model_type="FasterWhisper",
-            whisper_probe={
-                "measured": True,
-                "peak_activation_bytes": 256,
-                "per_window_bytes": 64,
-                "reason": None,
-            },
+            whisper_probe={"measured": True, "peak_activation_bytes": 256, "per_window_bytes": 64, "reason": None},
         )
     }
 
@@ -636,9 +584,7 @@ def test_model_nbytes_counts_native_checkpoint_directory(tmp_path):
 def test_get_whisper_admission_scales_against_budget():
     engine = _engine_shell()
     engine.whisper_vram_budget_bytes = 1000
-    engine.model_executors = {
-        "whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=10)
-    }
+    engine.model_executors = {"whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=10)}
     stats = _whisper_stats(
         free_bytes=600,
         device_used_bytes=400,
@@ -669,9 +615,7 @@ def test_get_whisper_admission_scales_against_budget():
 
 def test_get_whisper_admission_uses_device_total_without_budget():
     engine = _engine_shell()
-    engine.model_executors = {
-        "whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=4)
-    }
+    engine.model_executors = {"whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=4)}
     stats = _whisper_stats(
         free_bytes=300,
         device_used_bytes=700,
@@ -700,9 +644,7 @@ def test_get_whisper_admission_uses_device_total_without_budget():
 def test_get_whisper_admission_hard_stop_when_over_budget():
     engine = _engine_shell()
     engine.whisper_vram_budget_bytes = 1000
-    engine.model_executors = {
-        "whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=10)
-    }
+    engine.model_executors = {"whisper": _fake_executor("whisper", model_type="FasterWhisper", max_batch_size=10)}
     stats = _whisper_stats(
         free_bytes=0,
         device_used_bytes=2000,

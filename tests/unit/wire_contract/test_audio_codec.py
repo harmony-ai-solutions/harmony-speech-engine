@@ -27,9 +27,7 @@ SAMPLE_FILES = {
     "aac": "codec_tone.aac",
 }
 
-FFMPEG_ONLY = pytest.mark.skipif(
-    not audio_codec.FFMPEG_AVAILABLE, reason="ffmpeg not available on PATH"
-)
+FFMPEG_ONLY = pytest.mark.skipif(not audio_codec.FFMPEG_AVAILABLE, reason="ffmpeg not available on PATH")
 
 
 def _sample_bytes(test_data_dir, fmt: str) -> bytes:

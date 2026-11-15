@@ -78,7 +78,10 @@ jobs:
       - name: Install ruff
         run: |
           python -m pip install --upgrade pip
-          pip install ruff>=0.8.0
+          # Pinned: an unpinned install resolves the latest ruff, whose
+          # formatter/lint behaviour drifts and broke main overnight
+          # (2026-11-14). Keep in sync with the local dev environment.
+          pip install ruff==0.15.6
 
       - name: Check formatting with ruff
         run: |

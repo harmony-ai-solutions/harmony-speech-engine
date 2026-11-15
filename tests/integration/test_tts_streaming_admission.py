@@ -12,16 +12,8 @@ import pytest
 
 from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions, ErrorResponse
 from harmonyspeech.endpoints.openai.serving_text_to_speech import StreamingAudioResponse
-from harmonyspeech.endpoints.openai.streaming import (
-    HEADER_AUDIO_FORMAT,
-    HEADER_AUDIO_SAMPLE_RATE,
-)
-from tests.integration.test_tts_chunking import (
-    _chatterbox_harness,
-    _kitten_harness,
-    _request,
-    _speak,
-)
+from harmonyspeech.endpoints.openai.streaming import HEADER_AUDIO_FORMAT, HEADER_AUDIO_SAMPLE_RATE
+from tests.integration.test_tts_chunking import _chatterbox_harness, _kitten_harness, _request, _speak
 
 
 def _with_output_options(request, **output):
@@ -30,20 +22,11 @@ def _with_output_options(request, **output):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "generation_options",
-    [
-        {"trim_silence": True},
-        {"fix_internal_silence": True},
-        {"speed": 1.5},
-    ],
-)
+@pytest.mark.parametrize("generation_options", [{"trim_silence": True}, {"fix_internal_silence": True}, {"speed": 1.5}])
 async def test_chatterbox_whole_buffer_options_rejected_before_synthesis(generation_options):
     harness, model = _chatterbox_harness()
     async with harness:
-        request = _with_output_options(
-            _request("AAAA.", **generation_options), stream=True, format="wav"
-        )
+        request = _with_output_options(_request("AAAA.", **generation_options), stream=True, format="wav")
         response = await _speak(harness, request)
 
     assert isinstance(response, ErrorResponse), response
@@ -73,9 +56,7 @@ async def test_native_speed_family_admits_speed_while_streaming():
     """KittenTTS consumes ``speed`` itself, so streaming does not reject it."""
     harness, model = _kitten_harness()
     async with harness:
-        request = _with_output_options(
-            _request("AAAA.", model="kitten-mini", speed=2.0), stream=True, format="wav"
-        )
+        request = _with_output_options(_request("AAAA.", model="kitten-mini", speed=2.0), stream=True, format="wav")
         response = await _speak(harness, request)
         body = b"".join([frame async for frame in response.body])
 
@@ -92,10 +73,7 @@ async def test_remove_dc_offset_and_sample_rate_are_admitted_and_stream():
     harness, _model = _chatterbox_harness()
     async with harness:
         request = _with_output_options(
-            _request("AAAA.", remove_dc_offset=True),
-            stream_format="audio",
-            format="pcm",
-            sample_rate=16000,
+            _request("AAAA.", remove_dc_offset=True), stream_format="audio", format="pcm", sample_rate=16000
         )
         response = await _speak(harness, request)
         body = b"".join([frame async for frame in response.body])
@@ -113,10 +91,7 @@ async def test_sse_envelope_streams_after_admission():
     harness, model = _chatterbox_harness()
     async with harness:
         response = await _speak(
-            harness,
-            _with_output_options(
-                _request("AAAA."), stream_format="sse", format="pcm", sample_rate=8000
-            ),
+            harness, _with_output_options(_request("AAAA."), stream_format="sse", format="pcm", sample_rate=8000)
         )
         body = "".join([frame async for frame in response.body])
 
@@ -133,15 +108,9 @@ async def test_sse_envelope_streams_after_admission():
 async def test_alias_and_stream_format_audio_are_equivalent():
     harness, _model = _chatterbox_harness()
     async with harness:
-        alias = await _speak(
-            harness,
-            _with_output_options(_request("AAAA.", speed=2.0), stream=True, format="wav"),
-        )
+        alias = await _speak(harness, _with_output_options(_request("AAAA.", speed=2.0), stream=True, format="wav"))
         explicit = await _speak(
-            harness,
-            _with_output_options(
-                _request("AAAA.", speed=2.0), stream_format="audio", format="wav"
-            ),
+            harness, _with_output_options(_request("AAAA.", speed=2.0), stream_format="audio", format="wav")
         )
 
     assert isinstance(alias, ErrorResponse) and isinstance(explicit, ErrorResponse)
@@ -156,9 +125,7 @@ async def test_non_streaming_path_is_unchanged_by_the_streaming_gate():
     harness, _model = _chatterbox_harness()
     async with harness:
         omitted = await _speak(harness, _request("AAAA."))
-        explicit = await _speak(
-            harness, _with_output_options(_request("AAAA."), stream=False, format="wav")
-        )
+        explicit = await _speak(harness, _with_output_options(_request("AAAA."), stream=False, format="wav"))
 
     assert omitted.data == explicit.data
     assert omitted.sample_rate == explicit.sample_rate is None

@@ -40,12 +40,7 @@ def _b64(data: bytes) -> str:
 
 
 def _engine_request(request_data, artifacts=None) -> EngineRequest:
-    return EngineRequest(
-        request_id="prep-1",
-        request_data=request_data,
-        arrival_time=0.0,
-        artifacts=artifacts,
-    )
+    return EngineRequest(request_id="prep-1", request_data=request_data, arrival_time=0.0, artifacts=artifacts)
 
 
 def _tts_request(**overrides) -> TextToSpeechRequestInput:
@@ -143,10 +138,7 @@ def test_admission_prefill_decodes_once(monkeypatch):
 @pytest.mark.unit
 def test_admission_prefill_decodes_source_and_target_audio():
     request = AudioConversionRequestInput(
-        request_id="ac-1",
-        requested_model="voicefixer",
-        model="vf",
-        source_audio=tiny_wav_b64(),
+        request_id="ac-1", requested_model="voicefixer", model="vf", source_audio=tiny_wav_b64()
     )
     artifacts = prefill_audio_artifacts(request)
     assert isinstance(artifacts["source_audio"], AudioArtifact)
@@ -178,11 +170,7 @@ def test_voicefixer_vocoder_legacy_mel_becomes_artifact():
     mel = np.linspace(0, 1, 80 * 12, dtype=np.float32).reshape(80, 12)
     payload = _b64(json.dumps(mel.tolist()).encode("utf-8"))
     request = AudioConversionRequestInput(
-        request_id="ac-2",
-        requested_model="voicefixer",
-        model="vf-voc",
-        source_audio="",
-        input_mel_spectrogram=payload,
+        request_id="ac-2", requested_model="voicefixer", model="vf-voc", source_audio="", input_mel_spectrogram=payload
     )
     engine_request = _engine_request(request)
 
@@ -199,10 +187,7 @@ def test_voicefixer_vocoder_legacy_mel_becomes_artifact():
 def test_harmonyspeech_vocoder_prepare_legacy_envelope():
     mel = np.linspace(0, 1, 80 * 6, dtype=np.float32).reshape(80, 6)
     envelope = json.dumps(
-        {
-            "mel": _b64(json.dumps(mel.tolist()).encode("utf-8")),
-            "breaks": _b64(json.dumps([3, 3]).encode("utf-8")),
-        }
+        {"mel": _b64(json.dumps(mel.tolist()).encode("utf-8")), "breaks": _b64(json.dumps([3, 3]).encode("utf-8"))}
     )
     request = TextToSpeechRequestInput(
         request_id="voc-2",
@@ -226,11 +211,7 @@ def test_harmonyspeech_vocoder_prepare_uses_forwarded_artifact():
         np.zeros((80, 6), dtype=np.float32), sample_rate=16000, hop_length=200, breaks=[6]
     )
     request = TextToSpeechRequestInput(
-        request_id="voc-3",
-        requested_model="harmonyspeech",
-        model="hs-voc",
-        input_text="",
-        mode="voice_cloning",
+        request_id="voc-3", requested_model="harmonyspeech", model="hs-voc", input_text="", mode="voice_cloning"
     )
     engine_request = _engine_request(request, {"input_audio": mel_artifact})
 
@@ -266,12 +247,7 @@ def test_true_speaker_embedding_artifact_is_preferred(monkeypatch):
 
 
 def _ov_config(sample_rate: int) -> SimpleNamespace:
-    data = SimpleNamespace(
-        sampling_rate=sample_rate,
-        filter_length=1024,
-        hop_length=256,
-        win_length=1024,
-    )
+    data = SimpleNamespace(sampling_rate=sample_rate, filter_length=1024, hop_length=256, win_length=1024)
     return SimpleNamespace(data=data)
 
 
@@ -282,26 +258,16 @@ def test_tone_converter_encoder_prepare_reuses_artifacts(monkeypatch):
     t = np.arange(int(seconds * sample_rate)) / sample_rate
     waveform = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
     audio_artifact = AudioArtifact.from_numpy(waveform, sample_rate)
-    vad_artifact = VadArtifact(
-        segments=[{"start": 0.0, "end": 3.0, "text": "hello world"}],
-        info={"language": "en"},
-    )
-    request = SpeechEmbeddingRequestInput(
-        request_id="emb-1", requested_model="openvoice_v2", model="ov2-tce"
-    )
-    engine_request = _engine_request(
-        request, {"input_audio": audio_artifact, "input_vad_data": vad_artifact}
-    )
+    vad_artifact = VadArtifact(segments=[{"start": 0.0, "end": 3.0, "text": "hello world"}], info={"language": "en"})
+    request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="openvoice_v2", model="ov2-tce")
+    engine_request = _engine_request(request, {"input_audio": audio_artifact, "input_vad_data": vad_artifact})
 
     monkeypatch.setattr(prepare_module, "get_model_flavour", lambda config: "default")
-    monkeypatch.setattr(
-        prepare_module, "get_model_config", lambda *args, **kwargs: _ov_config(sample_rate)
-    )
+    monkeypatch.setattr(prepare_module, "get_model_config", lambda *args, **kwargs: _ov_config(sample_rate))
     calls = []
     real_decode = audio_codec.decode_audio
     monkeypatch.setattr(
-        "harmonyspeech.common.inputs.decode_audio",
-        lambda *a, **k: calls.append(1) or real_decode(*a, **k),
+        "harmonyspeech.common.inputs.decode_audio", lambda *a, **k: calls.append(1) or real_decode(*a, **k)
     )
 
     (segments,) = prepare_openvoice_tone_converter_encoder_inputs(
@@ -322,8 +288,7 @@ def test_tone_converter_encoder_prepare_reuses_artifacts(monkeypatch):
 
 def _conditionals_payload() -> str:
     conditionals = Conditionals(
-        t3=T3Cond(speaker_emb=torch.zeros(1, 4)),
-        gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)},
+        t3=T3Cond(speaker_emb=torch.zeros(1, 4)), gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)}
     )
     import io
 
@@ -373,11 +338,7 @@ def test_chatterbox_tts_prepare_loads_conditionals_safely():
 @pytest.mark.unit
 def test_chatterbox_tts_prepare_without_conditioning_returns_none():
     request = TextToSpeechRequestInput(
-        request_id="cb-3",
-        requested_model="chatterbox",
-        model="cb",
-        input_text="hello",
-        mode="single_speaker_tts",
+        request_id="cb-3", requested_model="chatterbox", model="cb", input_text="hello", mode="single_speaker_tts"
     )
     (params,) = prepare_chatterbox_tts_inputs([_engine_request(request)])
     assert params[1] is None

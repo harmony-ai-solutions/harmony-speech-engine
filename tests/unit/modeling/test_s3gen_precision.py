@@ -204,12 +204,7 @@ def test_seam_tolerates_objects_without_inference():
 def test_loader_installs_the_seam():
     from harmonyspeech.modeling.models.chatterbox.chatterbox import apply_model_dtype
 
-    model = SimpleNamespace(
-        t3=nn.Linear(2, 2),
-        s3gen=_StubS3Gen(),
-        ve=nn.Linear(2, 2),
-        device="cpu",
-    )
+    model = SimpleNamespace(t3=nn.Linear(2, 2), s3gen=_StubS3Gen(), ve=nn.Linear(2, 2), device="cpu")
     apply_model_dtype(model, torch.float32)
     assert model.s3gen._hse_autocast_seam is True
 
@@ -230,10 +225,7 @@ def test_config_fp16_resolves_when_the_env_is_absent():
 
 def test_env_overrides_config():
     """The env escape hatch wins in both directions, including an explicit off."""
-    assert (
-        s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "bfloat16"}, configured="float16")
-        is torch.bfloat16
-    )
+    assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "bfloat16"}, configured="float16") is torch.bfloat16
     assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "off"}, configured="float16") is None
     assert s3gen_autocast_dtype({S3GEN_AUTOCAST_ENV: "float16"}, configured="float32") is torch.float16
     assert effective_s3gen_precision("float16", environ={S3GEN_AUTOCAST_ENV: "off"}) == "float32"

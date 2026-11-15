@@ -9,22 +9,14 @@ from loguru import logger
 import harmonyspeech
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.device import resolve_device
-from harmonyspeech.common.inputs import (
-    RequestInput,
-    TextToSpeechRequestInput,
-    prefill_audio_artifacts,
-)
+from harmonyspeech.common.inputs import RequestInput, TextToSpeechRequestInput, prefill_audio_artifacts
 from harmonyspeech.common.logger import setup_logger
 from harmonyspeech.common.outputs import RequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.args_tools import EngineArgs
 from harmonyspeech.engine.embedding_cache_metrics import embedding_cache_hit_ratio
 from harmonyspeech.engine.metrics import StatLogger, Stats
-from harmonyspeech.engine.vram_budget import (
-    allowed_windows,
-    evaluate_whisper_budget,
-    projected_whisper_peak,
-)
+from harmonyspeech.engine.vram_budget import allowed_windows, evaluate_whisper_budget, projected_whisper_peak
 from harmonyspeech.processing.pipeline_registry import (
     PipelineExecution,
     PipelineRoutingError,
@@ -38,11 +30,7 @@ from harmonyspeech.processing.pipeline_registry import (
     validate_families,
     validate_registry,
 )
-from harmonyspeech.processing.scheduler import (
-    AR_INFERENCE_MODEL_TYPES,
-    Scheduler,
-    SchedulerOutputs,
-)
+from harmonyspeech.processing.scheduler import AR_INFERENCE_MODEL_TYPES, Scheduler, SchedulerOutputs
 
 _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_INTERVAL_SEC", "5"))
 
@@ -50,12 +38,7 @@ _LOCAL_LOGGING_INTERVAL_SEC = int(os.environ.get("HARMONYSPEECH_LOCAL_LOGGING_IN
 #: meaningful, observable per-model value (Phase 11-3). ``ChatterboxEmbedding``
 #: has no vocode and is deliberately absent.
 _S3GEN_PRECISION_MODEL_TYPES = frozenset(
-    {
-        "ChatterboxTTS",
-        "ChatterboxTurboTTS",
-        "ChatterboxMultilingualTTS",
-        "ChatterboxVC",
-    }
+    {"ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS", "ChatterboxVC"}
 )
 
 
@@ -140,10 +123,7 @@ class HarmonySpeechEngine:
         self.ar_cache_budget_bytes = ar_cache_budget_bytes
         self.ar_cache_default_cap_tokens = ar_cache_default_cap_tokens
         self.ar_cache_pool = (
-            ARCachePool(
-                budget_bytes=ar_cache_budget_bytes,
-                default_cap_tokens=ar_cache_default_cap_tokens,
-            )
+            ARCachePool(budget_bytes=ar_cache_budget_bytes, default_cap_tokens=ar_cache_default_cap_tokens)
             if self.ar_cache_enabled
             else None
         )
@@ -179,9 +159,7 @@ class HarmonySpeechEngine:
 
         self.voice_pack_warmup = bool(voice_pack_warmup)
         self.voice_pack_cache_dir = (
-            Path(voice_pack_cache_dir).expanduser()
-            if voice_pack_cache_dir
-            else default_voice_pack_cache_dir()
+            Path(voice_pack_cache_dir).expanduser() if voice_pack_cache_dir else default_voice_pack_cache_dir()
         )
         self.voice_pack_disk_cache = (
             VoicePackDiskCache(self.voice_pack_cache_dir)
@@ -191,9 +169,7 @@ class HarmonySpeechEngine:
         self.voice_pack_warmup_stats: dict | None = None
         if self.voice_pack_disk_cache is not None:
             try:
-                self.voice_pack_hydrated = hydrate_embedding_cache(
-                    self, self.voice_pack_disk_cache
-                )
+                self.voice_pack_hydrated = hydrate_embedding_cache(self, self.voice_pack_disk_cache)
             except Exception as exc:  # noqa: BLE001 - a cache must never fail boot
                 logger.warning(f"Voice pack cache hydration failed (ignored): {exc}")
                 self.voice_pack_hydrated = 0
@@ -232,7 +208,7 @@ class HarmonySpeechEngine:
 
         # Metric Logging.
         if self.log_stats:
-            self.stat_logger = StatLogger(local_interval=_LOCAL_LOGGING_INTERVAL_SEC, labels=dict())
+            self.stat_logger = StatLogger(local_interval=_LOCAL_LOGGING_INTERVAL_SEC, labels={})
 
     def _apply_whisper_probe_defaults(self) -> None:
         """Give Whisper configs the engine-level audio cap the probe needs.
@@ -247,7 +223,6 @@ class HarmonySpeechEngine:
                 continue
             if not hasattr(config, "whisper_max_audio_seconds"):
                 config.whisper_max_audio_seconds = self.whisper_max_audio_seconds
-
 
     def _validate_family_configuration(self) -> list[str]:
         """Log incomplete toolchains and return the complete family ids.
@@ -274,8 +249,7 @@ class HarmonySpeechEngine:
             raise RuntimeError(
                 "Pipeline configuration is incomplete and --strict-pipelines is enabled: "
                 + "; ".join(
-                    f"pipeline '{spec_id}' missing step(s): {', '.join(steps)}"
-                    for spec_id, steps in incomplete.items()
+                    f"pipeline '{spec_id}' missing step(s): {', '.join(steps)}" for spec_id, steps in incomplete.items()
                 )
             )
         return complete_families
@@ -347,10 +321,7 @@ class HarmonySpeechEngine:
         step = spec.step_at(state.step_index) if state is not None else None
         parts: list[str] = []
         if step is not None:
-            parts.append(
-                f"step '{step.name}' has no matching model "
-                f"(missing one of: {', '.join(step.requires)})"
-            )
+            parts.append(f"step '{step.name}' has no matching model (missing one of: {', '.join(step.requires)})")
         missing_steps = incomplete.get(spec.id, [])
         if missing_steps:
             parts.append(f"incomplete pipeline steps: {', '.join(missing_steps)}")
@@ -368,10 +339,7 @@ class HarmonySpeechEngine:
         return self._pipeline_incomplete_message(spec, state)
 
     def _route_request(
-        self,
-        request_data: RequestInput,
-        artifacts: dict | None = None,
-        pipeline_state: PipelineState | None = None,
+        self, request_data: RequestInput, artifacts: dict | None = None, pipeline_state: PipelineState | None = None
     ) -> tuple[PipelineState | None, str | None]:
         """Resolve ``request_data.model`` for the request's current step.
 
@@ -407,10 +375,7 @@ class HarmonySpeechEngine:
         return state, None
 
     def check_reroute_request_to_model(
-        self,
-        request: RequestInput,
-        artifacts: dict | None = None,
-        pipeline_state: PipelineState | None = None,
+        self, request: RequestInput, artifacts: dict | None = None, pipeline_state: PipelineState | None = None
     ) -> PipelineState | None:
         """Set ``request.model`` for the request's current pipeline step.
 
@@ -606,10 +571,7 @@ class HarmonySpeechEngine:
         artifacts = dict(getattr(context, "artifacts", None) or {})
         self.scheduler.update_request_status(result.request_id, RequestStatus.FINISHED_FORWARDED)
         self.add_request(
-            result.request_id,
-            input_data,
-            artifacts=artifacts or None,
-            pipeline_state=context.pipeline_state,
+            result.request_id, input_data, artifacts=artifacts or None, pipeline_state=context.pipeline_state
         )
         return RequestStatus.FINISHED_FORWARDED, input_data
 
@@ -665,10 +627,7 @@ class HarmonySpeechEngine:
                 self._release_request_resources([request.request_id])
                 expired.append(
                     RequestOutput(
-                        request_id=request.request_id,
-                        finish_reason="error",
-                        error=message,
-                        metrics=request.metrics,
+                        request_id=request.request_id, finish_reason="error", error=message, metrics=request.metrics
                     )
                 )
         return expired
@@ -722,9 +681,7 @@ class HarmonySpeechEngine:
         if routing_error is not None or request_data.model not in model_executors:
             error = routing_error or self._unresolvable_model_error(request_data, pipeline_state)
             logger.error(f"Request {request_id} rejected: {error}")
-            self._queue_pending_errors(
-                [RequestOutput(request_id=request_id, finish_reason="error", error=error)]
-            )
+            self._queue_pending_errors([RequestOutput(request_id=request_id, finish_reason="error", error=error)])
             return
 
         # Boundary decode-once: the wire-encoded audio fields are turned into typed
@@ -994,17 +951,13 @@ class HarmonySpeechEngine:
             # uses S3Gen carry the field; the env gate is applied so an operator
             # sees the effective value (config default float32).
             if getattr(model_config, "model_type", None) in _S3GEN_PRECISION_MODEL_TYPES:
-                from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
-                    effective_s3gen_precision,
-                )
+                from harmonyspeech.modeling.models.chatterbox.s3gen_precision import effective_s3gen_precision
 
                 configured = getattr(model_config, "s3gen_precision", "float32")
                 # Prefer the loaded S3Gen's own seam value: a shared backbone
                 # group has one S3Gen instance, so this reports what the vocode
                 # actually runs even if two entries asked for different values.
-                runner = getattr(
-                    getattr(model_executor, "driver_worker", None), "model_runner", None
-                )
+                runner = getattr(getattr(model_executor, "driver_worker", None), "model_runner", None)
                 s3gen = getattr(getattr(runner, "model", None), "s3gen", None)
                 configured = getattr(s3gen, "_hse_s3gen_precision", configured)
                 detail["s3gen_precision"] = effective_s3gen_precision(configured)
@@ -1121,8 +1074,7 @@ class HarmonySpeechEngine:
             logger.info("AR KV-cache arena table: empty (no AR family registered an arena at load).")
             return
         logger.info(
-            f"{'family':<30} {'device':>9} {'slots':>7} {'cap':>7} {'slab MiB':>10} "
-            f"{'arena MiB':>10} {'dtype':>8}"
+            f"{'family':<30} {'device':>9} {'slots':>7} {'cap':>7} {'slab MiB':>10} {'arena MiB':>10} {'dtype':>8}"
         )
         for row in rows:
             logger.info(
@@ -1334,11 +1286,7 @@ class HarmonySpeechEngine:
                 device_used_source = None
 
         registry = getattr(self, "weight_registry", None)
-        shared = registry.stats() if registry is not None else {
-            "entries": 0,
-            "total_bytes": 0,
-            "components": {},
-        }
+        shared = registry.stats() if registry is not None else {"entries": 0, "total_bytes": 0, "components": {}}
 
         # Map checkpoint repo -> backbone group name so shared bytes can be
         # attributed to the group operators recognise in the config. Repo ids
@@ -1601,14 +1549,7 @@ class HarmonySpeechEngine:
         else:
             budget_source = "config"
         used = int(stats.get("device_used_bytes") or 0)
-        allowed = allowed_windows(
-            budget,
-            used,
-            active_windows,
-            cap,
-            per_window_bytes=cost,
-            min_windows=min_windows,
-        )
+        allowed = allowed_windows(budget, used, active_windows, cap, per_window_bytes=cost, min_windows=min_windows)
         return {
             "enabled": True,
             "allowed_windows": allowed,
@@ -1742,8 +1683,7 @@ class HarmonySpeechEngine:
                 "in_flight": int(stats.get("in_flight") or 0),
                 "lane_short_depth": int(depths.get("short") or 0),
                 "lane_long_depth": int(depths.get("long") or 0),
-                "queue_wait": stats.get("queue_wait")
-                or {"sum": 0.0, "count": 0, "max": 0.0, "buckets": []},
+                "queue_wait": stats.get("queue_wait") or {"sum": 0.0, "count": 0, "max": 0.0, "buckets": []},
                 "ct2": stats.get("ct2") or {"available": False, "queued": 0, "active": 0},
                 "batch_fallbacks": int(stats.get("batch_fallbacks") or 0),
             }

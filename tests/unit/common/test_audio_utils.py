@@ -178,18 +178,12 @@ def test_parenthetical_prose_stays_in_its_sentence():
 def test_inline_square_bracket_tags_stay_in_their_sentence(tag):
     """Turbo tags are inline paralinguistic hints, never standalone segments."""
     text = f"{tag} Okay, we have fifteen minutes left! Let's think."
-    assert split_text_into_chunks(text) == [
-        f"{tag} Okay, we have fifteen minutes left!",
-        "Let's think.",
-    ]
+    assert split_text_into_chunks(text) == [f"{tag} Okay, we have fifteen minutes left!", "Let's think."]
 
 
 def test_inline_tags_all_stay_attached_to_one_sentence():
     text = "[gasp] Okay, we have fifteen minutes left! [sigh] Let's think."
-    assert split_text_into_chunks(text) == [
-        "[gasp] Okay, we have fifteen minutes left!",
-        "[sigh] Let's think.",
-    ]
+    assert split_text_into_chunks(text) == ["[gasp] Okay, we have fifteen minutes left!", "[sigh] Let's think."]
 
 
 def test_unicode_ellipsis_does_not_split_english_text():
@@ -199,9 +193,7 @@ def test_unicode_ellipsis_does_not_split_english_text():
         "Then left.",
     ]
     # ``…`` alone never enables CJK splitting or ends a sentence.
-    assert split_text_into_chunks("She waited… and then spoke.") == [
-        "She waited… and then spoke."
-    ]
+    assert split_text_into_chunks("She waited… and then spoke.") == ["She waited… and then spoke."]
 
 
 @pytest.mark.parametrize("language", ["zh", "ja", "ko", "zh-CN", "ja_JP"])
@@ -312,13 +304,7 @@ def test_pause_fades_outgoing_tail_and_incoming_head():
     pause = 120
     a = np.ones(100, dtype=np.float32)
     b = np.ones(100, dtype=np.float32)
-    out = crossfade_stitch(
-        [a, b],
-        crossfade_ms=fade,
-        sentence_pause_ms=pause,
-        sample_rate=sr,
-        edge_conditioning=False,
-    )
+    out = crossfade_stitch([a, b], crossfade_ms=fade, sentence_pause_ms=pause, sample_rate=sr, edge_conditioning=False)
     assert out.shape == (100 + 100 + pause - fade,)
 
     # Layout at 1 kHz: 60 ones | 40 cos² taper | 80 silence | 40 sin² fade-in |
@@ -340,12 +326,7 @@ def test_pause_fades_outgoing_tail_and_incoming_head():
     np.testing.assert_allclose(out[220:], 1.0, atol=1e-6)
 
     # Streaming must stay sample-for-sample identical to the whole-buffer fold.
-    stitcher = CrossfadeStitcher(
-        crossfade_ms=fade,
-        sentence_pause_ms=pause,
-        sample_rate=sr,
-        edge_conditioning=False,
-    )
+    stitcher = CrossfadeStitcher(crossfade_ms=fade, sentence_pause_ms=pause, sample_rate=sr, edge_conditioning=False)
     streamed = np.concatenate([stitcher.feed(a), stitcher.feed(b), stitcher.flush()])
     np.testing.assert_array_equal(streamed, out)
 
@@ -421,11 +402,7 @@ def test_stitcher_rejects_invalid_timing():
 
 def _padded(lead: int, trail: int, active: int = 100, value: float = 0.5) -> np.ndarray:
     return np.concatenate(
-        [
-            np.zeros(lead, dtype=np.float32),
-            np.full(active, value, dtype=np.float32),
-            np.zeros(trail, dtype=np.float32),
-        ]
+        [np.zeros(lead, dtype=np.float32), np.full(active, value, dtype=np.float32), np.zeros(trail, dtype=np.float32)]
     )
 
 
@@ -471,13 +448,7 @@ def test_edge_conditioning_is_stereo_safe():
     # Left channel padded on both edges, right channel live on both: the
     # channel-maximum magnitude keeps the edges alive, so nothing is trimmed.
     left = _padded(60, 60)
-    right = np.concatenate(
-        [
-            np.full(60, 0.5, dtype=np.float32),
-            active,
-            np.full(60, 0.5, dtype=np.float32),
-        ]
-    )
+    right = np.concatenate([np.full(60, 0.5, dtype=np.float32), active, np.full(60, 0.5, dtype=np.float32)])
     out = condition_edges(np.stack([left, right], axis=1), 1000)
     assert out.shape[0] == len(left)
     # Both channels padded: one range applies to both channels.
@@ -532,16 +503,10 @@ def test_join_gap_is_uniform_across_ragged_padded_silence(fade_ms):
     guard = 10  # samples at 1 kHz
     fade = fade_ms  # samples at 1 kHz
     gaps = set()
-    for lead_a, trail_a, lead_b, trail_b in (
-        (20, 20, 20, 20),
-        (60, 140, 90, 30),
-        (140, 60, 30, 120),
-    ):
+    for lead_a, trail_a, lead_b, trail_b in ((20, 20, 20, 20), (60, 140, 90, 30), (140, 60, 30, 120)):
         a = _padded(lead_a, trail_a)
         b = _padded(lead_b, trail_b)
-        out = crossfade_stitch(
-            [a, b], crossfade_ms=fade_ms, sentence_pause_ms=pause_ms, sample_rate=1000
-        )
+        out = crossfade_stitch([a, b], crossfade_ms=fade_ms, sentence_pause_ms=pause_ms, sample_rate=1000)
         gaps.add(_speech_gap(out))
 
     assert len(gaps) == 1, gaps
@@ -556,12 +521,7 @@ def test_crossfade_length_invariant_with_edge_conditioning():
     a = _padded(60, 90)
     b = _padded(30, 120)
     out = crossfade_stitch([a, b], crossfade_ms=20, sentence_pause_ms=50, sample_rate=1000)
-    expected = (
-        len(condition_edges(a, 1000))
-        + len(condition_edges(b, 1000))
-        + 50
-        - 20
-    )
+    expected = len(condition_edges(a, 1000)) + len(condition_edges(b, 1000)) + 50 - 20
     assert out.shape == (expected,)
 
 
@@ -586,7 +546,6 @@ def test_crossfade_single_chunk_is_not_edge_conditioned():
     chunk = _padded(200, 200)
     out = crossfade_stitch([chunk], crossfade_ms=40, sentence_pause_ms=120, sample_rate=1000)
     np.testing.assert_array_equal(out, chunk)
-
 
 
 # ---------------------------------------------------------------------------
@@ -800,11 +759,7 @@ def test_trim_silence_rejects_negative_padding():
 
 def test_fix_internal_silence_collapses_a_long_pause():
     wav = np.concatenate(
-        [
-            np.ones(100, dtype=np.float32),
-            np.zeros(1000, dtype=np.float32),
-            np.ones(100, dtype=np.float32),
-        ]
+        [np.ones(100, dtype=np.float32), np.zeros(1000, dtype=np.float32), np.ones(100, dtype=np.float32)]
     )
     out = fix_internal_silence(wav, SR)
     # 100 active + 300 kept pause + 100 active.
@@ -841,11 +796,7 @@ def test_fix_internal_silence_leaves_short_pause_alone():
 
 def test_fix_internal_silence_never_touches_lead_or_trail_silence():
     wav = np.concatenate(
-        [
-            np.zeros(1000, dtype=np.float32),
-            np.ones(100, dtype=np.float32),
-            np.zeros(1000, dtype=np.float32),
-        ]
+        [np.zeros(1000, dtype=np.float32), np.ones(100, dtype=np.float32), np.zeros(1000, dtype=np.float32)]
     )
     # Leading/trailing silence is trim_silence's job; this filter must not
     # mistake a chunk edge for an internal pause.
@@ -861,11 +812,7 @@ def test_fix_internal_silence_all_silence_and_all_active_are_unchanged():
 
 def test_fix_internal_silence_stereo_preserves_channels():
     mono = np.concatenate(
-        [
-            np.ones(100, dtype=np.float32),
-            np.zeros(1000, dtype=np.float32),
-            np.ones(100, dtype=np.float32),
-        ]
+        [np.ones(100, dtype=np.float32), np.zeros(1000, dtype=np.float32), np.ones(100, dtype=np.float32)]
     )
     stereo = np.stack([mono, -mono], axis=1)
     out = fix_internal_silence(stereo, SR)
@@ -877,20 +824,14 @@ def test_fix_internal_silence_chunk_boundary_pause_is_internal_not_trailing():
     # A stitched buffer: two chunks with a short sentence pause between them.
     # The pause is internal and shorter than the 700 ms threshold, so untouched.
     wav = np.concatenate(
-        [
-            np.ones(100, dtype=np.float32),
-            np.zeros(50, dtype=np.float32),
-            np.ones(100, dtype=np.float32),
-        ]
+        [np.ones(100, dtype=np.float32), np.zeros(50, dtype=np.float32), np.ones(100, dtype=np.float32)]
     )
     np.testing.assert_array_equal(fix_internal_silence(wav, SR), wav)
 
 
 def test_fix_internal_silence_rejects_max_pause_above_min_silence():
     with pytest.raises(ValueError, match="max_pause_ms"):
-        fix_internal_silence(
-            np.ones(100, dtype=np.float32), SR, max_pause_ms=800, min_silence_ms=700
-        )
+        fix_internal_silence(np.ones(100, dtype=np.float32), SR, max_pause_ms=800, min_silence_ms=700)
 
 
 def test_filter_defaults_match_documented_thresholds():

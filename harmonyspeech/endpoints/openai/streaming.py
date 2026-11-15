@@ -154,9 +154,7 @@ def streaming_response_headers(
     """
     normalized = str(audio_format).strip().lower()
     if normalized not in STREAMING_AUDIO_FORMATS:
-        raise ValueError(
-            f"Streaming supports only the 'wav' and 'pcm' formats, got '{audio_format}'."
-        )
+        raise ValueError(f"Streaming supports only the 'wav' and 'pcm' formats, got '{audio_format}'.")
 
     return {
         HEADER_AUDIO_FORMAT: normalized,
@@ -195,9 +193,7 @@ def _require_int(name: str, value, *, minimum: int, maximum: int | None = None) 
 
 
 def wav_stream_header(
-    sample_rate: int,
-    channels: int = STREAMING_AUDIO_CHANNELS,
-    bits: int = STREAMING_AUDIO_BITS,
+    sample_rate: int, channels: int = STREAMING_AUDIO_CHANNELS, bits: int = STREAMING_AUDIO_BITS
 ) -> bytes:
     """Return the 44-byte RIFF/WAVE header for a streamed PCM body.
 
@@ -402,16 +398,12 @@ class StreamResampler:
         if self.channels == 1:
             if array.ndim == 2:
                 if array.shape[1] != 1:
-                    raise ValueError(
-                        f"StreamResampler is mono but the chunk has {array.shape[1]} channels"
-                    )
+                    raise ValueError(f"StreamResampler is mono but the chunk has {array.shape[1]} channels")
                 array = array.reshape(-1)
             elif array.ndim != 1:
                 raise ValueError(f"Expected a 1-D mono chunk, got shape {array.shape}")
         elif array.ndim != 2 or array.shape[1] != self.channels:
-            raise ValueError(
-                f"Expected a (frames, {self.channels}) chunk, got shape {array.shape}"
-            )
+            raise ValueError(f"Expected a (frames, {self.channels}) chunk, got shape {array.shape}")
         return np.ascontiguousarray(array, dtype=np.float32)
 
     def feed(self, chunk) -> np.ndarray:
@@ -439,9 +431,7 @@ class StreamResampler:
         if self._stream is None:
             return _empty_samples(self.channels)
 
-        empty = np.empty((0, self.channels), dtype=np.float32) if self.channels > 1 else np.empty(
-            0, dtype=np.float32
-        )
+        empty = np.empty((0, self.channels), dtype=np.float32) if self.channels > 1 else np.empty(0, dtype=np.float32)
         tail = np.asarray(self._stream.resample_chunk(empty, last=True), dtype=np.float32)
         self._emitted_samples += int(tail.shape[0])
         return tail
@@ -499,12 +489,7 @@ SSE_DONE_FRAME = "data: [DONE]\n\n"
 
 def _json_data(payload) -> str:
     """Serialize a payload as one strict JSON line (newlines escaped)."""
-    return json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def sse_event(event_type: str, payload) -> str:
@@ -532,22 +517,11 @@ def delta_payload(audio_b64: str, chunk_index: int) -> dict:
     dropped frame.
     """
     index = _require_int("chunk_index", chunk_index, minimum=0)
-    return {
-        "type": SSE_EVENT_DELTA,
-        "audio": str(audio_b64),
-        "chunk_index": index,
-    }
+    return {"type": SSE_EVENT_DELTA, "audio": str(audio_b64), "chunk_index": index}
 
 
 def done_payload(
-    id: str,
-    model: str,
-    created: int,
-    sample_rate: int,
-    format: str,
-    chunks: int,
-    duration_s: float,
-    usage=None,
+    id: str, model: str, created: int, sample_rate: int, format: str, chunks: int, duration_s: float, usage=None
 ) -> dict:
     """Build the terminal ``speech.audio.done`` payload.
 

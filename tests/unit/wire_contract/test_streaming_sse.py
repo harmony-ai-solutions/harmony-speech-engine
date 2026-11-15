@@ -84,9 +84,7 @@ def _parse_sse(text: str) -> list[tuple[str, object]]:
         if data == "[DONE]":
             blocks.append(("done-frame", None))
             continue
-        event = next(
-            (line[len("event: ") :] for line in lines if line.startswith("event: ")), None
-        )
+        event = next((line[len("event: ") :] for line in lines if line.startswith("event: ")), None)
         blocks.append((event, json.loads(data)))
     return blocks
 
@@ -197,9 +195,7 @@ async def test_empty_segments_are_skipped_and_do_not_consume_a_chunk_index():
 @pytest.mark.asyncio
 async def test_done_payload_reports_target_rate_and_emitted_sample_duration():
     segment = np.full(4, 0.1, dtype=np.float32)
-    state = StreamState(
-        source_rate=24000, target_rate=16000, emitted_samples=24000, chunks=3
-    )
+    state = StreamState(source_rate=24000, target_rate=16000, emitted_samples=24000, chunks=3)
 
     events = await _render(
         _segments([segment]),
@@ -277,13 +273,7 @@ async def test_error_after_a_delta_is_one_terminal_error_event_and_no_done():
     assert kinds.count(SSE_EVENT_ERROR) == 1
     assert SSE_EVENT_DONE not in kinds
     error = _payloads(events, SSE_EVENT_ERROR)[0]
-    assert error == {
-        "error": {
-            "message": "chunk 1 failed",
-            "type": "StreamSynthesisError",
-            "code": None,
-        }
-    }
+    assert error == {"error": {"message": "chunk 1 failed", "type": "StreamSynthesisError", "code": None}}
 
 
 @pytest.mark.unit
@@ -299,11 +289,7 @@ async def test_error_event_is_not_followed_by_the_done_frame():
 async def test_failure_before_the_first_frame_is_raised_not_an_event():
     state = StreamState(source_rate=8000, target_rate=8000)
     generator = _encode_sse_frames(
-        _failing_immediately("nothing on the wire yet"),
-        state=state,
-        request_id="tts-x",
-        model="m",
-        created=0,
+        _failing_immediately("nothing on the wire yet"), state=state, request_id="tts-x", model="m", created=0
     )
 
     with pytest.raises(StreamSynthesisError, match="nothing on the wire yet"):
@@ -340,9 +326,7 @@ async def test_cancellation_propagates_and_is_never_an_error_event():
         yield np.full(4, 0.1, dtype=np.float32)  # pragma: no cover - cancelled
 
     state = StreamState(source_rate=8000, target_rate=8000)
-    generator = _encode_sse_frames(
-        _one_then_block(), state=state, request_id="tts-cancel", model="m", created=0
-    )
+    generator = _encode_sse_frames(_one_then_block(), state=state, request_id="tts-cancel", model="m", created=0)
     first = await anext(generator)
     assert first.startswith(f"event: {SSE_EVENT_DELTA}")
 
@@ -441,9 +425,7 @@ async def test_a_non_positive_threshold_disables_keepalives():
 @pytest.mark.unit
 def test_pcm16_base64_is_the_one_canonical_quantizer():
     segment = np.full(4, 0.25, dtype=np.float32)
-    assert _pcm16_base64(segment, 8000) == base64.b64encode(pcm16_frame(segment, 8000)).decode(
-        "ascii"
-    )
+    assert _pcm16_base64(segment, 8000) == base64.b64encode(pcm16_frame(segment, 8000)).decode("ascii")
 
 
 @pytest.mark.unit

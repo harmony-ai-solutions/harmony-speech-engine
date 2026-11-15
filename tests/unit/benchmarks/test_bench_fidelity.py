@@ -44,12 +44,7 @@ def test_word_edit_distance_on_known_pairs(reference, hypothesis, expected):
 def test_score_fidelity_returns_the_report_row_shape():
     row = bench.score_fidelity("Hello, world!", "hello world")
 
-    assert row == {
-        "edit_distance": 0,
-        "words_heard": 2,
-        "words_ref": 2,
-        "transcript": "hello world",
-    }
+    assert row == {"edit_distance": 0, "words_heard": 2, "words_ref": 2, "transcript": "hello world"}
 
 
 @pytest.mark.unit
@@ -60,9 +55,7 @@ def test_stub_transcriber_is_injected_and_scored():
         seen["path"] = path
         return "Always destined to stand out"
 
-    scored = bench.transcribe_and_score(
-        bench.LONGFORM_FIXTURE_TEXT, "render.wav", stub_transcriber
-    )
+    scored = bench.transcribe_and_score(bench.LONGFORM_FIXTURE_TEXT, "render.wav", stub_transcriber)
 
     assert seen["path"] == "render.wav"
     assert scored["words_heard"] == 5
@@ -94,24 +87,8 @@ def test_fidelity_markdown_has_the_agreed_row_shape():
             "chunk_budget": None,
         },
         "families": {
-            "chatterbox": {
-                "variants": {
-                    "on": {
-                        "edit_distance": 2,
-                        "words_heard": 136,
-                        "words_ref": 138,
-                    }
-                }
-            },
-            "chatterbox_multilingual": {
-                "variants": {
-                    "on": {
-                        "edit_distance": 9,
-                        "words_heard": 139,
-                        "words_ref": 138,
-                    }
-                }
-            },
+            "chatterbox": {"variants": {"on": {"edit_distance": 2, "words_heard": 136, "words_ref": 138}}},
+            "chatterbox_multilingual": {"variants": {"on": {"edit_distance": 9, "words_heard": 139, "words_ref": 138}}},
         },
         "skipped": {},
     }
@@ -181,9 +158,7 @@ def test_run_fidelity_benchmark_reports_rows_with_the_injected_transcriber(monke
         return out_path, 39.0
 
     monkeypatch.setattr(bench, "_render_fidelity_wav", fake_render)
-    monkeypatch.setattr(
-        "tests.audio_fixtures.reference_wav_b64", lambda name: "REFERENCE"
-    )
+    monkeypatch.setattr("tests.audio_fixtures.reference_wav_b64", lambda name: "REFERENCE")
 
     reference = bench.longform_fixture("chatterbox_multilingual")
     kept = " ".join(reference.split()[:-5])
@@ -201,9 +176,7 @@ def test_run_fidelity_benchmark_reports_rows_with_the_injected_transcriber(monke
         ]
     )
     args.model = {}
-    report = asyncio.run(
-        bench.run_fidelity_benchmark(args, transcriber=lambda path: kept)
-    )
+    report = asyncio.run(bench.run_fidelity_benchmark(args, transcriber=lambda path: kept))
 
     assert report["scenario"] == "longform-fidelity"
     assert report["method"]["variants"] == ["on"]

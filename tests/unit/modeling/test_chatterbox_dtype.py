@@ -25,12 +25,7 @@ from harmonyspeech.modeling.models.chatterbox.chatterbox import (
 
 
 def _fake_model(device: str = "cpu"):
-    return SimpleNamespace(
-        t3=nn.Linear(4, 4),
-        s3gen=nn.Linear(4, 4),
-        ve=nn.Linear(4, 4),
-        device=device,
-    )
+    return SimpleNamespace(t3=nn.Linear(4, 4), s3gen=nn.Linear(4, 4), ve=nn.Linear(4, 4), device=device)
 
 
 def test_policy_constants_pin_s3gen_and_ve_float32():
@@ -127,9 +122,7 @@ def test_loader_passes_config_dtype_to_wrapper():
     result = loader_module._build_chatterbox(config, "cpu", None, wrapper)
 
     assert result == "model-sentinel"
-    wrapper.from_pretrained.assert_called_once_with(
-        device="cpu", dtype=torch.float16, s3gen_precision="float32"
-    )
+    wrapper.from_pretrained.assert_called_once_with(device="cpu", dtype=torch.float16, s3gen_precision="float32")
 
 
 def test_loader_uses_factory_when_backbone_group_is_set(monkeypatch):
@@ -154,9 +147,7 @@ def test_loader_falls_back_when_factory_declines(monkeypatch):
     config = _model_config("ChatterboxTurboTTS", torch.float16, backbone_group="chatterbox-base")
 
     assert loader_module._build_chatterbox(config, "cuda", None, wrapper) == "turbo"
-    wrapper.from_pretrained.assert_called_once_with(
-        device="cuda", dtype=torch.float16, s3gen_precision="float32"
-    )
+    wrapper.from_pretrained.assert_called_once_with(device="cuda", dtype=torch.float16, s3gen_precision="float32")
 
 
 def test_model_config_validates_backbone_group():

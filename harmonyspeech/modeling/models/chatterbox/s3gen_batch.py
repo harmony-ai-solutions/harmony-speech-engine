@@ -137,9 +137,7 @@ def supports_batched_s3gen(s3gen) -> bool:
 
 def supports_batched_tokenizer(tokenizer) -> bool:
     """True when this source tokenizer exposes the audited mel + quantize split."""
-    return tokenizer is not None and hasattr(tokenizer, "log_mel_spectrogram") and hasattr(
-        tokenizer, "quantize"
-    )
+    return tokenizer is not None and hasattr(tokenizer, "log_mel_spectrogram") and hasattr(tokenizer, "quantize")
 
 
 def _flow_device(flow) -> torch.device:
@@ -216,12 +214,7 @@ def _encode_masked(encoder, token_embeds: Tensor, token_lens: Tensor) -> tuple[T
 
 
 def _flow_batched(
-    flow,
-    rows: list[S3GenRow],
-    generators: list[torch.Generator | None],
-    *,
-    n_timesteps: int,
-    precision=None,
+    flow, rows: list[S3GenRow], generators: list[torch.Generator | None], *, n_timesteps: int, precision=None
 ) -> list[Tensor]:
     """Tokens + per-row prompts → per-row generated mels ``[1, 80, 2·T_i]``."""
     device = _flow_device(flow)
@@ -244,9 +237,7 @@ def _flow_batched(
         else:
             p_len = int(torch.as_tensor(prompt_token_len).reshape(-1)[0].item())
         if p_len > prompt_token.numel():
-            raise S3GenBatchError(
-                f"prompt_token_len {p_len} exceeds prompt_token width {prompt_token.numel()}"
-            )
+            raise S3GenBatchError(f"prompt_token_len {p_len} exceeds prompt_token width {prompt_token.numel()}")
         prompt_feat = _to_flow(ref["prompt_feat"], device, dtype)
         if prompt_feat.dim() == 3:
             if prompt_feat.size(0) != 1:
@@ -283,9 +274,7 @@ def _flow_batched(
         combined[i, :p_len] = prompt_tokens[i]
         combined[i, p_len : p_len + t_len] = tokens[i]
 
-    total_lens = torch.tensor(
-        [prompt_lens[i] + token_lens[i] for i in range(batch)], dtype=torch.long, device=device
-    )
+    total_lens = torch.tensor([prompt_lens[i] + token_lens[i] for i in range(batch)], dtype=torch.long, device=device)
     embedding = torch.nn.functional.normalize(torch.stack(embeddings), dim=1)
     embedding = flow.spk_embed_affine_layer(embedding)
 
@@ -320,14 +309,10 @@ def _flow_batched(
 
     # Per-row start noise, drawn at the row's own valid length so it matches the
     # solo draw; the padded tail is never read (the decoder masks it).
-    noise = torch.full(
-        (batch, 80, hidden.size(1)), PAD_VALUE, device=device, dtype=hidden.dtype
-    )
+    noise = torch.full((batch, 80, hidden.size(1)), PAD_VALUE, device=device, dtype=hidden.dtype)
     for i in range(batch):
         valid = int(hidden_lens[i])
-        noise[i, :, :valid] = _draw(
-            (80, valid), generators[i], device=device, dtype=hidden.dtype
-        )
+        noise[i, :, :valid] = _draw((80, valid), generators[i], device=device, dtype=hidden.dtype)
 
     with s3gen_autocast(device, precision=precision) as autocast:
         feat, _ = flow.decoder(
@@ -397,9 +382,7 @@ def _source_per_row(m_source, source: Tensor, generators, valid_lens) -> Tensor:
         if generator is None:
             phase[row] = torch.empty(harmonics + 1, 1, device=device).uniform_(-_PI, _PI)
         else:
-            phase[row] = torch.empty(harmonics + 1, 1, device=device).uniform_(
-                -_PI, _PI, generator=generator
-            )
+            phase[row] = torch.empty(harmonics + 1, 1, device=device).uniform_(-_PI, _PI, generator=generator)
     phase[:, 0, :] = 0
 
     sine = sine_gen.sine_amp * torch.sin(theta + phase)
@@ -409,9 +392,7 @@ def _source_per_row(m_source, source: Tensor, generators, valid_lens) -> Tensor:
     noise = torch.zeros_like(sine)
     for row in range(batch):
         valid = int(valid_lens[row])
-        noise[row, :, :valid] = _draw(
-            (harmonics + 1, valid), generators[row], device=device, dtype=source.dtype
-        )
+        noise[row, :, :valid] = _draw((harmonics + 1, valid), generators[row], device=device, dtype=source.dtype)
     sine = sine * voiced + noise_amp * noise
 
     # SourceModuleHnNSF draws one more tensor and discards it; reproduce the draw
@@ -460,9 +441,7 @@ def _hift_batched(mel2wav, mels: list[Tensor], generators) -> list[Tensor]:
     # padding, so it must stay zero (a poisoned value there would be read by the
     # source convs at a row's boundary). It is an internal buffer, not input
     # padding; the input padded regions are the ones the gate poisons.
-    stft = torch.zeros(
-        batch, mel2wav.istft_params["n_fft"] + 2, stft_max, device=device, dtype=dtype
-    )
+    stft = torch.zeros(batch, mel2wav.istft_params["n_fft"] + 2, stft_max, device=device, dtype=dtype)
     for row in range(batch):
         real, imag = mel2wav._stft(source[row, 0, : sample_lens[row]])
         stft[row, :, : stft_lens[row]] = torch.cat([real, imag], dim=0)
@@ -510,9 +489,7 @@ def _as_clip(clip, index: int) -> Tensor:
     if tensor.dim() == 2 and tensor.size(0) == 1:
         tensor = tensor[0]
     if tensor.dim() != 1:
-        raise S3GenBatchError(
-            f"source clip {index} must be 1-D, got {tuple(tensor.shape)}"
-        )
+        raise S3GenBatchError(f"source clip {index} must be 1-D, got {tuple(tensor.shape)}")
     if not tensor.is_floating_point():
         tensor = tensor.float()
     return tensor
@@ -561,14 +538,10 @@ def tokenize_batched(tokenizer, clips) -> list[Tensor]:
     channels = int(mels[0].size(0))
     frame_lens = [int(mel.size(-1)) for mel in mels]
     width = max(frame_lens)
-    padded = torch.full(
-        (len(mels), channels, width), PAD_MEL_VALUE, device=device, dtype=mels[0].dtype
-    )
+    padded = torch.full((len(mels), channels, width), PAD_MEL_VALUE, device=device, dtype=mels[0].dtype)
     for row, mel in enumerate(mels):
         if int(mel.size(0)) != channels:
-            raise S3GenBatchError(
-                f"source clip {row} produced {mel.size(0)} mel bins, expected {channels}"
-            )
+            raise S3GenBatchError(f"source clip {row} produced {mel.size(0)} mel bins, expected {channels}")
         padded[row, :, : frame_lens[row]] = mel.to(device)
 
     mel_lens = torch.tensor(frame_lens, dtype=torch.long, device=device)
@@ -580,12 +553,7 @@ def tokenize_batched(tokenizer, clips) -> list[Tensor]:
 # Public entry point
 # ---------------------------------------------------------------------------
 @torch.inference_mode()
-def inference_batched(
-    s3gen,
-    rows: list[S3GenRow],
-    *,
-    n_cfm_timesteps: int | None = None,
-) -> list[Tensor]:
+def inference_batched(s3gen, rows: list[S3GenRow], *, n_cfm_timesteps: int | None = None) -> list[Tensor]:
     """Vocode ``rows`` in one padded S3Gen forward; returns one 1-D waveform each.
 
     A single unseeded row calls upstream ``s3gen.inference`` unchanged (the
@@ -618,9 +586,7 @@ def inference_batched(
 
     if len(rows) == 1 and rows[0].seed is None:
         row = rows[0]
-        ref = {
-            key: _to_flow(value, device, dtype) for key, value in (row.ref_dict or {}).items()
-        }
+        ref = {key: _to_flow(value, device, dtype) for key, value in (row.ref_dict or {}).items()}
         wav, _ = s3gen.inference(
             speech_tokens=row.tokens.to(device=device, dtype=torch.long).view(1, -1),
             ref_dict=ref,

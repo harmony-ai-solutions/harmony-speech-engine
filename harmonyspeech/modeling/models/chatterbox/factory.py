@@ -90,10 +90,7 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 from loguru import logger
 from safetensors.torch import load_file
 
-from harmonyspeech.modeling.models.chatterbox.chatterbox import (
-    _resolve_load_dtype,
-    apply_model_dtype,
-)
+from harmonyspeech.modeling.models.chatterbox.chatterbox import _resolve_load_dtype, apply_model_dtype
 from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR
 from harmonyspeech.modeling.weight_registry import WeightRegistry
 
@@ -115,6 +112,7 @@ _CANONICAL_REPOS = {
 def canonical_repo(repo: str) -> str:
     """Return the on-disk (case-correct) repo id for a configured model name."""
     return _CANONICAL_REPOS.get(str(repo).strip().lower(), repo)
+
 
 # Component names used in registry keys. Keep them stable — they show up in
 # /metrics labels and benchmark tables.
@@ -155,11 +153,7 @@ _FILES = {
         "tokenizer": "tokenizer.json",
         "conds": "conds.pt",
     },
-    ROLE_VC: {
-        "ve": "ve.safetensors",
-        "s3gen": "s3gen.safetensors",
-        "conds": "conds.pt",
-    },
+    ROLE_VC: {"ve": "ve.safetensors", "s3gen": "s3gen.safetensors", "conds": "conds.pt"},
     ROLE_MULTILINGUAL: {
         "ve": "ve.pt",
         "t3": "t3_mtl23ls_v2.safetensors",
@@ -255,9 +249,7 @@ def load_s3gen(repo: str, revision: str | None, device: str, *, role: str) -> S3
         state = load_file(f"{ckpt}/{_FILES[ROLE_TURBO]['s3gen']}")
     elif role == ROLE_MULTILINGUAL:
         state = torch.load(
-            f"{ckpt}/{_FILES[ROLE_MULTILINGUAL]['s3gen']}",
-            map_location=_map_location(device),
-            weights_only=True,
+            f"{ckpt}/{_FILES[ROLE_MULTILINGUAL]['s3gen']}", map_location=_map_location(device), weights_only=True
         )
     else:
         state = load_file(f"{ckpt}/{_FILES[ROLE_TTS]['s3gen']}")
@@ -276,9 +268,7 @@ def load_ve(repo: str, revision: str | None, device: str, *, role: str) -> Voice
     ve = VoiceEncoder()
     if role == ROLE_MULTILINGUAL:
         state = torch.load(
-            f"{ckpt}/{_FILES[ROLE_MULTILINGUAL]['ve']}",
-            map_location=_map_location(device),
-            weights_only=True,
+            f"{ckpt}/{_FILES[ROLE_MULTILINGUAL]['ve']}", map_location=_map_location(device), weights_only=True
         )
     else:
         state = load_file(f"{ckpt}/{_FILES[ROLE_TTS]['ve']}")
@@ -464,14 +454,7 @@ def build_backbone(
         )
 
     return ChatterboxBackbone(
-        repo=repo,
-        revision=revision,
-        device=device,
-        dtype=t3_dtype,
-        s3gen=s3gen,
-        ve=ve,
-        t3=t3,
-        t3_dtype=t3_dtype,
+        repo=repo, revision=revision, device=device, dtype=t3_dtype, s3gen=s3gen, ve=ve, t3=t3, t3_dtype=t3_dtype
     )
 
 
@@ -479,12 +462,7 @@ def build_backbone(
 # Role assembly
 # ---------------------------------------------------------------------------
 def assemble_role(
-    role: str,
-    backbone: ChatterboxBackbone,
-    *,
-    repo: str,
-    revision: str | None,
-    s3gen_precision: str = "float32",
+    role: str, backbone: ChatterboxBackbone, *, repo: str, revision: str | None, s3gen_precision: str = "float32"
 ) -> object:
     """Construct a role wrapper around the shared backbone references.
 
@@ -507,9 +485,7 @@ def assemble_role(
         # it would clobber the vocode roles' value in a backbone group
         # (embedding builds last in shipped config order). ``None`` wraps the
         # seam idempotently without setting the instance value.
-        apply_model_dtype(
-            model, backbone.dtype, None if role == ROLE_EMBEDDING else s3gen_precision
-        )
+        apply_model_dtype(model, backbone.dtype, None if role == ROLE_EMBEDDING else s3gen_precision)
         return model
 
     if role == ROLE_VC:

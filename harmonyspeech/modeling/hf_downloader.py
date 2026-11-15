@@ -30,9 +30,7 @@ def _unsafe_checkpoint_load_enabled() -> bool:
     return os.environ.get(ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _resolve_file_path(
-    base_path: str, filename: str, revision: str | None = None
-) -> str:
+def _resolve_file_path(base_path: str, filename: str, revision: str | None = None) -> str:
     """Resolve a file path using a three-tier strategy, minimising network use.
 
     Resolution order:
@@ -58,19 +56,13 @@ def _resolve_file_path(
 
     # Tier 2: HuggingFace disk cache (no network)
     try:
-        return hf_hub_download(
-            repo_id=base_path, revision=revision, filename=filename,
-            local_files_only=True,
-        )
+        return hf_hub_download(repo_id=base_path, revision=revision, filename=filename, local_files_only=True)
     except LocalEntryNotFoundError:
         pass
 
     # Tier 3: network download (first-ever fetch)
-    logger.info(f"Downloading '{filename}' from HuggingFace repo '{base_path}' "
-                f"(not found in local cache).")
-    return hf_hub_download(
-        repo_id=base_path, revision=revision, filename=filename,
-    )
+    logger.info(f"Downloading '{filename}' from HuggingFace repo '{base_path}' (not found in local cache).")
+    return hf_hub_download(repo_id=base_path, revision=revision, filename=filename)
 
 
 def enable_hf_transfer():
@@ -104,7 +96,7 @@ def initialize_dummy_weights(model: torch.nn.Module, low: float = -1e-3, high: f
 class HParams:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
-            if type(v) == dict:
+            if type(v) is dict:
                 v = HParams(**v)
             self[k] = v
 

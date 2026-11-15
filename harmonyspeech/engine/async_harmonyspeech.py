@@ -18,9 +18,7 @@ ENGINE_ITERATION_TIMEOUT_S = int(os.environ.get("HARMONYSPEECH_ENGINE_ITERATION_
 # touching the loop. A timeout here means the step machinery itself is stuck;
 # it is tolerated a few times before the engine is considered dead, so one slow
 # step cannot kill the server (Phase 0-5).
-ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS = int(
-    os.environ.get("HARMONYSPEECH_ENGINE_MAX_CONSECUTIVE_TIMEOUTS", "3")
-)
+ENGINE_MAX_CONSECUTIVE_ITERATION_TIMEOUTS = int(os.environ.get("HARMONYSPEECH_ENGINE_MAX_CONSECUTIVE_TIMEOUTS", "3"))
 
 
 class AsyncEngineDeadError(RuntimeError):
@@ -430,10 +428,7 @@ class AsyncHarmonySpeech:
         # client output, but the loop must keep stepping or the row would stall
         # until a new request arrived. Any remaining waiting/running work counts
         # as "in progress" (the same predicate the outer loop uses).
-        return bool(
-            (len(request_outputs) + len(forwarded_requests)) > 0
-            or self.engine.has_unfinished_requests()
-        )
+        return bool((len(request_outputs) + len(forwarded_requests)) > 0 or self.engine.has_unfinished_requests())
 
     async def _engine_abort(self, request_ids: Iterable[str]):
         self.engine.abort_request(request_ids)
@@ -509,9 +504,8 @@ class AsyncHarmonySpeech:
             # Log TTS request
             if isinstance(request_data, TextToSpeechRequestInput):
                 shortened_input = request_data.input_text
-                if self.max_log_len is not None:
-                    if shortened_input is not None:
-                        shortened_input = shortened_input[: self.max_log_len]
+                if self.max_log_len is not None and shortened_input is not None:
+                    shortened_input = shortened_input[: self.max_log_len]
                 logger.info(f"Received text-to-speech request {request_id}: input: {shortened_input!r}.")
 
             # Log Embedding request

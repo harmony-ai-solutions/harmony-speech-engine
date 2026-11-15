@@ -102,9 +102,7 @@ def _tts_request(request_id="state-tts-001", input_audio=None, input_embedding=N
 
 def _speaker_for_audio(audio: bytes) -> SpeakerArtifact:
     waveform, sample_rate = audio_codec.decode_audio(audio)
-    return SpeakerArtifact(
-        reference_audio=AudioArtifact.from_numpy(waveform, sample_rate), backend="chatterbox"
-    )
+    return SpeakerArtifact(reference_audio=AudioArtifact.from_numpy(waveform, sample_rate), backend="chatterbox")
 
 
 def _tts_params(speaker=None):

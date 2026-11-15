@@ -47,10 +47,7 @@ ROOMY_BUDGET = 1_000_000
 def _fake_hf_config():
     return types.SimpleNamespace(
         data=types.SimpleNamespace(
-            sampling_rate=SAMPLE_RATE,
-            filter_length=FILTER_LENGTH,
-            hop_length=HOP_LENGTH,
-            win_length=WIN_LENGTH,
+            sampling_rate=SAMPLE_RATE, filter_length=FILTER_LENGTH, hop_length=HOP_LENGTH, win_length=WIN_LENGTH
         )
     )
 
@@ -124,9 +121,10 @@ def _request(request_id: str) -> EngineRequest:
 
 
 def _run(runner, inputs, requests):
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         return runner._execute_openvoice_tone_converter(inputs, requests)
 
 
@@ -188,11 +186,7 @@ class _SignatureToneConverter:
     def voice_conversion(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
         frames = int(y_lengths[0])
         self.loop_calls.append(frames)
-        return (
-            torch.full((1, 1, frames * SPF), self._signature(y[0], sid_src[0])),
-            torch.ones(1, 1, frames),
-            None,
-        )
+        return (torch.full((1, 1, frames * SPF), self._signature(y[0], sid_src[0])), torch.ones(1, 1, frames), None)
 
     def voice_conversion_batched(self, y, y_lengths, sid_src, sid_tgt, tau=1.0):
         frames = [int(value) for value in y_lengths]
@@ -334,12 +328,7 @@ def test_tone_converter_poisoned_request_errors_alone():
     with torch.no_grad():
         results = _run(runner, clips, requests)
 
-    assert [result.result_data.finish_reason for result in results] == [
-        "stop",
-        "error",
-        "stop",
-        "stop",
-    ]
+    assert [result.result_data.finish_reason for result in results] == ["stop", "error", "stop", "stop"]
     assert "missing embedding tensor" in results[1].result_data.error
     # The poisoned row failed inside the sub-batch, so that sub-batch degraded to
     # the per-item loop; the healthy requests were computed there.

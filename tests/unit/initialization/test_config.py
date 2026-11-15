@@ -211,11 +211,7 @@ EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
         "max_batch_size": "sub-batch width",
         "knobs": ("batched_inference", "batch_token_budget"),
     },
-    "loop": {
-        "execution": "per-request sequential",
-        "max_batch_size": "must be 1",
-        "knobs": (),
-    },
+    "loop": {"execution": "per-request sequential", "max_batch_size": "must be 1", "knobs": ()},
     "loop_admission": {
         # Phase 11-0 (dated decision 2026-11-08): execution is still one request
         # at a time, but the executor may be handed several per engine step.
@@ -225,11 +221,7 @@ EXECUTION_CLASS_SEMANTICS: dict[str, dict] = {
         "max_batch_size": "admission depth",
         "knobs": (),
     },
-    "queue_depth": {
-        "execution": "admission/backpressure only",
-        "max_batch_size": "queue depth",
-        "knobs": (),
-    },
+    "queue_depth": {"execution": "admission/backpressure only", "max_batch_size": "queue depth", "knobs": ()},
     "lanes_windows": {
         "execution": "M parallel lanes; Whisper adds opt-in cross-request window batches",
         "max_batch_size": "admission/lane depth",
@@ -400,9 +392,7 @@ def test_ar_decode_members_are_the_chatterbox_en_turbo_and_multilingual_roles():
     assert ar_members == set(AR_DECODE_MEMBERS)
     for config_name in ("config.gpu.yml", "config.yml"):
         entries = [
-            entry
-            for entry in _shipped_config(config_name)["model_configs"]
-            if entry["model_type"] in AR_DECODE_MEMBERS
+            entry for entry in _shipped_config(config_name)["model_configs"] if entry["model_type"] in AR_DECODE_MEMBERS
         ]
         assert entries, config_name
         for entry in entries:
@@ -458,9 +448,7 @@ def test_whisper_is_lanes_windows_with_its_real_knobs(config_name):
     from harmonyspeech.task_handler.whisper_batching import WHISPER_WINDOW_BATCH_SIZE
 
     entries = [
-        entry
-        for entry in _shipped_config(config_name)["model_configs"]
-        if entry["model_type"] == "FasterWhisper"
+        entry for entry in _shipped_config(config_name)["model_configs"] if entry["model_type"] == "FasterWhisper"
     ]
     assert entries, config_name
     for entry in entries:
@@ -558,24 +546,15 @@ def test_shipped_s3gen_precision_matches_owner_flip(config_name):
     Chatterbox S3Gen-vocode families ship ``float16`` autocast on GPU; the
     embedding role (no S3Gen) and the CPU config stay unset (float32)."""
     entries = _shipped_config(config_name)["model_configs"]
-    fp16_expected_gpu = {
-        "chatterbox",
-        "chatterbox_turbo",
-        "chatterbox_multilingual",
-        "chatterbox_vc",
-    }
+    fp16_expected_gpu = {"chatterbox", "chatterbox_turbo", "chatterbox_multilingual", "chatterbox_vc"}
     for entry in entries:
         name = entry["name"]
         effective = entry.get("s3gen_precision", "float32")
         if config_name == "config.gpu.yml":
             expected = "float16" if name in fp16_expected_gpu else "float32"
-            assert effective == expected, (
-                f"{config_name}: {name} s3gen_precision must be {expected}, got {effective}"
-            )
+            assert effective == expected, f"{config_name}: {name} s3gen_precision must be {expected}, got {effective}"
         else:
-            assert effective == "float32", (
-                f"{config_name}: {name} must not set s3gen_precision (CPU stays float32)"
-            )
+            assert effective == "float32", f"{config_name}: {name} must not set s3gen_precision (CPU stays float32)"
 
 
 @pytest.mark.unit

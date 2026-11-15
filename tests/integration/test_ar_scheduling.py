@@ -60,11 +60,7 @@ def _model_config(name: str = AR_MODEL, model_type: str = AR_TYPE, max_batch_siz
 
 def _tts_request(request_id: str, model: str = AR_MODEL) -> TextToSpeechRequestInput:
     return TextToSpeechRequestInput(
-        request_id=request_id,
-        requested_model=model,
-        model=model,
-        input_text="hello",
-        mode="single_speaker_tts",
+        request_id=request_id, requested_model=model, model=model, input_text="hello", mode="single_speaker_tts"
     )
 
 
@@ -115,17 +111,13 @@ class StubARExecutor:
                 continue
             if tokens >= self.steps:
                 self.slots.pop(request_id).release()
-                output = TextToSpeechRequestOutput(
-                    request_id=request_id, text="hello", output="", finish_reason="stop"
-                )
+                output = TextToSpeechRequestOutput(request_id=request_id, text="hello", output="", finish_reason="stop")
                 # Optional final progress so the counters include the last token.
                 output.progress = {"tokens": tokens, "step": tokens}
                 self.tokens.pop(request_id, None)
                 results.append(ExecutorResult(request_id, request.request_data, output))
             else:
-                output = UnfinishedRequestOutput(
-                    request_id=request_id, progress={"tokens": tokens, "step": tokens}
-                )
+                output = UnfinishedRequestOutput(request_id=request_id, progress={"tokens": tokens, "step": tokens})
                 results.append(ExecutorResult(request_id, request.request_data, output))
         return results
 
@@ -154,13 +146,7 @@ def _install_arena(engine: HarmonySpeechEngine, config: ModelConfig, slots: int 
     pool = ARCachePool(budget_bytes=ARENA_BUDGET, device="cpu")
     pool.register(
         ARCacheDescriptor(
-            model_key=config.name,
-            layers=1,
-            kv_heads=1,
-            head_dim=1,
-            dtype=torch.float32,
-            cap_tokens=8,
-            slots=slots,
+            model_key=config.name, layers=1, kv_heads=1, head_dim=1, dtype=torch.float32, cap_tokens=8, slots=slots
         )
     )
     engine.ar_cache_pool = pool
@@ -171,10 +157,7 @@ def _build_engine(*, steps: int = 3, poison_at: str | None = None, max_batch_siz
     config = _model_config(max_batch_size=max_batch_size)
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
         engine = HarmonySpeechEngine(
-            model_configs=[config],
-            log_stats=False,
-            ar_cache_enabled=True,
-            ar_cache_budget_bytes=ARENA_BUDGET,
+            model_configs=[config], log_stats=False, ar_cache_enabled=True, ar_cache_budget_bytes=ARENA_BUDGET
         )
     pool = _install_arena(engine, config, slots=slots)
     executor = StubARExecutor(pool, steps=steps, poison_at=poison_at)
@@ -203,13 +186,7 @@ def _drive(engine: HarmonySpeechEngine, max_steps: int = 20) -> dict[str, list]:
 def test_ar_capacity_admission_composes_slots_and_max_batch_size():
     scheduler = Scheduler(
         [_model_config(max_batch_size=4)],
-        ar_admission=lambda name: {
-            "enabled": True,
-            "slots": 2,
-            "slots_active": 1,
-            "slots_free": 1,
-            "active_rows": 1,
-        },
+        ar_admission=lambda name: {"enabled": True, "slots": 2, "slots_active": 1, "slots_free": 1, "active_rows": 1},
     )
     running = _engine_request("running")
     running.set_running()
@@ -230,13 +207,7 @@ def test_ar_capacity_admission_composes_slots_and_max_batch_size():
 def test_non_ar_model_keeps_boolean_admission_with_ar_capacity_injected():
     scheduler = Scheduler(
         [_model_config(name="synth", model_type="KittenTTSSynthesizer", max_batch_size=4)],
-        ar_admission=lambda name: {
-            "enabled": True,
-            "slots": 8,
-            "slots_active": 1,
-            "slots_free": 7,
-            "active_rows": 1,
-        },
+        ar_admission=lambda name: {"enabled": True, "slots": 8, "slots_active": 1, "slots_free": 7, "active_rows": 1},
     )
     running = _engine_request("running", model="synth")
     running.set_running()
@@ -472,10 +443,7 @@ async def test_async_engine_step_keeps_looping_on_unfinished_progress():
     config = _model_config()
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
         engine = _AsyncHarmonySpeech(
-            model_configs=[config],
-            log_stats=False,
-            ar_cache_enabled=True,
-            ar_cache_budget_bytes=ARENA_BUDGET,
+            model_configs=[config], log_stats=False, ar_cache_enabled=True, ar_cache_budget_bytes=ARENA_BUDGET
         )
     pool = _install_arena(engine, config)
     executor = StubARExecutor(pool, steps=2)

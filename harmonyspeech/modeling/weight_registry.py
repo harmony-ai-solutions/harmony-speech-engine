@@ -134,10 +134,7 @@ class WeightRegistry:
                 self._assert_consistent(key, module)
                 self._store[key] = module
                 self._refs[key] = 0
-                logger.info(
-                    f"Loaded shared backbone {_key_text(key)} "
-                    f"({module_nbytes(module) / float(2**20):.1f} MiB)"
-                )
+                logger.info(f"Loaded shared backbone {_key_text(key)} ({module_nbytes(module) / float(2**20):.1f} MiB)")
             else:
                 self._assert_consistent(key, module)
             self._refs[key] += 1
@@ -202,15 +199,8 @@ class WeightRegistry:
             for key, module in self._store.items():
                 size = module_nbytes(module)
                 total_bytes += size
-                components[_key_text(key)] = {
-                    "refs": self._refs.get(key, 0),
-                    "bytes": size,
-                }
-            return {
-                "entries": len(self._store),
-                "total_bytes": total_bytes,
-                "components": components,
-            }
+                components[_key_text(key)] = {"refs": self._refs.get(key, 0), "bytes": size}
+            return {"entries": len(self._store), "total_bytes": total_bytes, "components": components}
 
     # -- invariants ------------------------------------------------------
     @staticmethod

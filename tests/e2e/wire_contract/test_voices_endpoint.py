@@ -50,14 +50,7 @@ EXPECTED_PACK = [
     "Thomas",
 ]
 
-ENTRY_FIELDS = {
-    "model",
-    "object",
-    "model_type",
-    "cloning_capable",
-    "vc_target_kind",
-    "voices",
-}
+ENTRY_FIELDS = {"model", "object", "model_type", "cloning_capable", "vc_target_kind", "voices"}
 VOICE_FIELDS = {"name", "source", "languages"}
 
 
@@ -77,18 +70,8 @@ def _configs():
     return [
         _config("faster-whisper", "FasterWhisper"),
         _config("ov1-encoder", "OpenVoiceV1ToneConverterEncoder", language="EN"),
-        _config(
-            "ov1-synth-en",
-            "OpenVoiceV1Synthesizer",
-            language="EN",
-            voices=["default", "friendly"],
-        ),
-        _config(
-            "ov1-synth-zh",
-            "OpenVoiceV1Synthesizer",
-            language="ZH",
-            voices=["default"],
-        ),
+        _config("ov1-synth-en", "OpenVoiceV1Synthesizer", language="EN", voices=["default", "friendly"]),
+        _config("ov1-synth-zh", "OpenVoiceV1Synthesizer", language="ZH", voices=["default"]),
         _config("ov1-tone-converter", "OpenVoiceV1ToneConverter"),
         _config("melo", "MeloTTSSynthesizer", language="EN", voices=["EN-Newest"]),
         _config("kitten", "KittenTTSSynthesizer", voices=["Bella", "Jasper"]),
@@ -150,11 +133,7 @@ def test_full_list_shape_is_model_list_consistent(wire):
         assert set(entry) == ENTRY_FIELDS, entry["model"]
         assert entry["object"] in {"model", "toolchain"}
         assert isinstance(entry["cloning_capable"], bool)
-        assert entry["vc_target_kind"] in {
-            None,
-            "target_audio",
-            "target_embedding",
-        }
+        assert entry["vc_target_kind"] in {None, "target_audio", "target_embedding"}
         for voice in entry["voices"]:
             assert set(voice) == VOICE_FIELDS, entry["model"]
             assert voice["source"] in {"native", "standard"}
@@ -225,12 +204,7 @@ def test_source_labels_are_honest_per_model_type(wire):
     assert entries["kitten"]["voices"][0]["languages"] == ["default"]
 
     # Cloning families: pack names, no native presets of their own.
-    for model in (
-        "chatterbox",
-        "chatterbox_turbo",
-        "chatterbox_multilingual",
-        "chatterbox_vc",
-    ):
+    for model in ("chatterbox", "chatterbox_turbo", "chatterbox_multilingual", "chatterbox_vc"):
         entry = entries[model]
         assert entry["cloning_capable"] is True
         assert _native(entry) == []

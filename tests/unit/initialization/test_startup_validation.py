@@ -104,10 +104,7 @@ def test_engine_exposes_available_families_and_warns(loguru_records):
     from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 
     engine = HarmonySpeechEngine.__new__(HarmonySpeechEngine)
-    engine.model_configs = [
-        _cfg("stt", "FasterWhisper"),
-        _cfg("ov2-synthesizer-en", "MeloTTSSynthesizer"),
-    ]
+    engine.model_configs = [_cfg("stt", "FasterWhisper"), _cfg("ov2-synthesizer-en", "MeloTTSSynthesizer")]
 
     available = engine._validate_family_configuration()
 
@@ -125,10 +122,7 @@ def test_engine_exposes_available_families_and_warns(loguru_records):
 
 @pytest.mark.unit
 def test_model_cards_omit_incomplete_family():
-    configs = [
-        _cfg("ov2-synthesizer-en", "MeloTTSSynthesizer"),
-        _cfg("ov2-tone-converter", "OpenVoiceV2ToneConverter"),
-    ]
+    configs = [_cfg("ov2-synthesizer-en", "MeloTTSSynthesizer"), _cfg("ov2-tone-converter", "OpenVoiceV2ToneConverter")]
 
     cards = OpenAIServingTextToSpeech.models_from_config(configs)
     card_ids = {card.id for card in cards}

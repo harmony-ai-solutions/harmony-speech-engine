@@ -48,10 +48,7 @@ from harmonyspeech.endpoints.openai.streaming import (
     SSE_MEDIA_TYPE,
     pcm16_frame,
 )
-from harmonyspeech.endpoints.openai.streaming_metrics import (
-    get_stream_stats,
-    reset_stream_metrics,
-)
+from harmonyspeech.endpoints.openai.streaming_metrics import get_stream_stats, reset_stream_metrics
 from tests.wire_contract_support import WireApp
 
 pytestmark = pytest.mark.e2e
@@ -69,13 +66,7 @@ def live_wire():
         sock.bind(("127.0.0.1", 0))
         sock.listen(2048)
         port = sock.getsockname()[1]
-        config = uvicorn.Config(
-            wire.app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            lifespan="off",
-        )
+        config = uvicorn.Config(wire.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
         server = uvicorn.Server(config)
         thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
         thread.start()
@@ -99,11 +90,7 @@ def client(live_wire):
 
 
 def _tts_payload(**overrides):
-    payload = {
-        "model": WireApp.MODEL_IDS["tts"],
-        "mode": "single_speaker_tts",
-        "input": "hello world",
-    }
+    payload = {"model": WireApp.MODEL_IDS["tts"], "mode": "single_speaker_tts", "input": "hello world"}
     payload.update(overrides)
     return payload
 
@@ -122,9 +109,7 @@ def _parse_sse(text: str) -> list[tuple[str, object]]:
         if data == "[DONE]":
             blocks.append(("done-frame", None))
             continue
-        event = next(
-            (line[len("event: ") :] for line in lines if line.startswith("event: ")), None
-        )
+        event = next((line[len("event: ") :] for line in lines if line.startswith("event: ")), None)
         blocks.append((event, json.loads(data)))
     return blocks
 
@@ -160,9 +145,7 @@ def _metric_value(text: str, name: str, **labels) -> float | None:
 
 def test_binary_wav_stream_is_chunked_without_content_length(client):
     with client.stream(
-        "POST",
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "audio", "format": "wav"}),
+        "POST", "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "audio", "format": "wav"})
     ) as response:
         assert response.status_code == 200
         assert response.headers.get("transfer-encoding", "").lower() == "chunked"
@@ -201,9 +184,7 @@ def test_binary_pcm_stream_is_headerless_at_the_target_rate(client):
     with client.stream(
         "POST",
         "/v1/audio/speech",
-        json=_tts_payload(
-            output_options={"stream_format": "audio", "format": "pcm", "sample_rate": 16000}
-        ),
+        json=_tts_payload(output_options={"stream_format": "audio", "format": "pcm", "sample_rate": 16000}),
     ) as response:
         assert response.status_code == 200
         assert response.headers.get("transfer-encoding", "").lower() == "chunked"
@@ -229,9 +210,7 @@ def test_binary_wav_header_carries_the_target_rate_under_resampling(client):
     with client.stream(
         "POST",
         "/v1/audio/speech",
-        json=_tts_payload(
-            output_options={"stream_format": "audio", "format": "wav", "sample_rate": 8000}
-        ),
+        json=_tts_payload(output_options={"stream_format": "audio", "format": "wav", "sample_rate": 8000}),
     ) as response:
         assert response.status_code == 200
         body = b"".join(response.iter_raw())
@@ -248,9 +227,7 @@ def test_binary_wav_header_carries_the_target_rate_under_resampling(client):
 
 def test_sse_stream_event_contract(client):
     with client.stream(
-        "POST",
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"}),
+        "POST", "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"})
     ) as response:
         assert response.status_code == 200
         assert response.headers["content-type"] == SSE_MEDIA_TYPE
@@ -290,9 +267,7 @@ def test_sse_stream_event_contract(client):
 def test_sse_parser_tolerates_a_keepalive_comment(client):
     """A ``:`` comment anywhere must not disturb event parsing."""
     with client.stream(
-        "POST",
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"}),
+        "POST", "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"})
     ) as response:
         body = "".join(response.iter_text())
 
@@ -317,9 +292,7 @@ def test_sse_emits_a_real_keepalive_before_the_first_delta(client, live_wire, mo
     monkeypatch.setattr(wire.engine, "add_request", slow_add_request)
 
     with client.stream(
-        "POST",
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"}),
+        "POST", "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"})
     ) as response:
         body = "".join(response.iter_text())
 
@@ -340,8 +313,7 @@ def test_sse_emits_a_real_keepalive_before_the_first_delta(client, live_wire, mo
 @pytest.mark.parametrize("fmt", ["mp3", "flac"])
 def test_stream_with_a_whole_buffer_format_is_a_400(client, fmt):
     response = client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "audio", "format": fmt}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "audio", "format": fmt})
     )
     assert response.status_code == 400
     message = response.json()["message"]
@@ -349,32 +321,20 @@ def test_stream_with_a_whole_buffer_format_is_a_400(client, fmt):
 
 
 def test_alias_and_explicit_stream_format_have_identical_admission(client):
-    alias = client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream": True, "format": "mp3"}),
-    )
+    alias = client.post("/v1/audio/speech", json=_tts_payload(output_options={"stream": True, "format": "mp3"}))
     explicit = client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "audio", "format": "mp3"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "audio", "format": "mp3"})
     )
     assert alias.status_code == explicit.status_code == 400
     assert alias.json()["message"] == explicit.json()["message"]
 
 
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("trim_silence", True),
-        ("fix_internal_silence", True),
-        ("speed", 1.5),
-    ],
-)
+@pytest.mark.parametrize(("option", "value"), [("trim_silence", True), ("fix_internal_silence", True), ("speed", 1.5)])
 def test_whole_buffer_generation_options_are_400s_naming_the_restriction(client, option, value):
     response = client.post(
         "/v1/audio/speech",
         json=_tts_payload(
-            output_options={"stream_format": "audio", "format": "wav"},
-            generation_options={option: value},
+            output_options={"stream_format": "audio", "format": "wav"}, generation_options={option: value}
         ),
     )
     assert response.status_code == 400
@@ -417,9 +377,7 @@ def test_metrics_series_are_present_and_move_after_a_stream(client):
     assert _metric_value(idle, "hse_tts_stream_bytes_total") == 0
 
     with client.stream(
-        "POST",
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "audio", "format": "pcm"}),
+        "POST", "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "audio", "format": "pcm"})
     ) as response:
         assert response.status_code == 200
         b"".join(response.iter_raw())

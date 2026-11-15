@@ -9,14 +9,12 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Hashable
 from functools import cache, partial
 from platform import uname
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 import psutil
 import torch
 from loguru import logger
 from packaging.version import Version, parse
-
-T = TypeVar("T")
 
 STR_DTYPE_TO_TORCH_DTYPE = {"half": torch.half, "bfloat16": torch.bfloat16, "float": torch.float, "fp8": torch.uint8}
 
@@ -39,7 +37,7 @@ class Counter:
         self.counter = 0
 
 
-class LRUCache(Generic[T]):
+class LRUCache[T]:
     def __init__(self, capacity: int):
         self.cache = OrderedDict[Hashable, T]()
         self.capacity = capacity
@@ -130,7 +128,7 @@ def in_wsl() -> bool:
     return "microsoft" in " ".join(uname()).lower()
 
 
-def make_async(func: Callable[..., T]) -> Callable[..., Awaitable[T]]:
+def make_async[T](func: Callable[..., T]) -> Callable[..., Awaitable[T]]:
     """Take a blocking function, and run it on in an executor thread.
 
     This function prevents the blocking function from blocking the

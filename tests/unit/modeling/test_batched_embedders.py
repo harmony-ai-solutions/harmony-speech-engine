@@ -34,10 +34,7 @@ def _reference_encoder(seed: int = 0) -> ReferenceEncoder:
 def _speaker_encoder(seed: int = 0, layers: int = 2) -> SpeakerEncoder:
     torch.manual_seed(seed)
     return SpeakerEncoder(
-        mel_n_channels=MEL_CHANNELS,
-        model_hidden_size=5,
-        model_num_layers=layers,
-        model_embedding_size=4,
+        mel_n_channels=MEL_CHANNELS, model_hidden_size=5, model_num_layers=layers, model_embedding_size=4
     ).eval()
 
 

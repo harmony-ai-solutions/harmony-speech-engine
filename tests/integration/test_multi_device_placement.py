@@ -13,6 +13,7 @@ Two layers:
   suite stays hermetic.
 """
 
+import contextlib
 import os
 
 import pytest
@@ -45,10 +46,8 @@ def _expose_cudnn8_shim() -> None:
     for sub in ("cudnn\\bin", "cublas\\bin", "cuda_nvrtc\\bin"):
         path = os.path.join(base, sub)
         if os.path.isdir(path):
-            try:
+            with contextlib.suppress(OSError):  # pragma: no cover - platform-specific
                 os.add_dll_directory(path)
-            except OSError:  # pragma: no cover - platform-specific
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -72,9 +71,7 @@ def test_pool_keeps_one_budget_per_device():
     pool = ARCachePool(budget_bytes=2 * slab, device="cpu")
     pool.register(descriptor, device="cpu")
     pool.register(
-        ARCacheDescriptor(
-            model_key="b", layers=2, kv_heads=2, head_dim=4, dtype=torch.float32, cap_tokens=8, slots=1
-        ),
+        ARCacheDescriptor(model_key="b", layers=2, kv_heads=2, head_dim=4, dtype=torch.float32, cap_tokens=8, slots=1),
         device="meta",
     )
     assert pool.remaining_bytes_for("cpu") == slab
@@ -147,22 +144,14 @@ def test_real_chatterbox_on_cuda1_with_arena_and_grants():
     #    runner must still register on cuda:1 instead of disabling itself.
     pool = ARCachePool(budget_bytes=4 * 1024**3, device="cuda:0", default_cap_tokens=768)
     runner = ARBatchRunner(
-        t3=model.t3,
-        pool=pool,
-        model_key=config.name,
-        model_config=config,
-        model_type=config.model_type,
+        t3=model.t3, pool=pool, model_key=config.name, model_config=config, model_type=config.model_type
     )
     assert runner.register() is True, runner._registration_error
     assert torch.device(runner.arena.device).index == 1, f"arena on {runner.arena.device}"
 
     # 3) A real decode step grants slots on cuda:1 and advances rows.
     row = runner.begin(
-        "cuda1-row",
-        conds=model.conds,
-        text_tokens=english_text_tokens(model, "Hello there."),
-        seed=0,
-        max_new_tokens=8,
+        "cuda1-row", conds=model.conds, text_tokens=english_text_tokens(model, "Hello there."), seed=0, max_new_tokens=8
     )
     assert row is not None
     for _ in range(12):

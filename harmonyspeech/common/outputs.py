@@ -75,18 +75,9 @@ class UnfinishedRequestOutput(RequestOutput):
     because an error result also carries ``finish_reason``.
     """
 
-    def __init__(
-        self,
-        request_id: str,
-        progress: dict | None = None,
-        metrics: RequestMetrics | None = None,
-    ) -> None:
+    def __init__(self, request_id: str, progress: dict | None = None, metrics: RequestMetrics | None = None) -> None:
         super().__init__(
-            request_id=request_id,
-            finish_reason=None,
-            metrics=metrics,
-            unfinished=True,
-            progress=dict(progress or {}),
+            request_id=request_id, finish_reason=None, metrics=metrics, unfinished=True, progress=dict(progress or {})
         )
 
     def __repr__(self) -> str:

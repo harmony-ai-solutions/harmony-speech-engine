@@ -32,9 +32,7 @@ from harmonyspeech.common import audio_codec
 from harmonyspeech.common.audio_utils import crossfade_stitch
 from harmonyspeech.endpoints.openai import serving_text_to_speech as serving_module
 from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions, ErrorResponse
-from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-    StreamingAudioResponse,
-)
+from harmonyspeech.endpoints.openai.serving_text_to_speech import StreamingAudioResponse
 from harmonyspeech.endpoints.openai.streaming import (
     HEADER_ACCEL_BUFFERING,
     HEADER_AUDIO_BITS,
@@ -61,14 +59,7 @@ from tests.integration.test_tts_chunking import (
     _request,
     _speak,
 )
-from tests.integration.test_tts_streaming import (
-    CHUNK_SIZE,
-    SENTENCE_A,
-    SENTENCE_B,
-    SENTENCE_C,
-    TEXT_3,
-    _chunk_waveform,
-)
+from tests.integration.test_tts_streaming import CHUNK_SIZE, SENTENCE_A, SENTENCE_B, SENTENCE_C, TEXT_3, _chunk_waveform
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,9 +93,7 @@ def _parse_sse(text: str) -> list[tuple[str, object]]:
         if data == "[DONE]":
             blocks.append(("done-frame", None))
             continue
-        event = next(
-            (line[len("event: ") :] for line in lines if line.startswith("event: ")), None
-        )
+        event = next((line[len("event: ") :] for line in lines if line.startswith("event: ")), None)
         blocks.append((event, json.loads(data)))
     return blocks
 
@@ -163,9 +152,7 @@ async def test_sse_stream_orders_deltas_done_then_done_frame():
     assert done["format"] == "pcm"
     assert done["sample_rate"] == SAMPLE_RATE
     assert done["chunks"] == len(_deltas(events))
-    assert [delta["chunk_index"] for delta in _deltas(events)] == list(
-        range(len(_deltas(events)))
-    )
+    assert [delta["chunk_index"] for delta in _deltas(events)] == list(range(len(_deltas(events))))
     # ``usage`` is extended additively.
     assert done["usage"]["input_characters"] == len(text)
     assert done["usage"]["audio_seconds"] == pytest.approx(done["duration_s"])
@@ -183,9 +170,7 @@ async def test_delta_audio_round_trips_to_the_exact_pcm_bytes():
 
     events = _parse_sse(body)
     assert _delta_pcm(events) == pcm16_frame(_chunk_waveform(text), SAMPLE_RATE)
-    assert _done(events)["duration_s"] == pytest.approx(
-        _chunk_waveform(text).size / SAMPLE_RATE
-    )
+    assert _done(events)["duration_s"] == pytest.approx(_chunk_waveform(text).size / SAMPLE_RATE)
 
 
 @pytest.mark.integration
@@ -193,13 +178,7 @@ async def test_delta_audio_round_trips_to_the_exact_pcm_bytes():
 async def test_multi_chunk_sse_stream_matches_the_whole_buffer_stitch():
     """The envelope wraps the same generator: ordering + slicing are identical."""
     harness, model = _chatterbox_harness()
-    request = _sse_request(
-        TEXT_3,
-        split_text=True,
-        chunk_size=CHUNK_SIZE,
-        crossfade_ms=8,
-        sentence_pause_ms=40,
-    )
+    request = _sse_request(TEXT_3, split_text=True, chunk_size=CHUNK_SIZE, crossfade_ms=8, sentence_pause_ms=40)
     async with harness:
         response = await _speak(harness, request)
         body = await _collect(response)
@@ -291,9 +270,7 @@ async def test_error_after_deltas_emits_exactly_one_error_and_no_done():
     # = "FAIL." — it fails only after chunk 0's delta is on the wire.
     text = f"{SENTENCE_A} FAIL. {SENTENCE_B}"
     async with harness:
-        response = await _speak(
-            harness, _sse_request(text, split_text=True, chunk_size=87)
-        )
+        response = await _speak(harness, _sse_request(text, split_text=True, chunk_size=87))
         assert isinstance(response, StreamingAudioResponse), response
         body = await _collect(response)
 
@@ -342,10 +319,7 @@ async def test_keepalive_before_the_first_delta_and_between_deltas(monkeypatch):
     model = ChatterboxStubModel()
     harness = EngineHarness([config], {"chatterbox": model}, executor_delay_s=0.05)
     async with harness:
-        response = await _speak(
-            harness,
-            _sse_request(TEXT_3, split_text=True, chunk_size=CHUNK_SIZE),
-        )
+        response = await _speak(harness, _sse_request(TEXT_3, split_text=True, chunk_size=CHUNK_SIZE))
         assert isinstance(response, StreamingAudioResponse), response
         # Priming: the first frame is a keepalive, so the connection is already
         # warm (and committed) while chunk 0 synthesises.

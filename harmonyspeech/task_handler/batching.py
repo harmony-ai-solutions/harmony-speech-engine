@@ -144,7 +144,6 @@ def ar_batching_enabled(model_config) -> bool:
     return True if flag is None else bool(flag)
 
 
-
 def batched_inference_enabled(model_config) -> bool:
     """Resolve the per-model ``batched_inference`` flag.
 
@@ -219,10 +218,7 @@ def pad_phone_batch(sequences, pad_id: int = 0, device=None) -> tuple[torch.Tens
 
 
 def pad_feature_batch(
-    features,
-    pad_value: float = 0.0,
-    device=None,
-    return_lengths: bool = False,
+    features, pad_value: float = 0.0, device=None, return_lengths: bool = False
 ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Pad ``[D, T]`` feature matrices (e.g. BERT or mel features) to ``[B, D, T_max]``.
 
@@ -238,16 +234,10 @@ def pad_feature_batch(
     channels = features[0].shape[0]
     frame_lengths = [int(feature.shape[-1]) for feature in features]
     max_len = max(frame_lengths)
-    padded = torch.full(
-        (len(features), channels, max_len),
-        float(pad_value),
-        dtype=features[0].dtype,
-    )
+    padded = torch.full((len(features), channels, max_len), float(pad_value), dtype=features[0].dtype)
     for row, feature in enumerate(features):
         if int(feature.shape[0]) != channels:
-            raise ValueError(
-                f"pad_feature_batch: inconsistent channel count {feature.shape[0]} vs {channels}"
-            )
+            raise ValueError(f"pad_feature_batch: inconsistent channel count {feature.shape[0]} vs {channels}")
         padded[row, :, : frame_lengths[row]] = feature.to(device="cpu")
     if device is not None:
         padded = padded.to(device)
@@ -257,10 +247,7 @@ def pad_feature_batch(
 
 
 def pad_waveform_batch(
-    waveforms,
-    sample_rates=None,
-    pad_value: float = 0.0,
-    device=None,
+    waveforms, sample_rates=None, pad_value: float = 0.0, device=None
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Pad 1-D waveforms to ``[B, 1, T_max]``; returns ``(padded, sample_lengths)``.
 
@@ -284,29 +271,21 @@ def pad_waveform_batch(
         pairs = list(waveforms)
         for row, item in enumerate(pairs):
             if not isinstance(item, (tuple, list)) or len(item) != 2:
-                raise ValueError(
-                    f"pad_waveform_batch: row {row} is not a (waveform, sample_rate) pair"
-                )
+                raise ValueError(f"pad_waveform_batch: row {row} is not a (waveform, sample_rate) pair")
     else:
         if len(sample_rates) != len(waveforms):
-            raise ValueError(
-                f"pad_waveform_batch: {len(sample_rates)} sample rates for {len(waveforms)} waveforms"
-            )
+            raise ValueError(f"pad_waveform_batch: {len(sample_rates)} sample rates for {len(waveforms)} waveforms")
         pairs = list(zip(waveforms, sample_rates, strict=True))
 
     tensors: list[torch.Tensor] = []
     rates: list[int] = []
     for row, (waveform, rate) in enumerate(pairs):
         if waveform.dim() != 1:
-            raise ValueError(
-                f"pad_waveform_batch: row {row} is {tuple(waveform.shape)}, expected a 1-D waveform"
-            )
+            raise ValueError(f"pad_waveform_batch: row {row} is {tuple(waveform.shape)}, expected a 1-D waveform")
         tensors.append(waveform)
         rates.append(int(rate))
     if len(set(rates)) > 1:
-        raise ValueError(
-            f"pad_waveform_batch: mixed sample rates {sorted(set(rates))}; resample before batching"
-        )
+        raise ValueError(f"pad_waveform_batch: mixed sample rates {sorted(set(rates))}; resample before batching")
 
     lengths = [int(waveform.numel()) for waveform in tensors]
     dtype = tensors[0].dtype
@@ -323,10 +302,7 @@ def pad_waveform_batch(
 
 
 def plan_batches(
-    lengths,
-    max_batch_size: int,
-    token_budget: int | None = None,
-    max_ratio: float = LENGTH_SIMILARITY_RATIO,
+    lengths, max_batch_size: int, token_budget: int | None = None, max_ratio: float = LENGTH_SIMILARITY_RATIO
 ) -> list[list[int]]:
     """Group item indices into padded sub-batches.
 
@@ -376,9 +352,7 @@ def plan_batches(
     return [sorted(group) for group in groups]
 
 
-def default_token_budget(
-    lengths, max_batch_size: int, *, max_budget: int | None = None
-) -> int | None:
+def default_token_budget(lengths, max_batch_size: int, *, max_budget: int | None = None) -> int | None:
     """Per-step padded-area budget: ``max_batch_size × median length``.
 
     Derived from the step's own lengths rather than a fixed constant, so a step
@@ -420,11 +394,7 @@ def collapse_per_sample(values, tolerance: float = 1e-12):
     return floats
 
 
-def trim_decoder_output(
-    output: torch.Tensor,
-    y_lengths: torch.Tensor,
-    hop_length: int,
-) -> list[torch.Tensor]:
+def trim_decoder_output(output: torch.Tensor, y_lengths: torch.Tensor, hop_length: int) -> list[torch.Tensor]:
     """Split a padded decoder output ``[B, 1, T]`` into per-sample waveforms.
 
     ``y_lengths`` are *frame* counts produced by the model (sum of the predicted
@@ -436,9 +406,7 @@ def trim_decoder_output(
         raise ValueError(f"trim_decoder_output: expected [B, C, T], got {tuple(output.shape)}")
     lengths = [int(value) for value in y_lengths]
     if len(lengths) != output.shape[0]:
-        raise ValueError(
-            f"trim_decoder_output: {len(lengths)} lengths for a batch of {output.shape[0]}"
-        )
+        raise ValueError(f"trim_decoder_output: {len(lengths)} lengths for a batch of {output.shape[0]}")
     max_samples = output.shape[-1]
     trimmed = []
     for row, frames in enumerate(lengths):
@@ -451,11 +419,7 @@ def trim_decoder_output(
     return trimmed
 
 
-def trim_feature_output(
-    outputs: torch.Tensor,
-    frame_lengths,
-    dim: int = -1,
-) -> list[torch.Tensor]:
+def trim_feature_output(outputs: torch.Tensor, frame_lengths, dim: int = -1) -> list[torch.Tensor]:
     """Split a padded feature batch into per-item slices using explicit lengths.
 
     ``outputs`` is ``[B, ..., T_max]`` with the batch axis ``0`` and the padded
@@ -473,31 +437,21 @@ def trim_feature_output(
     the padded axis holds.
     """
     if outputs.dim() < 2:
-        raise ValueError(
-            f"trim_feature_output: expected [B, ..., T], got {tuple(outputs.shape)}"
-        )
+        raise ValueError(f"trim_feature_output: expected [B, ..., T], got {tuple(outputs.shape)}")
     time_dim = dim if dim >= 0 else outputs.dim() + dim
     if time_dim <= 0 or time_dim >= outputs.dim():
-        raise ValueError(
-            f"trim_feature_output: time axis {dim} is not a non-batch axis of "
-            f"{tuple(outputs.shape)}"
-        )
+        raise ValueError(f"trim_feature_output: time axis {dim} is not a non-batch axis of {tuple(outputs.shape)}")
     lengths = [int(value) for value in frame_lengths]
     if len(lengths) != outputs.shape[0]:
-        raise ValueError(
-            f"trim_feature_output: {len(lengths)} lengths for a batch of {outputs.shape[0]}"
-        )
+        raise ValueError(f"trim_feature_output: {len(lengths)} lengths for a batch of {outputs.shape[0]}")
     max_frames = outputs.shape[time_dim]
     trimmed = []
     for row, frames in enumerate(lengths):
         frames = max(0, frames)
         if frames > max_frames:
-            raise ValueError(
-                f"trim_feature_output: sample {row} needs {frames} frames, batch holds {max_frames}"
-            )
+            raise ValueError(f"trim_feature_output: sample {row} needs {frames} frames, batch holds {max_frames}")
         index: list[slice | int] = [slice(None)] * outputs.dim()
         index[0] = row
         index[time_dim] = slice(0, frames)
         trimmed.append(outputs[tuple(index)])
     return trimmed
-

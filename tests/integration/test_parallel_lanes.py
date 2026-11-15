@@ -88,11 +88,7 @@ def _tts_request(request_id: str, model: str, text: str) -> EngineRequest:
     return EngineRequest(
         request_id=request_id,
         request_data=TextToSpeechRequestInput(
-            request_id=request_id,
-            requested_model=model,
-            model=model,
-            input_text=text,
-            mode="single_speaker_tts",
+            request_id=request_id, requested_model=model, model=model, input_text=text, mode="single_speaker_tts"
         ),
         arrival_time=0.0,
     )
@@ -168,9 +164,7 @@ def test_eight_concurrent_kitten_requests_pair_outputs_by_request_id():
         output = outputs[request_id][0]
         assert output.finish_reason == "stop"
         assert isinstance(output, TextToSpeechRequestOutput)
-        assert float(output.audio_artifact.waveform[0, 0]) == pytest.approx(
-            _expected_value(text), abs=1e-6
-        )
+        assert float(output.audio_artifact.waveform[0, 0]) == pytest.approx(_expected_value(text), abs=1e-6)
     # One batch of eight reached the model, and the lanes really overlapped.
     assert sorted(model.calls) == sorted(texts.values())
     assert model.peak > 1, "lanes did not run concurrently"
@@ -242,8 +236,7 @@ def test_kitten_lanes_beat_a_sequential_loop():
             float(sequential_result.result_data.audio_artifact.waveform[0, 0]), abs=1e-6
         )
     assert sequential_wall / lane_wall >= 2.0, (
-        f"lanes were only {sequential_wall / lane_wall:.2f}x faster "
-        f"({sequential_wall:.2f}s -> {lane_wall:.2f}s)"
+        f"lanes were only {sequential_wall / lane_wall:.2f}x faster ({sequential_wall:.2f}s -> {lane_wall:.2f}s)"
     )
 
 
@@ -279,11 +272,7 @@ class _CountingPipeline:
 
     def transcribe(self, audio, batch_size=16, **kwargs):
         self.calls.append(
-            {
-                "seconds": len(audio) / 16000.0,
-                "batch_size": batch_size,
-                "cursor_at_entry": self.last_speech_timestamp,
-            }
+            {"seconds": len(audio) / 16000.0, "batch_size": batch_size, "cursor_at_entry": self.last_speech_timestamp}
         )
         # faster-whisper advances this cursor for word timestamps; the handler
         # must reset it per request.
@@ -299,10 +288,7 @@ def _transcribe_request(request_id: str, seconds: float) -> EngineRequest:
     return EngineRequest(
         request_id=request_id,
         request_data=SpeechTranscribeRequestInput(
-            request_id=request_id,
-            requested_model="whisper",
-            model="whisper",
-            input_audio=tiny_wav_b64(16000, seconds),
+            request_id=request_id, requested_model="whisper", model="whisper", input_audio=tiny_wav_b64(16000, seconds)
         ),
         arrival_time=0.0,
     )
@@ -369,12 +355,8 @@ def test_whisper_vad_step_takes_the_same_per_request_path():
     assert sorted(outputs) == ["vad-a", "vad-b"]
     assert all(entries[0].finish_reason == "stop" for entries in outputs.values())
     # A VAD request routed here carries whisper segments, like the STT path.
-    assert [segment["text"] for segment in outputs["vad-a"][0].vad_artifact.segments] == [
-        TRANSCRIPTS["x"]
-    ]
-    assert [segment["text"] for segment in outputs["vad-b"][0].vad_artifact.segments] == [
-        TRANSCRIPTS["y"]
-    ]
+    assert [segment["text"] for segment in outputs["vad-a"][0].vad_artifact.segments] == [TRANSCRIPTS["x"]]
+    assert [segment["text"] for segment in outputs["vad-b"][0].vad_artifact.segments] == [TRANSCRIPTS["y"]]
 
     assert _CountingPipeline.constructed == 1
     pipeline = _CountingPipeline.instances[0]

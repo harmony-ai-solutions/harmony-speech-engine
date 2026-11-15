@@ -101,11 +101,7 @@ PACK_DIR = Path(__file__).resolve().parent.parent / "assets" / "voices"
 #: These are the concrete TTS executors whose ``prepare_inputs`` reads
 #: ``input_audio`` and computes the family's conditionals inline.
 DIRECT_TTS_CLONING_MODEL_TYPES: frozenset[str] = frozenset(
-    {
-        "ChatterboxTTS",
-        "ChatterboxTurboTTS",
-        "ChatterboxMultilingualTTS",
-    }
+    {"ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"}
 )
 
 #: Model types that directly accept a **target** clip on a VC request.
@@ -281,15 +277,11 @@ def vc_target_voice_kind_for_model_type(model_type: str | None) -> str | None:
 
 def _directly_standard_voice_capable(model_config: ModelConfig) -> bool:
     return model_config.model_type in (
-        DIRECT_TTS_CLONING_MODEL_TYPES
-        | DIRECT_VC_TARGET_AUDIO_MODEL_TYPES
-        | DIRECT_VC_TARGET_EMBEDDING_MODEL_TYPES
+        DIRECT_TTS_CLONING_MODEL_TYPES | DIRECT_VC_TARGET_AUDIO_MODEL_TYPES | DIRECT_VC_TARGET_EMBEDDING_MODEL_TYPES
     )
 
 
-def voices_for_model(
-    model_config: ModelConfig, *, include_standard: bool = True
-) -> tuple[VoiceEntry, ...]:
+def voices_for_model(model_config: ModelConfig, *, include_standard: bool = True) -> tuple[VoiceEntry, ...]:
     """Return native entries plus (for capable models) the standard pack names.
 
     ``include_standard=False`` keeps the native entries only. The 13-3 endpoint
@@ -303,9 +295,7 @@ def voices_for_model(
         for name in native_voices(model_config)
     ]
     if include_standard and _directly_standard_voice_capable(model_config):
-        entries.extend(
-            VoiceEntry(name=name, source=_STANDARD) for name in standard_voice_names()
-        )
+        entries.extend(VoiceEntry(name=name, source=_STANDARD) for name in standard_voice_names())
     return tuple(entries)
 
 
@@ -426,11 +416,7 @@ def _merge_catalogs(base: ModelVoiceCatalog, extra: ModelVoiceCatalog) -> ModelV
     )
 
 
-def voice_catalog_listing(
-    model_configs,
-    *,
-    standard_pack_enabled: bool = True,
-) -> tuple[ModelVoiceCatalog, ...]:
+def voice_catalog_listing(model_configs, *, standard_pack_enabled: bool = True) -> tuple[ModelVoiceCatalog, ...]:
     """Return the ``GET /v1/audio/voices`` listing.
 
     Mirrors the model endpoints' presentation: one entry per configured model
@@ -455,9 +441,7 @@ def voice_catalog_listing(
         if config.name in positions:
             continue
         positions[config.name] = len(entries)
-        entries.append(
-            _individual_catalog(configs, config, standard_pack_enabled=standard_pack_enabled)
-        )
+        entries.append(_individual_catalog(configs, config, standard_pack_enabled=standard_pack_enabled))
 
     complete_families = set(validate_families(configs))
     for spec in PIPELINE_SPECS.values():
@@ -511,11 +495,7 @@ def spec_is_tts_cloning_capable(spec) -> bool:
 
 
 def request_model_types(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
-    *,
-    only_configured: bool = False,
+    model_configs, requested_model: str | None, model_name: str | None = None, *, only_configured: bool = False
 ) -> set[str]:
     """Return the model types backing a request.
 
@@ -536,46 +516,29 @@ def request_model_types(
                     continue
                 types.add(model_type)
     name = model_name or requested_model
-    types.update(
-        config.model_type
-        for config in configs
-        if config.name == name and config.model_type
-    )
+    types.update(config.model_type for config in configs if config.name == name and config.model_type)
     return types
 
 
-def request_cloning_capable(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
-) -> bool:
+def request_cloning_capable(model_configs, requested_model: str | None, model_name: str | None = None) -> bool:
     """True when this request target can clone from a reference clip."""
     spec = get_spec(requested_model)
     if spec_is_tts_cloning_capable(spec):
         return True
     name = model_name or requested_model
     return any(
-        config.name == name
-        and config.model_type in DIRECT_TTS_CLONING_MODEL_TYPES
-        for config in (model_configs or ())
+        config.name == name and config.model_type in DIRECT_TTS_CLONING_MODEL_TYPES for config in (model_configs or ())
     )
 
 
-def request_vc_target_audio_capable(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
-) -> bool:
+def request_vc_target_audio_capable(model_configs, requested_model: str | None, model_name: str | None = None) -> bool:
     """True when this VC target consumes a target *clip* (not just embedding)."""
     spec = get_spec(requested_model)
-    if spec is not None and any(
-        "ChatterboxVC" in step.requires for step in spec.steps
-    ):
+    if spec is not None and any("ChatterboxVC" in step.requires for step in spec.steps):
         return True
     name = model_name or requested_model
     return any(
-        config.name == name
-        and config.model_type in DIRECT_VC_TARGET_AUDIO_MODEL_TYPES
+        config.name == name and config.model_type in DIRECT_VC_TARGET_AUDIO_MODEL_TYPES
         for config in (model_configs or ())
     )
 
@@ -621,9 +584,7 @@ def _embed_path_configured(spec, by_type: dict[str, ModelConfig]) -> bool:
 
 
 def resolve_target_embedding_route(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
+    model_configs, requested_model: str | None, model_name: str | None = None
 ) -> TargetEmbeddingRoute | None:
     """Resolve the pipeline + encoder that embeds a VC ``target_voice`` clip.
 
@@ -662,19 +623,14 @@ def resolve_target_embedding_route(
     if not _embed_path_configured(spec, by_type):
         return None
     embed_step = _spec_embed_step(spec)
-    encoder = next(
-        (by_type[model_type] for model_type in embed_step.requires if model_type in by_type),
-        None,
-    )
+    encoder = next((by_type[model_type] for model_type in embed_step.requires if model_type in by_type), None)
     if encoder is None:  # pragma: no cover - _embed_path_configured already checked
         return None
     return TargetEmbeddingRoute(pipeline_id=spec.id, encoder_model_name=encoder.name)
 
 
 def request_vc_target_voice_kind(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
+    model_configs, requested_model: str | None, model_name: str | None = None
 ) -> str | None:
     """Return how this VC target consumes a standard ``target_voice``.
 
@@ -684,9 +640,7 @@ def request_vc_target_voice_kind(
     standard voice name at all.
     """
     spec = get_spec(requested_model)
-    if spec is not None and any(
-        "ChatterboxVC" in step.requires for step in spec.steps
-    ):
+    if spec is not None and any("ChatterboxVC" in step.requires for step in spec.steps):
         return VC_TARGET_AUDIO
     name = model_name or requested_model
     for config in model_configs or ():
@@ -698,11 +652,7 @@ def request_vc_target_voice_kind(
 
 
 def request_native_voices(
-    model_configs,
-    requested_model: str | None,
-    model_name: str | None = None,
-    *,
-    language_id: str | None = None,
+    model_configs, requested_model: str | None, model_name: str | None = None, *, language_id: str | None = None
 ) -> tuple[str, ...]:
     """Return the native voices of the configured models backing a request.
 
@@ -738,28 +688,18 @@ def resolve_request_voice(
     caller turns that into an honest 400.
     """
     if target:
-        if is_standard_voice(name) and request_vc_target_voice_kind(
-            model_configs, requested_model, model_name
-        ) is not None:
-            return VoiceResolution(
-                name=name, kind=_STANDARD, wav_path=standard_voice_path(name)
-            )
+        if (
+            is_standard_voice(name)
+            and request_vc_target_voice_kind(model_configs, requested_model, model_name) is not None
+        ):
+            return VoiceResolution(name=name, kind=_STANDARD, wav_path=standard_voice_path(name))
         return None
 
-    native = request_native_voices(
-        model_configs,
-        requested_model,
-        model_name,
-        language_id=language_id,
-    )
+    native = request_native_voices(model_configs, requested_model, model_name, language_id=language_id)
     if name in native:
         return VoiceResolution(name=name, kind=_NATIVE, native_id=name)
-    if is_standard_voice(name) and request_cloning_capable(
-        model_configs, requested_model, model_name
-    ):
-        return VoiceResolution(
-            name=name, kind=_STANDARD, wav_path=standard_voice_path(name)
-        )
+    if is_standard_voice(name) and request_cloning_capable(model_configs, requested_model, model_name):
+        return VoiceResolution(name=name, kind=_STANDARD, wav_path=standard_voice_path(name))
     return None
 
 
@@ -809,14 +749,14 @@ def lookup_standard_voice(
             return StandardVoiceLookup(
                 is_standard_name=True,
                 error=(
-                    f"Provide either `target_voice: \"{name}\"` (a standard voice pack "
+                    f'Provide either `target_voice: "{name}"` (a standard voice pack '
                     "name) or an explicit `target_audio`/`target_embedding`, not both."
                 ),
             )
         return StandardVoiceLookup(
             is_standard_name=True,
             error=(
-                f"Provide either `voice: \"{name}\"` (a standard voice pack name) or "
+                f'Provide either `voice: "{name}"` (a standard voice pack name) or '
                 "explicit reference fields (`input_audio`/`input_embedding`/"
                 "`input_vad_data`), not both."
             ),
@@ -834,24 +774,15 @@ def lookup_standard_voice(
                     "voice-conversion model that accepts a target voice."
                 ),
             )
-        resolution = resolve_request_voice(
-            configs, requested, name, target=True, model_name=requested
-        )
+        resolution = resolve_request_voice(configs, requested, name, target=True, model_name=requested)
         if resolution is None:  # pragma: no cover - capability checked above
             return StandardVoiceLookup(
-                is_standard_name=True,
-                error=f"Target voice '{name}' could not be resolved for model '{requested}'.",
+                is_standard_name=True, error=f"Target voice '{name}' could not be resolved for model '{requested}'."
             )
-        return StandardVoiceLookup(
-            is_standard_name=True,
-            resolution=resolution,
-            vc_target_kind=target_kind,
-        )
+        return StandardVoiceLookup(is_standard_name=True, resolution=resolution, vc_target_kind=target_kind)
 
     if not request_cloning_capable(configs, requested, requested):
-        native = request_native_voices(
-            configs, requested, requested, language_id=language_id
-        )
+        native = request_native_voices(configs, requested, requested, language_id=language_id)
         detail = f" Native voices: {', '.join(native)}." if native else ""
         return StandardVoiceLookup(
             is_standard_name=True,
@@ -862,20 +793,11 @@ def lookup_standard_voice(
             ),
         )
 
-    native = request_native_voices(
-        configs, requested, requested, language_id=language_id
-    )
+    native = request_native_voices(configs, requested, requested, language_id=language_id)
     native_default = "default" if "default" in native else (native[0] if native else None)
-    resolution = resolve_request_voice(
-        configs, requested, name, language_id=language_id, model_name=requested
-    )
+    resolution = resolve_request_voice(configs, requested, name, language_id=language_id, model_name=requested)
     if resolution is None:  # pragma: no cover - capability checked above
         return StandardVoiceLookup(
-            is_standard_name=True,
-            error=f"Voice '{name}' could not be resolved for model '{requested}'.",
+            is_standard_name=True, error=f"Voice '{name}' could not be resolved for model '{requested}'."
         )
-    return StandardVoiceLookup(
-        is_standard_name=True, resolution=resolution, native_default=native_default
-    )
-
-
+    return StandardVoiceLookup(is_standard_name=True, resolution=resolution, native_default=native_default)

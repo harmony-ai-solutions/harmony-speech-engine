@@ -87,7 +87,7 @@ def test_supported_languages_contains_english():
 
 def test_supported_languages_is_dict_of_codes():
     """SUPPORTED_LANGUAGES keys must be short language codes (2-3 chars)."""
-    for code in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES.keys():
+    for code in ChatterboxMultilingualTTSModel.SUPPORTED_LANGUAGES:
         assert len(code) <= 3, f"Language code too long: {code}"
 
 

@@ -36,17 +36,11 @@ def _wav_pcm16(samples: np.ndarray) -> np.ndarray:
     return np.asarray(pcm)
 
 
-
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_streamed_matches_buffered_pre_watermark_pcm_on_the_synthetic_stub():
     harness, model = _chatterbox_harness()
-    options = {
-        "split_text": True,
-        "chunk_size": CHUNK_SIZE,
-        "crossfade_ms": 40,
-        "sentence_pause_ms": 120,
-    }
+    options = {"split_text": True, "chunk_size": CHUNK_SIZE, "crossfade_ms": 40, "sentence_pause_ms": 120}
     async with harness:
         request = _request(TEXT_3, **options)
         buffered_response = await _speak(harness, request)
@@ -54,9 +48,7 @@ async def test_streamed_matches_buffered_pre_watermark_pcm_on_the_synthetic_stub
 
         request_data = TextToSpeechRequestInput.from_openai("tts-stream-axis", request)
         chunks = split_text_into_chunks(
-            request_data.input_text,
-            chunk_size=CHUNK_SIZE,
-            language=getattr(request_data, "language_id", None),
+            request_data.input_text, chunk_size=CHUNK_SIZE, language=getattr(request_data, "language_id", None)
         )
         assert len(chunks) > 1
         state = StreamState()
@@ -75,11 +67,7 @@ async def test_streamed_matches_buffered_pre_watermark_pcm_on_the_synthetic_stub
 
     assert buffered_rate == SAMPLE_RATE == state.source_rate
     assert state.segments == len(segments)
-    streamed = (
-        np.concatenate(segments).astype(np.float32)
-        if segments
-        else np.empty(0, dtype=np.float32)
-    )
+    streamed = np.concatenate(segments).astype(np.float32) if segments else np.empty(0, dtype=np.float32)
     assert streamed.size == buffered_waveform.size
     # Same chunk plan: the stub saw the same chunks in the same order on the
     # streamed side (the buffered side ran first).

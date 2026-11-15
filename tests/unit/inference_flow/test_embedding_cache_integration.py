@@ -73,10 +73,7 @@ class StubChatterboxEmbedModel:
         audio, _sr = audio_codec.decode_audio(audio_buf.read())
         self.calls += 1
         self.conds = FakeConditionals(
-            t3=FakeT3Cond(
-                speaker_emb=torch.tensor([float(audio[0]), float(audio[1])]),
-                emotion_adv=torch.zeros(1),
-            ),
+            t3=FakeT3Cond(speaker_emb=torch.tensor([float(audio[0]), float(audio[1])]), emotion_adv=torch.zeros(1)),
             gen={"ge_bes": torch.tensor([float(audio.sum())])},
         )
 
@@ -115,10 +112,7 @@ class StubVCModel:
     def set_target_voice(self, audio_buf):
         audio, _sr = audio_codec.decode_audio(audio_buf.read())
         self.target_calls += 1
-        self.ref_dict = {
-            "embedding": torch.tensor([float(audio[0])]),
-            "ge_bes": torch.tensor([float(audio[-1])]),
-        }
+        self.ref_dict = {"embedding": torch.tensor([float(audio[0])]), "ge_bes": torch.tensor([float(audio[-1])])}
 
     def generate(self, audio=None, **kwargs):
         self.generate_calls += 1
@@ -166,10 +160,7 @@ def _embed_request(request_id: str, artifact: AudioArtifact, exaggeration: float
             ),
         )
     return EngineRequest(
-        request_id=request_id,
-        request_data=request_data,
-        arrival_time=0.0,
-        artifacts={"input_audio": artifact},
+        request_id=request_id, request_data=request_data, arrival_time=0.0, artifacts={"input_audio": artifact}
     )
 
 
@@ -181,9 +172,7 @@ def _openvoice_request(request_id: str, artifact: AudioArtifact, vad_source: str
         arrival_time=0.0,
         artifacts={
             "input_audio": artifact,
-            "input_vad_data": VadArtifact(
-                segments=[{"start": 0.0, "end": 0.1, "text": "hi"}], source=vad_source
-            ),
+            "input_vad_data": VadArtifact(segments=[{"start": 0.0, "end": 0.1, "text": "hi"}], source=vad_source),
         },
     )
 
@@ -317,12 +306,9 @@ def _frames_from_audio(preprocessed):
 
 
 def _run_hs_encoder(runner, artifacts, requests):
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.preprocess_wav",
-        side_effect=_passthrough_preprocess,
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_input_frames",
-        side_effect=_frames_from_audio,
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.preprocess_wav", side_effect=_passthrough_preprocess),
+        patch("harmonyspeech.task_handler.model_runner_base.get_input_frames", side_effect=_frames_from_audio),
     ):
         return runner._execute_harmonyspeech_encoder(artifacts, requests)
 
@@ -366,16 +352,15 @@ def _fake_hf_config():
     import types
 
     return types.SimpleNamespace(
-        data=types.SimpleNamespace(
-            sampling_rate=16000, filter_length=400, hop_length=160, win_length=400
-        )
+        data=types.SimpleNamespace(sampling_rate=16000, filter_length=400, hop_length=160, win_length=400)
     )
 
 
 def _run_ov_encoder(runner, segments_per_request, requests):
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         return runner._execute_openvoice_tone_converter_encoder(segments_per_request, requests)
 
 
@@ -393,8 +378,7 @@ def test_openvoice_encoder_identical_audio_hits():
     assert model.calls == 1
     assert cache.stats()["hits"] == 1
     assert torch.equal(
-        second[0].result_data.embedding_artifact.embedding,
-        first[0].result_data.embedding_artifact.embedding,
+        second[0].result_data.embedding_artifact.embedding, first[0].result_data.embedding_artifact.embedding
     )
 
 
@@ -416,12 +400,8 @@ def test_openvoice_encoder_different_vad_source_misses():
 def test_openvoice_encoder_different_model_identity_misses():
     cache = EmbeddingCache(ttl_s=300)
     artifact = _audio_artifact()
-    ov1 = _runner(
-        StubOpenvoiceEncoderModel(), "OpenVoiceV1ToneConverterEncoder", cache=cache, identity=OV1_IDENTITY
-    )
-    ov2 = _runner(
-        StubOpenvoiceEncoderModel(), "OpenVoiceV2ToneConverterEncoder", cache=cache, identity=OV2_IDENTITY
-    )
+    ov1 = _runner(StubOpenvoiceEncoderModel(), "OpenVoiceV1ToneConverterEncoder", cache=cache, identity=OV1_IDENTITY)
+    ov2 = _runner(StubOpenvoiceEncoderModel(), "OpenVoiceV2ToneConverterEncoder", cache=cache, identity=OV2_IDENTITY)
 
     _run_ov_encoder(ov1, [[artifact]], [_openvoice_request("ov1", artifact, "whisper")])
     _run_ov_encoder(ov2, [[artifact]], [_openvoice_request("ov2", artifact, "whisper")])
@@ -438,9 +418,7 @@ def test_openvoice_encoder_cache_resolution_failure_does_not_fail_the_request():
     # No VAD artifact or payload: key resolution must degrade to a plain miss.
     request = EngineRequest(
         request_id="ov-novad",
-        request_data=SpeechEmbeddingRequestInput(
-            request_id="ov-novad", requested_model="openvoice", model="openvoice"
-        ),
+        request_data=SpeechEmbeddingRequestInput(request_id="ov-novad", requested_model="openvoice", model="openvoice"),
         arrival_time=0.0,
         artifacts={"input_audio": artifact},
     )
@@ -466,9 +444,7 @@ def test_vc_identical_target_audio_skips_set_target_voice():
     source = _audio_artifact(880.0)
 
     def run(request_id):
-        return runner._execute_chatterbox_vc(
-            [(source, None, target)], [_vc_request(request_id)]
-        )
+        return runner._execute_chatterbox_vc([(source, None, target)], [_vc_request(request_id)])
 
     first = run("vc-1")
     second = run("vc-2")
@@ -476,10 +452,7 @@ def test_vc_identical_target_audio_skips_set_target_voice():
     assert model.target_calls == 1
     assert model.generate_calls == 2
     assert cache.stats()["hits"] == 1
-    assert torch.equal(
-        second[0].result_data.audio_artifact.waveform,
-        first[0].result_data.audio_artifact.waveform,
-    )
+    assert torch.equal(second[0].result_data.audio_artifact.waveform, first[0].result_data.audio_artifact.waveform)
     assert second[0].result_data.finish_reason == "stop"
 
 

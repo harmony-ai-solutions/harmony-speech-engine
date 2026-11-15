@@ -10,11 +10,7 @@ import pytest
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
 from harmonyspeech.engine import async_harmonyspeech as async_engine_module
-from harmonyspeech.engine.async_harmonyspeech import (
-    AsyncHarmonySpeech,
-    RequestTracker,
-    _AsyncHarmonySpeech,
-)
+from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech, RequestTracker, _AsyncHarmonySpeech
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 from harmonyspeech.processing.scheduler import Scheduler
 
@@ -45,11 +41,7 @@ def _engine_shell(timeout_s: float | None = 120.0) -> HarmonySpeechEngine:
 
 def _kitten_request(request_id: str) -> TextToSpeechRequestInput:
     return TextToSpeechRequestInput(
-        request_id=request_id,
-        requested_model="kitten",
-        model="kitten",
-        input_text="hello",
-        mode="single_speaker_tts",
+        request_id=request_id, requested_model="kitten", model="kitten", input_text="hello", mode="single_speaker_tts"
     )
 
 
@@ -182,7 +174,6 @@ def test_timeout_message_reports_effective_per_request_timeout():
 
     assert len(expired) == 1
     assert "exceeded timeout of 5s" in expired[0].error
-
 
 
 # ---------------------------------------------------------------------------

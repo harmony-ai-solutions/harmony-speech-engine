@@ -92,10 +92,7 @@ def _tts_request(request_id: str, model: str, text: str, **fields) -> EngineRequ
 
 def _embed_request(request_id: str, model: str, audio_b64: str = BASE64_AUDIO) -> EngineRequest:
     request_data = SpeechEmbeddingRequestInput(
-        request_id=request_id,
-        requested_model=model,
-        model=model,
-        input_audio=audio_b64,
+        request_id=request_id, requested_model=model, model=model, input_audio=audio_b64
     )
     return EngineRequest(request_id=request_id, request_data=request_data, arrival_time=0.0)
 
@@ -178,12 +175,7 @@ def test_four_requests_to_one_model_complete_with_their_own_outputs():
 
     engine = _build_engine([runner.model_config], {"kitten": StubExecutor(runner)})
 
-    texts = {
-        "req-a": "alpha",
-        "req-b": "beta",
-        "req-c": "gamma",
-        "req-d": "delta",
-    }
+    texts = {"req-a": "alpha", "req-b": "beta", "req-c": "gamma", "req-d": "delta"}
     for request_id, text in texts.items():
         engine.add_request(request_id, _tts_request(request_id, "kitten", text).request_data)
 
@@ -365,20 +357,11 @@ def test_vad_batch_returns_one_result_per_request():
 
     engine = _build_engine([runner.model_config], {"vad": StubExecutor(runner)})
 
-    clips = {
-        "vad-short": tiny_wav_b64(16000, 0.10),
-        "vad-long": tiny_wav_b64(16000, 0.40),
-    }
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_speech_timestamps", side_effect=fake_timestamps
-    ):
+    clips = {"vad-short": tiny_wav_b64(16000, 0.10), "vad-long": tiny_wav_b64(16000, 0.40)}
+    with patch("harmonyspeech.task_handler.model_runner_base.get_speech_timestamps", side_effect=fake_timestamps):
         for request_id, audio in clips.items():
             request_data = DetectVoiceActivityRequestInput(
-                request_id=request_id,
-                requested_model="vad",
-                model="vad",
-                input_audio=audio,
-                get_timestamps=True,
+                request_id=request_id, requested_model="vad", model="vad", input_audio=audio, get_timestamps=True
             )
             engine.add_request(request_id, request_data)
         outputs = _drive(engine)

@@ -29,11 +29,7 @@ def test_probe_refuses_to_run_without_cuda(monkeypatch):
 
 def test_listening_covers_the_seven_required_pairs():
     """Phase 11-3 names seven cases across the four S3Gen-vocode families."""
-    names = {
-        case["name"]
-        for _group, _gate, cases in probe._LISTENING_GROUPS
-        for case in cases
-    }
+    names = {case["name"] for _group, _gate, cases in probe._LISTENING_GROUPS for case in cases}
     assert names == {
         "chatterbox_bundled",
         "chatterbox_clone",
@@ -64,11 +60,7 @@ def test_listening_readme_lists_files_metrics_and_gate(tmp_path):
                             "fp16": str(tmp_path / "chatterbox_bundled_fp16.wav"),
                         },
                         "seconds": {"fp32": 3.8, "fp16": 3.8},
-                        "metrics": {
-                            "logmel_mse": 0.0123,
-                            "corr": 0.9991,
-                            "rms_pct": 0.08,
-                        },
+                        "metrics": {"logmel_mse": 0.0123, "corr": 0.9991, "rms_pct": 0.08},
                     }
                 ],
             }

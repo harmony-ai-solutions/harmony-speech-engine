@@ -53,10 +53,7 @@ def test_longform_fixture_splits_into_several_chunks_at_the_unified_default():
 
         assert budget == 300
         assert text  # fixture is non-empty
-        assert (
-            bench.longform_chunk_count(text, language=language, family=family)
-            == EXPECTED_FIXTURE_CHUNKS
-        )
+        assert bench.longform_chunk_count(text, language=language, family=family) == EXPECTED_FIXTURE_CHUNKS
         assert bench.longform_chunk_count(text, budget, language) == EXPECTED_FIXTURE_CHUNKS
 
 
@@ -74,20 +71,14 @@ def test_longform_default_budgets_mirror_the_serving_layer():
 def test_on_payload_omits_chunk_size_so_the_server_default_applies():
     """An unset CLI budget must not pin 300 in the ON payload."""
     for family in bench.LONGFORM_FAMILIES:
-        payload = bench.build_longform_payload(
-            family, "REFERENCE_AUDIO", bench.longform_fixture(family), True
-        )
+        payload = bench.build_longform_payload(family, "REFERENCE_AUDIO", bench.longform_fixture(family), True)
         assert "chunk_size" not in payload["generation_options"]
 
 
 @pytest.mark.unit
 def test_explicit_longform_chunk_size_is_sent_verbatim():
     payload = bench.build_longform_payload(
-        "chatterbox_turbo",
-        "REFERENCE_AUDIO",
-        bench.longform_fixture("chatterbox_turbo"),
-        True,
-        chunk_size=200,
+        "chatterbox_turbo", "REFERENCE_AUDIO", bench.longform_fixture("chatterbox_turbo"), True, chunk_size=200
     )
     assert payload["generation_options"]["chunk_size"] == 200
 
@@ -184,9 +175,7 @@ def test_longform_scenario_defaults_to_the_longform_family_set():
 
     assert bench.longform_families_from_args(args) == list(bench.LONGFORM_FAMILIES)
 
-    explicit = bench.build_parser().parse_args(
-        ["--scenario", "longform", "--families", "melo,chatterbox"]
-    )
+    explicit = bench.build_parser().parse_args(["--scenario", "longform", "--families", "melo,chatterbox"])
     assert bench.longform_families_from_args(explicit) == ["melo", "chatterbox"]
 
 
@@ -207,13 +196,7 @@ def test_longform_markdown_matrix_has_a_divider_per_column_and_honest_off_chunks
             "crossfade_ms": 0,
             "sentence_pause_ms": 0,
             "filters": {},
-            "fixtures": {
-                "chatterbox": {
-                    "class": "AR decode",
-                    "characters": 807,
-                    "expected_chunks_per_request": 4,
-                }
-            },
+            "fixtures": {"chatterbox": {"class": "AR decode", "characters": 807, "expected_chunks_per_request": 4}},
         },
         "runs": {
             "chatterbox-split-off": [

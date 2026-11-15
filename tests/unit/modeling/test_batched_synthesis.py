@@ -199,9 +199,7 @@ def test_openvoice_batched_waveform_matches_solo_interior():
     lengths_t = torch.tensor(lengths)
     sid = torch.tensor([1, 2, 3])
 
-    output, y_lengths, _, _, _ = model.infer_batched(
-        phones, lengths_t, sid=sid, noise_scale=0.0, noise_scale_w=0.0
-    )
+    output, y_lengths, _, _, _ = model.infer_batched(phones, lengths_t, sid=sid, noise_scale=0.0, noise_scale_w=0.0)
     trimmed = trim_decoder_output(output, y_lengths, HOP)
 
     for index in range(len(lengths)):
@@ -252,9 +250,7 @@ def test_melo_batched_waveform_matches_solo_interior():
     phones, lengths, sid, tones, langs, bert, ja_bert = _melo_batch_inputs(lengths=(7, 5))
     kwargs = {"sdp_ratio": 0.2, "noise_scale": 0.0, "noise_scale_w": 0.0, "length_scale": 1.0}
 
-    output, y_lengths, _, _, _ = model.infer_batched(
-        phones, lengths, sid, tones, langs, bert, ja_bert, **kwargs
-    )
+    output, y_lengths, _, _, _ = model.infer_batched(phones, lengths, sid, tones, langs, bert, ja_bert, **kwargs)
     trimmed = trim_decoder_output(output, y_lengths, HOP)
 
     for index in range(phones.shape[0]):
@@ -402,9 +398,7 @@ def test_default_token_budget_caps_the_padded_area():
     # A homogeneous batch of huge rows keeps its full B x median area unless a
     # measured cap is supplied (the WDDM-shared-memory case on GPU 2).
     assert default_token_budget([3660] * 8, max_batch_size=8) == 8 * 3660
-    assert (
-        default_token_budget([3660] * 8, max_batch_size=8, max_budget=7500) == 7500
-    )
+    assert default_token_budget([3660] * 8, max_batch_size=8, max_budget=7500) == 7500
     # Short/chunked rows fit under the cap and keep their full width.
     assert default_token_budget([128] * 8, max_batch_size=8, max_budget=1024) == 8 * 128
     # Empty step stays None; the clamp never returns 0.

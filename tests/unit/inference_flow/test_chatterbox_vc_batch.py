@@ -131,9 +131,7 @@ def _request(request_id, seed=None):
     options = (
         None
         if seed is None
-        else TextToSpeechGenerationOptions(
-            seed=seed, style=None, speed=None, pitch=None, energy=None
-        )
+        else TextToSpeechGenerationOptions(seed=seed, style=None, speed=None, pitch=None, energy=None)
     )
     request_data = VoiceConversionRequestInput(
         request_id=request_id,
@@ -150,9 +148,7 @@ def _request(request_id, seed=None):
 
 def _source(samples, seed):
     generator = np.random.RandomState(seed)
-    return AudioArtifact.from_numpy(
-        (generator.randn(samples).astype(np.float32) * 0.1), 16000
-    )
+    return AudioArtifact.from_numpy((generator.randn(samples).astype(np.float32) * 0.1), 16000)
 
 
 @pytest.mark.unit
@@ -162,10 +158,7 @@ def test_multi_request_vc_step_vocodes_in_one_batched_forward(monkeypatch):
     model = _StubVCModel()
     runner = _runner(model)
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     calls = []
     real = s3gen_batch.inference_batched
@@ -195,10 +188,7 @@ def test_multi_request_vc_step_tokenizes_in_one_batched_pass(monkeypatch):
     model = _StubVCModel()
     runner = _runner(model)
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     calls = []
     real = s3gen_batch.tokenize_batched
@@ -221,10 +211,7 @@ def test_vc_batch_failure_falls_back_to_the_per_item_loop(monkeypatch):
     model = _StubVCModel()
     runner = _runner(model)
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     def broken(s3gen, rows, **kwargs):
         raise RuntimeError("boom")
@@ -245,10 +232,7 @@ def test_tokenizer_failure_falls_back_to_the_per_item_loop(monkeypatch):
     model = _StubVCModel()
     runner = _runner(model)
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     def broken(tokenizer, clips):
         raise RuntimeError("tokenizer boom")
@@ -265,10 +249,7 @@ def test_batched_inference_false_keeps_the_vc_loop():
     model = _StubVCModel()
     runner = _runner(model, batched_inference=False)
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     results = runner._execute_chatterbox_vc(inputs, requests)
 
@@ -280,10 +261,7 @@ def test_batched_inference_false_keeps_the_vc_loop():
 def test_seeded_rows_are_identical_alone_or_batched():
     """A seeded VC request's audio is the same on the loop and the batched path."""
     requests = [_request("vc-a", seed=11), _request("vc-b", seed=22)]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     loop_model = _RealVocodeVCModel()
     loop_runner = _runner(loop_model, max_batch_size=1, batched_inference=False)
@@ -310,10 +288,7 @@ def test_poisoned_vc_row_errors_alone():
     requests = [_request("vc-good"), _request("vc-poisoned")]
     # The poisoned row has neither target audio nor embedding -> prep raises,
     # the whole step degrades to the loop, and only that request errors.
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, None),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, None)]
 
     results = runner._execute_chatterbox_vc(inputs, requests)
 
@@ -330,10 +305,7 @@ def test_cache_miss_inside_a_batched_step_computes_and_stores_the_target():
     runner.model_identity = "cb-vc@1"
     runner.embedding_cache = EmbeddingCache()
     requests = [_request("vc-a"), _request("vc-b")]
-    inputs = [
-        (_source(16000, 1), None, _source(8000, 2)),
-        (_source(12000, 3), None, _source(8000, 4)),
-    ]
+    inputs = [(_source(16000, 1), None, _source(8000, 2)), (_source(12000, 3), None, _source(8000, 4))]
 
     results = runner._execute_chatterbox_vc(inputs, requests)
 

@@ -35,9 +35,7 @@ def test_transcription_multipart_matches_json(wire_client, test_data_dir):
     json_request = wire_client.engine.requests[-1]
 
     multipart_response = client.post(
-        "/v1/audio/transcriptions",
-        files={"file": ("tone.wav", payload, "audio/wav")},
-        data={"model": "test-stt"},
+        "/v1/audio/transcriptions", files={"file": ("tone.wav", payload, "audio/wav")}, data={"model": "test-stt"}
     )
     multipart_request = wire_client.engine.requests[-1]
 
@@ -57,9 +55,7 @@ def test_transcription_multipart_accepts_audio_alias(wire_client, test_data_dir)
 
 def test_vad_multipart(wire_client, test_data_dir):
     response = wire_client.client.post(
-        "/v1/audio/vad",
-        files={"file": ("tone.wav", _wav(test_data_dir), "audio/wav")},
-        data={"model": "test-vad"},
+        "/v1/audio/vad", files={"file": ("tone.wav", _wav(test_data_dir), "audio/wav")}, data={"model": "test-vad"}
     )
     assert response.status_code == 200
     assert response.json()["speech_activity"] is True
@@ -135,12 +131,7 @@ def test_tts_multipart_invalid_nested_json_returns_400(wire_client, test_data_di
     response = wire_client.client.post(
         "/v1/audio/speech",
         files={"input_audio": ("ref.wav", _wav(test_data_dir), "audio/wav")},
-        data={
-            "model": "test-tts",
-            "mode": "voice_cloning",
-            "input": "hello",
-            "output_options": "{not json",
-        },
+        data={"model": "test-tts", "mode": "voice_cloning", "input": "hello", "output_options": "{not json"},
     )
     assert response.status_code == 400
 
@@ -171,9 +162,7 @@ def test_json_garbage_audio_returns_400(wire_client):
 
 def test_malformed_json_body_returns_400(wire_client):
     response = wire_client.client.post(
-        "/v1/audio/transcriptions",
-        content=b"{not json",
-        headers={"content-type": "application/json"},
+        "/v1/audio/transcriptions", content=b"{not json", headers={"content-type": "application/json"}
     )
     assert response.status_code == 400
 
@@ -185,9 +174,7 @@ def test_malformed_json_body_returns_400(wire_client):
 
 def test_oversized_multipart_upload_returns_413(wire_client_small_limit):
     response = wire_client_small_limit.client.post(
-        "/v1/audio/transcriptions",
-        files={"file": ("big.wav", b"0" * 8192, "audio/wav")},
-        data={"model": "test-stt"},
+        "/v1/audio/transcriptions", files={"file": ("big.wav", b"0" * 8192, "audio/wav")}, data={"model": "test-stt"}
     )
     assert response.status_code == 413
     assert response.json()["type"] == "PayloadTooLargeError"
@@ -195,8 +182,7 @@ def test_oversized_multipart_upload_returns_413(wire_client_small_limit):
 
 def test_oversized_json_body_returns_413(wire_client_small_limit):
     response = wire_client_small_limit.client.post(
-        "/v1/audio/speech",
-        json={"model": "test-tts", "mode": "single_speaker_tts", "input": "x" * 10000},
+        "/v1/audio/speech", json={"model": "test-tts", "mode": "single_speaker_tts", "input": "x" * 10000}
     )
     assert response.status_code == 413
 
@@ -205,18 +191,20 @@ async def test_parser_enforces_limit_without_content_length(monkeypatch):
     """Chunked-ish requests without Content-Length are still bounded by the parser."""
     boundary = "----hseboundary"
     body = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="file"; filename="big.wav"\r\n'
-        "Content-Type: audio/wav\r\n\r\n"
-    ).encode() + b"0" * 2048 + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+            "Content-Type: audio/wav\r\n\r\n"
+        ).encode()
+        + b"0" * 2048
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
 
     scope = {
         "type": "http",
         "method": "POST",
         "path": "/v1/audio/transcriptions",
-        "headers": [
-            (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
-        ],
+        "headers": [(b"content-type", f"multipart/form-data; boundary={boundary}".encode())],
         "app": SimpleNamespace(state=SimpleNamespace(max_upload_bytes=1024)),
     }
 
@@ -226,9 +214,7 @@ async def test_parser_enforces_limit_without_content_length(monkeypatch):
     request = Request(scope, receive)
     with pytest.raises(UploadTooLargeError):
         await parse_dual_request(
-            request,
-            SpeechTranscribeRequest,
-            upload_fields={"input_audio": ("file", "audio", "input_audio")},
+            request, SpeechTranscribeRequest, upload_fields={"input_audio": ("file", "audio", "input_audio")}
         )
 
 
@@ -248,10 +234,7 @@ def test_garbage_audio_is_400_on_every_audio_endpoint(wire_client):
     """A garbage payload never 500s or hangs: every audio endpoint returns a typed 400."""
     bad = base64.b64encode(b"definitely not audio").decode()
     cases = [
-        (
-            "/v1/audio/speech",
-            {"model": "test-tts", "mode": "voice_cloning", "input": "hi", "input_audio": bad},
-        ),
+        ("/v1/audio/speech", {"model": "test-tts", "mode": "voice_cloning", "input": "hi", "input_audio": bad}),
         ("/v1/audio/transcriptions", {"model": "test-stt", "input_audio": bad}),
         ("/v1/audio/vad", {"model": "test-vad", "input_audio": bad}),
         ("/v1/embed/speaker", {"model": "test-embed", "input_audio": bad}),
@@ -295,9 +278,7 @@ def _tts_payload(**overrides):
 
 def test_unsupported_output_format_rejected_before_synthesis(wire_client):
     before = len(wire_client.engine.requests)
-    response = wire_client.client.post(
-        "/v1/audio/speech", json=_tts_payload(output_options={"format": "wma"})
-    )
+    response = wire_client.client.post("/v1/audio/speech", json=_tts_payload(output_options={"format": "wma"}))
     assert response.status_code == 400
     assert "Unsupported output format" in response.json()["message"]
     assert len(wire_client.engine.requests) == before  # engine never saw the request
@@ -306,9 +287,7 @@ def test_unsupported_output_format_rejected_before_synthesis(wire_client):
 @pytest.mark.parametrize("rate", [0, -16000, 12345])
 def test_invalid_output_sample_rate_rejected_before_synthesis(wire_client, rate):
     before = len(wire_client.engine.requests)
-    response = wire_client.client.post(
-        "/v1/audio/speech", json=_tts_payload(output_options={"sample_rate": rate})
-    )
+    response = wire_client.client.post("/v1/audio/speech", json=_tts_payload(output_options={"sample_rate": rate}))
     assert response.status_code == 400
     assert "sample_rate" in response.json()["message"]
     assert len(wire_client.engine.requests) == before
@@ -321,9 +300,7 @@ def test_stream_output_alias_is_admitted_not_the_old_rejection(wire_client):
     admitted streaming request streams (never the old 400 rejection, never a
     silent buffered 200 JSON body).
     """
-    response = wire_client.client.post(
-        "/v1/audio/speech", json=_tts_payload(output_options={"stream": True})
-    )
+    response = wire_client.client.post("/v1/audio/speech", json=_tts_payload(output_options={"stream": True}))
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("audio/")
     assert response.content[:4] == b"RIFF"
@@ -357,9 +334,7 @@ def test_tts_default_output_is_byte_identical(wire_client):
 
 
 def test_tts_explicit_wav_output_is_byte_identical(wire_client):
-    response = wire_client.client.post(
-        "/v1/audio/speech", json=_tts_payload(output_options={"format": "wav"})
-    )
+    response = wire_client.client.post("/v1/audio/speech", json=_tts_payload(output_options={"format": "wav"}))
     assert response.json()["data"] == wav_b64()
 
 
@@ -407,11 +382,7 @@ def test_voice_conversion_applies_output_options(wire_client):
 def test_audio_conversion_applies_output_options(wire_client):
     response = wire_client.client.post(
         "/v1/audio/convert",
-        json={
-            "model": "test-ac",
-            "source_audio": sample_b64("codec_tone.wav"),
-            "output_options": {"format": "ogg"},
-        },
+        json={"model": "test-ac", "source_audio": sample_b64("codec_tone.wav"), "output_options": {"format": "ogg"}},
     )
     assert response.status_code == 200
     body = response.json()
@@ -423,8 +394,7 @@ def test_audio_conversion_applies_output_options(wire_client):
 def test_default_response_has_no_sample_rate_for_stt(wire_client):
     """Non-audio responses keep their exact previous shape (no stray fields)."""
     response = wire_client.client.post(
-        "/v1/audio/transcriptions",
-        json={"model": "test-stt", "input_audio": sample_b64("codec_tone.wav")},
+        "/v1/audio/transcriptions", json={"model": "test-stt", "input_audio": sample_b64("codec_tone.wav")}
     )
     body = response.json()
     assert "sample_rate" not in body

@@ -137,9 +137,7 @@ def _request_finished(request) -> bool:
 
 
 def _aborted(request) -> WhisperRequestAbortedError:
-    return WhisperRequestAbortedError(
-        f"request {getattr(request, 'request_id', '?')} was aborted before transcription"
-    )
+    return WhisperRequestAbortedError(f"request {getattr(request, 'request_id', '?')} was aborted before transcription")
 
 
 @dataclass
@@ -197,11 +195,7 @@ class WhisperWindowBatcher:
     between engine steps.
     """
 
-    def __init__(
-        self,
-        model,
-        window_batch_size: int = WHISPER_WINDOW_BATCH_SIZE,
-    ) -> None:
+    def __init__(self, model, window_batch_size: int = WHISPER_WINDOW_BATCH_SIZE) -> None:
         self.model = model
         self.window_batch_size = max(1, int(window_batch_size or WHISPER_WINDOW_BATCH_SIZE))
         #: Diagnostics for tests / logging; cheap integers, no per-window state.
@@ -303,20 +297,15 @@ class WhisperWindowBatcher:
         task, language_hint, initial_prompt = whisper_request_options(request)
 
         vad_options = VadOptions(
-            max_speech_duration_s=chunk_length,
-            min_silence_duration_ms=_WHISPER_VAD_MIN_SILENCE_MS,
+            max_speech_duration_s=chunk_length, min_silence_duration_ms=_WHISPER_VAD_MIN_SILENCE_MS
         )
         clip_timestamps = get_speech_timestamps(audio, vad_options)
         audio_chunks, chunks_metadata = collect_chunks(audio, clip_timestamps, max_duration=chunk_length)
-        duration_after_vad = (
-            sum((clip["end"] - clip["start"]) for clip in clip_timestamps) / sampling_rate
-        )
+        duration_after_vad = sum((clip["end"] - clip["start"]) for clip in clip_timestamps) / sampling_rate
 
         windows: list[_Window] = []
         if duration_after_vad:
-            for window_index, (chunk, metadata) in enumerate(
-                zip(audio_chunks, chunks_metadata, strict=True)
-            ):
+            for window_index, (chunk, metadata) in enumerate(zip(audio_chunks, chunks_metadata, strict=True)):
                 # `[..., :-1]` drops the trailing STFT column, exactly like
                 # BatchedInferencePipeline.transcribe before `pad_or_trim`.
                 feature = extractor(chunk)[..., :-1]
@@ -433,17 +422,9 @@ class WhisperWindowBatcher:
             # The request's task token lives in `tokenizer.sot_sequence`; the
             # optional initial prompt travels as previous tokens (upstream
             # parity with `generate_segment_batched`).
-            previous_tokens = (
-                tokenizer.encode(request_windows.initial_prompt)
-                if request_windows.initial_prompt
-                else []
-            )
+            previous_tokens = tokenizer.encode(request_windows.initial_prompt) if request_windows.initial_prompt else []
             request_windows.prompt = self.model.get_prompt(
-                tokenizer,
-                previous_tokens=previous_tokens,
-                without_timestamps=True,
-                prefix=None,
-                hotwords=None,
+                tokenizer, previous_tokens=previous_tokens, without_timestamps=True, prefix=None, hotwords=None
             )
         return request_windows.tokenizer
 
@@ -494,18 +475,14 @@ class WhisperWindowBatcher:
             sampling_temperature=_WHISPER_TEMPERATURE,
         )
         if len(results) != len(active):
-            raise RuntimeError(
-                f"CTranslate2 generate returned {len(results)} results for {len(active)} prompts"
-            )
+            raise RuntimeError(f"CTranslate2 generate returned {len(results)} results for {len(active)} prompts")
 
         for (request_windows, window), result in zip(active, results, strict=True):
             if _request_finished(request_windows.request):
                 request_windows.error = request_windows.error or _aborted(request_windows.request)
                 continue
             try:
-                request_windows.decoded[window.window_index] = self._decode_window(
-                    request_windows, window, result
-                )
+                request_windows.decoded[window.window_index] = self._decode_window(request_windows, window, result)
             except Exception as error:  # noqa: BLE001 - this request's window only
                 logger.opt(exception=error).warning(
                     f"Whisper window batcher: request {request_windows.request_id} "
@@ -572,9 +549,7 @@ class WhisperWindowBatcher:
         if segments and request_windows.clip_timestamps:
             segments = list(
                 restore_speech_timestamps(
-                    segments,
-                    request_windows.clip_timestamps,
-                    int(self.model.feature_extractor.sampling_rate),
+                    segments, request_windows.clip_timestamps, int(self.model.feature_extractor.sampling_rate)
                 )
             )
 

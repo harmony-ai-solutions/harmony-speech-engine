@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 import torch
 
@@ -234,9 +233,7 @@ def test_poisoned_vc_row_errors_alone_while_its_neighbours_finish():
     assert by_id["vc-poisoned"].finish_reason == "error"
     for request_id in ("vc-a", "vc-b", "vc-d"):
         assert by_id[request_id].finish_reason == "stop"
-        assert by_id[request_id].audio_artifact.num_samples == _expected_samples(
-            seconds[request_id]
-        )
+        assert by_id[request_id].audio_artifact.num_samples == _expected_samples(seconds[request_id])
 
 
 @pytest.mark.integration
@@ -247,10 +244,7 @@ def test_cache_miss_inside_a_batched_step_is_computed_then_served_from_the_cache
     engine = _engine(runner)
 
     target = tiny_wav_b64(16000, 0.5)
-    first = {
-        f"first-{index}": duration
-        for index, duration in enumerate((0.2, 0.4, 0.6, 0.8))
-    }
+    first = {f"first-{index}": duration for index, duration in enumerate((0.2, 0.4, 0.6, 0.8))}
     for request_id, duration in first.items():
         request = _vc_request(request_id, tiny_wav_b64(16000, duration), target)
         engine.add_request(request.request_id, request.request_data)

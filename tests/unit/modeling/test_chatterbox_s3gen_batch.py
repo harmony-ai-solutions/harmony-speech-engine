@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-
 from chatterbox.models.s3gen.configs import CFM_PARAMS
 from chatterbox.models.s3gen.decoder import ConditionalDecoder
 from chatterbox.models.s3gen.f0_predictor import ConvRNNF0Predictor
@@ -161,9 +160,7 @@ def test_b1_with_a_seed_is_bit_identical_to_upstream():
     for row in rows:
         produced = inference_batched(s3gen, [row])[0]
         torch.manual_seed(row.seed)
-        upstream, _ = s3gen.inference(
-            speech_tokens=row.tokens.view(1, -1), ref_dict=dict(row.ref_dict)
-        )
+        upstream, _ = s3gen.inference(speech_tokens=row.tokens.view(1, -1), ref_dict=dict(row.ref_dict))
         upstream = upstream[0]
         assert produced.shape == upstream.shape
         assert torch.equal(produced, upstream), row.seed
@@ -173,9 +170,7 @@ def test_mixed_length_rows_match_their_solo_runs():
     s3gen = tiny_s3gen()
     rows = _rows([(6, 4), (3, 2), (9, 3)])
     batched = inference_batched(s3gen, rows)
-    assert [waveform.numel() for waveform in batched] == [
-        row._token_len * 2 * 4 * 2 for row in rows
-    ]
+    assert [waveform.numel() for waveform in batched] == [row._token_len * 2 * 4 * 2 for row in rows]
     for row, waveform in zip(rows, batched, strict=True):
         solo = inference_batched(s3gen, [row])[0]
         assert torch.allclose(waveform, solo, atol=1e-6), row.seed
@@ -185,11 +180,7 @@ def test_a_row_is_identical_alone_or_in_a_different_batch_composition():
     s3gen = tiny_s3gen()
     rows = _rows([(6, 4), (3, 2), (9, 3)])
     reference = inference_batched(s3gen, [rows[1]])[0]
-    for composition, position in (
-        ([rows[1], rows[0]], 0),
-        ([rows[2], rows[1], rows[0]], 1),
-        ([rows[1], rows[2]], 0),
-    ):
+    for composition, position in (([rows[1], rows[0]], 0), ([rows[2], rows[1], rows[0]], 1), ([rows[1], rows[2]], 0)):
         produced = inference_batched(s3gen, composition)
         assert torch.allclose(produced[position], reference, atol=1e-6)
 
@@ -276,9 +267,7 @@ def test_prompt_feat_one_frame_longer_than_2x_tokens_is_accepted():
     row.ref_dict["prompt_feat"] = torch.randn(1, 2 * 3 + 1, 80, generator=generator)
     produced = inference_batched(s3gen, [row])[0]
     torch.manual_seed(row.seed)
-    upstream, _ = s3gen.inference(
-        speech_tokens=row.tokens.view(1, -1), ref_dict=dict(row.ref_dict)
-    )
+    upstream, _ = s3gen.inference(speech_tokens=row.tokens.view(1, -1), ref_dict=dict(row.ref_dict))
     assert produced.shape == upstream[0].shape
     assert torch.equal(produced, upstream[0])
 
@@ -399,9 +388,7 @@ def test_batched_stft_leaks_at_the_row_boundary_so_the_stft_is_per_row():
     for row, clip in enumerate(clips):
         padded[row, : clip.numel()] = clip
     with torch.no_grad():
-        stft = torch.stft(
-            padded, tokenizer.n_fft, 160, window=tokenizer.window, return_complex=True
-        )
+        stft = torch.stft(padded, tokenizer.n_fft, 160, window=tokenizer.window, return_complex=True)
         magnitudes = stft[..., :-1].abs() ** 2
         mel_spec = tokenizer._mel_filters @ magnitudes
         log_spec = torch.clamp(mel_spec, min=1e-10).log10()

@@ -49,20 +49,7 @@ from __future__ import annotations
 #: spans near-instant padded-batch families (tens of ms) through an AR chunk
 #: that waited for a slow co-batched row (several seconds) to the documented
 #: 12-9 ceiling for a multi-chunk request (tens of seconds).
-STREAM_FIRST_FRAME_BUCKETS: tuple[float, ...] = (
-    0.05,
-    0.1,
-    0.25,
-    0.5,
-    1.0,
-    2.0,
-    3.0,
-    5.0,
-    7.5,
-    10.0,
-    15.0,
-    30.0,
-)
+STREAM_FIRST_FRAME_BUCKETS: tuple[float, ...] = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 30.0)
 
 #: Terminal outcomes of one streaming response. All three labels are always
 #: rendered, so an alert can distinguish "no aborts yet" from "series missing".
@@ -74,12 +61,10 @@ _HELP = {
         "(binary envelope) or first speech.audio.delta (SSE), in seconds."
     ),
     "hse_tts_stream_chunks_total": (
-        "Streaming responses by terminal outcome (completed, aborted by client disconnect, "
-        "or failed after admission)."
+        "Streaming responses by terminal outcome (completed, aborted by client disconnect, or failed after admission)."
     ),
     "hse_tts_stream_bytes_total": (
-        "Audio bytes handed to the wire by streaming responses (WAV header included; SSE "
-        "counts raw PCM before base64)."
+        "Audio bytes handed to the wire by streaming responses (WAV header included; SSE counts raw PCM before base64)."
     ),
 }
 
@@ -87,12 +72,8 @@ _HELP = {
 def _empty_state() -> dict:
     return {
         # Non-cumulative counts per bucket; the last slot is the +Inf overflow.
-        "first_frame": {
-            "buckets": [0] * (len(STREAM_FIRST_FRAME_BUCKETS) + 1),
-            "sum": 0.0,
-            "count": 0,
-        },
-        "chunks": {outcome: 0 for outcome in STREAM_OUTCOMES},
+        "first_frame": {"buckets": [0] * (len(STREAM_FIRST_FRAME_BUCKETS) + 1), "sum": 0.0, "count": 0},
+        "chunks": dict.fromkeys(STREAM_OUTCOMES, 0),
         "bytes": 0,
     }
 
@@ -188,9 +169,7 @@ def render_stream_metrics(stats: dict | None = None) -> str:
     cumulative = 0
     for edge, count in zip(STREAM_FIRST_FRAME_BUCKETS, buckets[:-1], strict=True):
         cumulative += _as_int(count)
-        lines.append(
-            f'hse_tts_stream_first_frame_seconds_bucket{{le="{edge:g}"}} {cumulative}'
-        )
+        lines.append(f'hse_tts_stream_first_frame_seconds_bucket{{le="{edge:g}"}} {cumulative}')
     cumulative += _as_int(buckets[-1])
     lines.append(f'hse_tts_stream_first_frame_seconds_bucket{{le="+Inf"}} {cumulative}')
     lines.append(f"hse_tts_stream_first_frame_seconds_sum {_as_float(histogram.get('sum')):.6f}")
@@ -198,9 +177,7 @@ def render_stream_metrics(stats: dict | None = None) -> str:
 
     header("hse_tts_stream_chunks_total", "counter")
     for outcome in STREAM_OUTCOMES:
-        lines.append(
-            f'hse_tts_stream_chunks_total{{outcome="{outcome}"}} {_as_int(chunks.get(outcome))}'
-        )
+        lines.append(f'hse_tts_stream_chunks_total{{outcome="{outcome}"}} {_as_int(chunks.get(outcome))}')
 
     header("hse_tts_stream_bytes_total", "counter")
     lines.append(f"hse_tts_stream_bytes_total {_as_int(values.get('bytes'))}")

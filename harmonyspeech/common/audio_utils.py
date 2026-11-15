@@ -356,11 +356,7 @@ def _split_oversize(segment: str, budget: int) -> list[str]:
     return merged
 
 
-def split_text_into_chunks(
-    text: str,
-    chunk_size: int | None = None,
-    language: str | None = None,
-) -> list[str]:
+def split_text_into_chunks(text: str, chunk_size: int | None = None, language: str | None = None) -> list[str]:
     """Split ``text`` into sentence-aware chunks of at most ``chunk_size`` chars.
 
     ``chunk_size=None`` means "no merge budget": every sentence becomes its own
@@ -402,9 +398,7 @@ def split_text_into_chunks(
     for segment in segments:
         if not segment:
             continue
-        pieces = (
-            _split_oversize(segment, chunk_size) if len(segment) > chunk_size else [segment]
-        )
+        pieces = _split_oversize(segment, chunk_size) if len(segment) > chunk_size else [segment]
         for piece in pieces:
             if not current:
                 current = piece
@@ -646,11 +640,7 @@ class CrossfadeStitcher:
                 bridge = np.concatenate(
                     [
                         bridge[:-fade_out],
-                        _crossfade_regions(
-                            bridge[-fade_out:],
-                            _silence(fade_out, trailing_shape),
-                            fade_out,
-                        ),
+                        _crossfade_regions(bridge[-fade_out:], _silence(fade_out, trailing_shape), fade_out),
                     ],
                     axis=0,
                 )
@@ -668,11 +658,7 @@ class CrossfadeStitcher:
         rest = array[fade:]
         hold = min(self.fade_samples, rest.shape[0])
         emitted = np.concatenate(
-            [
-                bridge[:-fade],
-                _crossfade_regions(bridge[-fade:], array[:fade], fade),
-                rest[:-hold] if hold else rest,
-            ],
+            [bridge[:-fade], _crossfade_regions(bridge[-fade:], array[:fade], fade), rest[:-hold] if hold else rest],
             axis=0,
         )
         self._carry = rest[-hold:].copy() if hold else _empty_waveform(trailing_shape)
@@ -818,12 +804,7 @@ def _sample_magnitude(array: np.ndarray) -> np.ndarray:
     return magnitude
 
 
-def _frame_rms(
-    array: np.ndarray,
-    sample_rate: int,
-    frame_ms: float,
-    hop_ms: float,
-) -> tuple[np.ndarray, int, int]:
+def _frame_rms(array: np.ndarray, sample_rate: int, frame_ms: float, hop_ms: float) -> tuple[np.ndarray, int, int]:
     """Return ``(rms_per_frame, frame_length, hop_length)`` for ``array``.
 
     Uses a cumulative-sum integral image so the whole buffer costs ``O(n)`` time
@@ -989,9 +970,7 @@ def fix_internal_silence(
     _require_positive("frame_ms", frame_ms)
     _require_positive("hop_ms", hop_ms)
     if max_pause_ms > min_silence_ms:
-        raise ValueError(
-            f"max_pause_ms ({max_pause_ms}) must be <= min_silence_ms ({min_silence_ms})"
-        )
+        raise ValueError(f"max_pause_ms ({max_pause_ms}) must be <= min_silence_ms ({min_silence_ms})")
 
     samples = array.shape[0]
     if samples == 0:

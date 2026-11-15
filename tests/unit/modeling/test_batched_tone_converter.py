@@ -76,9 +76,7 @@ def test_voice_conversion_batched_b1_is_bit_identical_to_single_path():
         torch.manual_seed(11)
         single, single_mask, _ = model.voice_conversion(y, lengths, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3)
         torch.manual_seed(11)
-        batched, batched_mask, _ = model.voice_conversion_batched(
-            y, lengths, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3
-        )
+        batched, batched_mask, _ = model.voice_conversion_batched(y, lengths, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3)
 
     assert torch.equal(single, batched)
     assert torch.equal(single_mask, batched_mask)
@@ -101,9 +99,7 @@ def test_voice_conversion_batched_mixed_lengths_match_each_solo_run():
     y, lengths_t, sid_src, sid_tgt = _batch(lengths)
 
     with torch.no_grad():
-        output, mask, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0
-        )
+        output, mask, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0)
 
     assert output.shape == (len(lengths), 1, max(lengths) * SPF)
     assert mask.shape == (len(lengths), 1, max(lengths))
@@ -119,9 +115,7 @@ def test_voice_conversion_batched_mixed_lengths_match_each_solo_run():
                 tau=0.0,
             )
         assert solo.shape == (1, 1, length * SPF)
-        torch.testing.assert_close(
-            output[row : row + 1, :, : solo.shape[-1]], solo, rtol=1e-5, atol=1e-6
-        )
+        torch.testing.assert_close(output[row : row + 1, :, : solo.shape[-1]], solo, rtol=1e-5, atol=1e-6)
 
 
 @pytest.mark.unit
@@ -139,9 +133,7 @@ def test_voice_conversion_batched_unmasked_decoder_padding_would_leak():
     y, lengths_t, sid_src, sid_tgt = _batch(lengths)
 
     with torch.no_grad():
-        masked, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0
-        )
+        masked, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0)
         unmasked, _, _ = model._voice_conversion_impl(
             y, lengths_t, sid_src, sid_tgt, tau=0.0, mask_decoder_padding=False
         )
@@ -163,9 +155,7 @@ def test_voice_conversion_batched_unpads_on_the_model_frame_axis():
     y, lengths_t, sid_src, sid_tgt = _batch(lengths, seed=5)
 
     with torch.no_grad():
-        output, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0
-        )
+        output, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0)
     trimmed = trim_decoder_output(output, lengths_t, SPF)
 
     for row, length in enumerate(lengths):
@@ -186,13 +176,9 @@ def test_voice_conversion_batched_accepts_per_sample_tau():
 
     with torch.no_grad():
         torch.manual_seed(5)
-        scalar, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3
-        )
+        scalar, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.3)
         torch.manual_seed(5)
-        vector, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=[0.3, 0.3]
-        )
+        vector, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=[0.3, 0.3])
 
     assert torch.equal(scalar, vector)
 
@@ -214,16 +200,12 @@ def test_voice_conversion_batched_pairs_distinct_speaker_embeddings():
     y, lengths_t, sid_src, sid_tgt = _batch(lengths, seed=9)
 
     with torch.no_grad():
-        output, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0
-        )
+        output, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0)
 
     swapped_src = sid_src.flip(0)
     swapped_tgt = sid_tgt.flip(0)
     with torch.no_grad():
-        swapped, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=swapped_src, sid_tgt=swapped_tgt, tau=0.0
-        )
+        swapped, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=swapped_src, sid_tgt=swapped_tgt, tau=0.0)
 
     first_solo_src = model.voice_conversion(
         y[0:1], torch.tensor([17]), sid_src=sid_src[0:1], sid_tgt=sid_tgt[0:1], tau=0.0
@@ -241,9 +223,7 @@ def test_voice_conversion_zero_g_speakerless_variant_still_batches():
     y, lengths_t, sid_src, sid_tgt = _batch(lengths, seed=13)
 
     with torch.no_grad():
-        output, _, _ = model.voice_conversion_batched(
-            y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0
-        )
+        output, _, _ = model.voice_conversion_batched(y, lengths_t, sid_src=sid_src, sid_tgt=sid_tgt, tau=0.0)
         other, _, _ = model.voice_conversion_batched(
             y, lengths_t, sid_src=torch.randn_like(sid_src), sid_tgt=torch.randn_like(sid_tgt), tau=0.0
         )
@@ -252,6 +232,4 @@ def test_voice_conversion_zero_g_speakerless_variant_still_batches():
         )
 
     assert torch.equal(output, other)
-    torch.testing.assert_close(
-        output[1:2, :, : solo.shape[-1]], solo, rtol=1e-5, atol=1e-6
-    )
+    torch.testing.assert_close(output[1:2, :, : solo.shape[-1]], solo, rtol=1e-5, atol=1e-6)

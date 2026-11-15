@@ -88,11 +88,7 @@ from harmonyspeech.engine.ar_cache import (
     ARCachePool,
     ARCacheSlot,
 )
-from harmonyspeech.modeling.models.chatterbox.t3_ar import (
-    ChatterboxT3AR,
-    T3ARSampler,
-    _SafeAlignmentStreamAnalyzer,
-)
+from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR, T3ARSampler, _SafeAlignmentStreamAnalyzer
 
 __all__ = [
     "ARBatchRunner",
@@ -223,13 +219,7 @@ class ArenaBatchCache(Cache):
     """
 
     def __init__(
-        self,
-        arena,
-        slots: list[ARCacheSlot],
-        *,
-        write_positions: list[int],
-        write_lengths: list[int],
-        length: int,
+        self, arena, slots: list[ARCacheSlot], *, write_positions: list[int], write_lengths: list[int], length: int
     ) -> None:
         # `layers=[]` keeps the base Cache bookkeeping valid (`is_sliding` empty,
         # `is_compileable` False); `update` is fully overridden.
@@ -386,10 +376,7 @@ class EnglishContract(_BaseContract):
         start = int(t3.hp.start_speech_token)
         initial = start * torch.ones_like(text[:, :1])
         embeds, _len_cond = t3.prepare_input_embeds(
-            t3_cond=conds_t3,
-            text_tokens=text,
-            speech_tokens=initial,
-            cfg_weight=cfg_weight,
+            t3_cond=conds_t3, text_tokens=text, speech_tokens=initial, cfg_weight=cfg_weight
         )
         bos = torch.full((1, 1), start, dtype=torch.long, device=embeds.device)
         bos = t3.speech_emb(bos)
@@ -441,10 +428,7 @@ class TurboContract(_BaseContract):
         start = int(t3.hp.start_speech_token)
         initial = start * torch.ones_like(text_tokens[:, :1])
         embeds, _len_cond = t3.prepare_input_embeds(
-            t3_cond=conds_t3,
-            text_tokens=text_tokens,
-            speech_tokens=initial,
-            cfg_weight=0.0,
+            t3_cond=conds_t3, text_tokens=text_tokens, speech_tokens=initial, cfg_weight=0.0
         )
         return embeds
 
@@ -594,10 +578,7 @@ class ARBatchRunner:
                 # Not a refusal (Phase 11-0): the pool allocates per device, so a
                 # model on a secondary device still gets a real arena there. Log
                 # it because the placement is worth seeing in the boot table.
-                logger.info(
-                    f"AR runner for '{self.model_key}': arena on {model_device} "
-                    f"(pool default {pool.device})"
-                )
+                logger.info(f"AR runner for '{self.model_key}': arena on {model_device} (pool default {pool.device})")
             try:
                 layers, kv_heads, head_dim, dtype = self._geometry()
                 # Bound the arena to the maximum rows the scheduler can admit
@@ -606,13 +587,12 @@ class ARBatchRunner:
                 # the whole shared pool and makes a runtime refusal impossible
                 # when the budget is adequate; an arena that still cannot fit a
                 # slab is a graceful sequential fallback, never a boot failure.
-                cap = int(getattr(pool, "default_cap_tokens", DEFAULT_AR_CACHE_CAP_TOKENS) or DEFAULT_AR_CACHE_CAP_TOKENS)
+                cap = int(
+                    getattr(pool, "default_cap_tokens", DEFAULT_AR_CACHE_CAP_TOKENS) or DEFAULT_AR_CACHE_CAP_TOKENS
+                )
                 # Only shrink a *production-default* pool to the contract's
                 # measured need; a test pool with an explicit small cap keeps it.
-                if (
-                    cap == DEFAULT_AR_CACHE_CAP_TOKENS
-                    and self.contract.preferred_cap_tokens is not None
-                ):
+                if cap == DEFAULT_AR_CACHE_CAP_TOKENS and self.contract.preferred_cap_tokens is not None:
                     cap = min(cap, int(self.contract.preferred_cap_tokens))
                 slab = ARCacheDescriptor(
                     model_key=self.model_key,
@@ -624,9 +604,7 @@ class ARBatchRunner:
                     rows_per_request=self.contract.rows_per_request,
                 ).slab_bytes(cap)
                 desired = max(
-                    1,
-                    int(getattr(self.model_config, "max_batch_size", 1) or 1)
-                    * self.contract.rows_per_request,
+                    1, int(getattr(self.model_config, "max_batch_size", 1) or 1) * self.contract.rows_per_request
                 )
                 remaining = (
                     pool.remaining_bytes_for(model_device)
@@ -771,10 +749,7 @@ class ARBatchRunner:
             if isinstance(self.contract, TurboContract):
                 row.processors = _build_processors(temperature, top_k, top_p, repetition_penalty)
                 row.start_token = torch.full(
-                    (1, 1),
-                    int(self.t3.hp.start_speech_token),
-                    dtype=torch.long,
-                    device=self.t3.device,
+                    (1, 1), int(self.t3.hp.start_speech_token), dtype=torch.long, device=self.t3.device
                 )
             else:
                 row.sampler = T3ARSampler(
@@ -785,10 +760,7 @@ class ARBatchRunner:
                     repetition_penalty=repetition_penalty,
                 )
                 row.generated_ids = torch.full(
-                    (1, 1),
-                    int(self.t3.hp.start_speech_token),
-                    dtype=torch.long,
-                    device=self.t3.device,
+                    (1, 1), int(self.t3.hp.start_speech_token), dtype=torch.long, device=self.t3.device
                 )
 
             try:
@@ -846,11 +818,7 @@ class ARBatchRunner:
             )
         rows = len(row.slots)
         cache = ArenaBatchCache(
-            self.arena,
-            row.slots,
-            write_positions=[0] * rows,
-            write_lengths=[length] * rows,
-            length=length,
+            self.arena, row.slots, write_positions=[0] * rows, write_lengths=[length] * rows, length=length
         )
         cache_position = torch.arange(length, dtype=torch.long, device=self.t3.device)
         position_ids = cache_position.unsqueeze(0).expand(rows, -1)
@@ -858,11 +826,7 @@ class ARBatchRunner:
             [row],
             [length],
             lambda: self._forward(
-                embeds,
-                cache,
-                cache_position=cache_position,
-                attention_mask=None,
-                position_ids=position_ids,
+                embeds, cache, cache_position=cache_position, attention_mask=None, position_ids=position_ids
             ),
         )
         logits = self.t3.speech_head(output.last_hidden_state)  # [R, length, V]
@@ -893,8 +857,7 @@ class ARBatchRunner:
         num_layers = len(self.t3.tfmr.layers)
         num_heads = int(getattr(config, "num_attention_heads", 16) or 16)
         aligned_heads = [
-            (layer_idx % num_layers, head_idx % num_heads)
-            for layer_idx, head_idx in _asa_mod.LLAMA_ALIGNED_HEADS
+            (layer_idx % num_layers, head_idx % num_heads) for layer_idx, head_idx in _asa_mod.LLAMA_ALIGNED_HEADS
         ]
 
         prev_attn = getattr(config, "_attn_implementation", "sdpa") if config is not None else None
@@ -931,9 +894,7 @@ class ARBatchRunner:
                     if attention is None:
                         continue
                     # (B, H, T0, Ti): 2*r_idx is row r_idx's conditional CFG slot.
-                    row.analyzer.last_aligned_attns[buffer_idx] = attention[
-                        2 * r_idx, head_idx, :, :kv_len
-                    ].cpu()
+                    row.analyzer.last_aligned_attns[buffer_idx] = attention[2 * r_idx, head_idx, :, :kv_len].cpu()
             return result
         finally:
             for handle in handles:
@@ -983,9 +944,7 @@ class ARBatchRunner:
         if common_length:
             attention_mask = None
         else:
-            attention_mask = torch.zeros(
-                len(rows_flat), length_after, dtype=torch.bool, device=self.t3.device
-            )
+            attention_mask = torch.zeros(len(rows_flat), length_after, dtype=torch.bool, device=self.t3.device)
             index = 0
             for row in rows:
                 for _ in row.slots:
@@ -1006,11 +965,7 @@ class ARBatchRunner:
             rows,
             [row.length + 1 for row in rows],
             lambda: self._forward(
-                embeds,
-                cache,
-                cache_position=cache_position,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
+                embeds, cache, cache_position=cache_position, attention_mask=attention_mask, position_ids=position_ids
             ),
         )
         logits = self.t3.speech_head(output.last_hidden_state)  # [R, 1, V]

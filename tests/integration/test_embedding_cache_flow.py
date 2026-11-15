@@ -61,8 +61,7 @@ class EmbeddingStubModel:
         self.calls += 1
         self.conds = _Conditionals(
             t3=_T3Cond(
-                speaker_emb=torch.tensor([float(waveform[0]), float(waveform[1])]),
-                emotion_adv=torch.zeros(1, 1, 1),
+                speaker_emb=torch.tensor([float(waveform[0]), float(waveform[1])]), emotion_adv=torch.zeros(1, 1, 1)
             ),
             # A stable, non-zero summary of the reference clip: two requests that
             # reuse the same conditioning must synthesize identical audio.
@@ -136,9 +135,7 @@ def _build_engine(*, cache_enabled: bool):
 
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
         engine = HarmonySpeechEngine(
-            model_configs=[embed_config, tts_config],
-            log_stats=False,
-            embedding_cache_enabled=cache_enabled,
+            model_configs=[embed_config, tts_config], log_stats=False, embedding_cache_enabled=cache_enabled
         )
 
     embed_model = EmbeddingStubModel()

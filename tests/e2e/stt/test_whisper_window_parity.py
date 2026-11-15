@@ -38,9 +38,7 @@ from harmonyspeech.task_handler.whisper_batching import WhisperWindowBatcher
 
 MODEL_PATH = os.environ.get("HSE_WHISPER_PARITY_MODEL")
 SAMPLE_RATE = 16000
-CLIP_PATH = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "test-data", "samples", "wanda4.wav")
-)
+CLIP_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "test-data", "samples", "wanda4.wav"))
 
 pytestmark = [
     pytest.mark.e2e,
@@ -118,8 +116,7 @@ def test_batched_b1_matches_sequential_for_a_single_window_clip(whisper_model, c
     # timings and language are identical; the probability is a soft signal, so
     # it is bounded at 1e-2 rather than the original 1e-3.
     probability_delta = abs(
-        float(batched["info"]["language_probability"])
-        - float(sequential["info"]["language_probability"])
+        float(batched["info"]["language_probability"]) - float(sequential["info"]["language_probability"])
     )
     assert probability_delta <= 1e-2, (
         "language_probability (informational) moved "
@@ -127,9 +124,7 @@ def test_batched_b1_matches_sequential_for_a_single_window_clip(whisper_model, c
         f"sequential={sequential['info']['language_probability']}"
     )
     assert batched["info"]["duration"] == pytest.approx(sequential["info"]["duration"], abs=1e-3)
-    assert batched["info"]["duration_after_vad"] == pytest.approx(
-        sequential["info"]["duration_after_vad"], abs=1e-3
-    )
+    assert batched["info"]["duration_after_vad"] == pytest.approx(sequential["info"]["duration_after_vad"], abs=1e-3)
     # The payload is wire-compatible with the sequential path.
     assert set(json.loads(json.dumps(batched))) == {"text", "segments", "info"}
 

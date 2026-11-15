@@ -21,11 +21,7 @@ import pytest
 from pydantic import ValidationError
 
 from harmonyspeech.common.inputs import TextToSpeechAudioOutputOptions, TextToSpeechRequestInput
-from harmonyspeech.endpoints.openai.protocol import (
-    AudioOutputOptions,
-    GenerationOptions,
-    TextToSpeechRequest,
-)
+from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions, GenerationOptions, TextToSpeechRequest
 from harmonyspeech.endpoints.openai.serving_text_to_speech import streaming_admission_error
 from harmonyspeech.endpoints.openai.streaming import (
     HEADER_ACCEL_BUFFERING,
@@ -144,9 +140,7 @@ def test_stream_format_constants():
 
 @pytest.mark.unit
 def test_streaming_headers_are_the_canonical_set():
-    headers = streaming_response_headers(
-        audio_format="wav", sample_rate=24000, request_id="tts-abc"
-    )
+    headers = streaming_response_headers(audio_format="wav", sample_rate=24000, request_id="tts-abc")
     assert tuple(headers) == STREAMING_RESPONSE_HEADERS
     assert headers[HEADER_AUDIO_FORMAT] == "wav"
     assert headers[HEADER_AUDIO_SAMPLE_RATE] == "24000"
@@ -160,9 +154,7 @@ def test_streaming_headers_are_the_canonical_set():
 @pytest.mark.unit
 def test_streaming_headers_report_the_target_rate():
     """``X-Audio-Sample-Rate`` is the effective/target rate, not the source rate."""
-    headers = streaming_response_headers(
-        audio_format="pcm", sample_rate=8000, request_id="tts-tel"
-    )
+    headers = streaming_response_headers(audio_format="pcm", sample_rate=8000, request_id="tts-tel")
     assert headers[HEADER_AUDIO_FORMAT] == "pcm"
     assert headers[HEADER_AUDIO_SAMPLE_RATE] == "8000"
 
@@ -198,8 +190,7 @@ def test_admission_rejects_whole_buffer_formats_naming_wav_pcm():
 @pytest.mark.parametrize("option", ["trim_silence", "fix_internal_silence"])
 def test_admission_rejects_whole_buffer_filters(option):
     request = _request(
-        output_options=AudioOutputOptions(stream=True),
-        generation_options=GenerationOptions(**{option: True}),
+        output_options=AudioOutputOptions(stream=True), generation_options=GenerationOptions(**{option: True})
     )
     message = streaming_admission_error(request, uses_native_speed=False)
     assert message is not None
@@ -209,10 +200,7 @@ def test_admission_rejects_whole_buffer_filters(option):
 
 @pytest.mark.unit
 def test_admission_rejects_non_native_speed_naming_whole_buffer():
-    request = _request(
-        output_options=AudioOutputOptions(stream=True),
-        generation_options=GenerationOptions(speed=1.5),
-    )
+    request = _request(output_options=AudioOutputOptions(stream=True), generation_options=GenerationOptions(speed=1.5))
     message = streaming_admission_error(request, uses_native_speed=False)
     assert message is not None
     assert "speed" in message
@@ -223,45 +211,34 @@ def test_admission_rejects_non_native_speed_naming_whole_buffer():
 @pytest.mark.parametrize("speed", [None, 1, 1.0])
 def test_admission_allows_unity_speed_on_non_native_families(speed):
     request = _request(
-        output_options=AudioOutputOptions(stream=True),
-        generation_options=GenerationOptions(speed=speed),
+        output_options=AudioOutputOptions(stream=True), generation_options=GenerationOptions(speed=speed)
     )
     assert streaming_admission_error(request, uses_native_speed=False) is None
 
 
 @pytest.mark.unit
 def test_admission_allows_speed_on_native_families():
-    request = _request(
-        output_options=AudioOutputOptions(stream=True),
-        generation_options=GenerationOptions(speed=2.0),
-    )
+    request = _request(output_options=AudioOutputOptions(stream=True), generation_options=GenerationOptions(speed=2.0))
     assert streaming_admission_error(request, uses_native_speed=True) is None
 
 
 @pytest.mark.unit
 def test_admission_allows_sample_rate_while_streaming():
-    request = _request(
-        output_options=AudioOutputOptions(format="pcm", sample_rate=8000, stream=True)
-    )
+    request = _request(output_options=AudioOutputOptions(format="pcm", sample_rate=8000, stream=True))
     assert streaming_admission_error(request, uses_native_speed=False) is None
 
 
 @pytest.mark.unit
 def test_admission_allows_remove_dc_offset_while_streaming():
     request = _request(
-        output_options=AudioOutputOptions(stream=True),
-        generation_options=GenerationOptions(remove_dc_offset=True),
+        output_options=AudioOutputOptions(stream=True), generation_options=GenerationOptions(remove_dc_offset=True)
     )
     assert streaming_admission_error(request, uses_native_speed=False) is None
 
 
 @pytest.mark.unit
 def test_admission_ignores_every_restriction_when_not_streaming():
-    request = _request(
-        generation_options=GenerationOptions(
-            trim_silence=True, fix_internal_silence=True, speed=2.0
-        ),
-    )
+    request = _request(generation_options=GenerationOptions(trim_silence=True, fix_internal_silence=True, speed=2.0))
     assert streaming_admission_error(request, uses_native_speed=False) is None
     explicit_off = _request(
         output_options=AudioOutputOptions(stream=False),
@@ -283,9 +260,7 @@ def test_sse_envelope_uses_the_same_admission_rules():
 @pytest.mark.unit
 def test_stream_alias_and_stream_format_audio_are_equivalent():
     alias = _request(output_options=AudioOutputOptions(format="mp3", stream=True))
-    explicit = _request(
-        output_options=AudioOutputOptions(format="mp3", stream_format="audio")
-    )
+    explicit = _request(output_options=AudioOutputOptions(format="mp3", stream_format="audio"))
     assert streaming_admission_error(alias, uses_native_speed=False) == streaming_admission_error(
         explicit, uses_native_speed=False
     )
@@ -306,8 +281,7 @@ def _tts_payload(**overrides):
 def test_wire_rejects_mp3_stream_before_synthesis(wire_client):
     before = len(wire_client.engine.requests)
     response = wire_client.client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"format": "mp3", "stream_format": "audio"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"format": "mp3", "stream_format": "audio"})
     )
     assert response.status_code == 400
     message = response.json()["message"]
@@ -325,8 +299,7 @@ def test_wire_audio_envelope_streams_binary_after_admission(wire_client):
     """
     before = len(wire_client.engine.requests)
     response = wire_client.client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream": True, "format": "wav"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream": True, "format": "wav"})
     )
     assert response.status_code == 200
     assert response.headers[HEADER_AUDIO_FORMAT] == "wav"
@@ -346,9 +319,7 @@ def test_wire_audio_envelope_streams_binary_after_admission(wire_client):
 def test_wire_pcm_envelope_omits_the_header(wire_client):
     response = wire_client.client.post(
         "/v1/audio/speech",
-        json=_tts_payload(
-            output_options={"stream_format": "audio", "format": "pcm", "sample_rate": 8000}
-        ),
+        json=_tts_payload(output_options={"stream_format": "audio", "format": "pcm", "sample_rate": 8000}),
     )
     assert response.status_code == 200
     assert response.headers[HEADER_AUDIO_FORMAT] == "pcm"
@@ -368,8 +339,7 @@ def test_wire_sse_envelope_streams_events(wire_client):
     """
     before = len(wire_client.engine.requests)
     response = wire_client.client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "sse", "format": "pcm"})
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == SSE_MEDIA_TYPE
@@ -389,9 +359,7 @@ def test_wire_sse_envelope_streams_events(wire_client):
     assert f"event: {SSE_EVENT_ERROR}" not in lines
 
     payloads = [
-        json.loads(line[len("data: ") :])
-        for line in lines
-        if line.startswith("data: ") and line != "data: [DONE]"
+        json.loads(line[len("data: ") :]) for line in lines if line.startswith("data: ") and line != "data: [DONE]"
     ]
     deltas = [payload for payload in payloads if payload["type"] == SSE_EVENT_DELTA]
     done = [payload for payload in payloads if payload["type"] == SSE_EVENT_DONE]
@@ -409,22 +377,12 @@ def test_wire_sse_envelope_streams_events(wire_client):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        ("trim_silence", True),
-        ("fix_internal_silence", True),
-        ("speed", 1.5),
-    ],
-)
+@pytest.mark.parametrize(("option", "value"), [("trim_silence", True), ("fix_internal_silence", True), ("speed", 1.5)])
 def test_wire_rejects_whole_buffer_options_with_stream(wire_client, option, value):
     before = len(wire_client.engine.requests)
     response = wire_client.client.post(
         "/v1/audio/speech",
-        json=_tts_payload(
-            output_options={"stream": True, "format": "wav"},
-            generation_options={option: value},
-        ),
+        json=_tts_payload(output_options={"stream": True, "format": "wav"}, generation_options={option: value}),
     )
     assert response.status_code == 400
     message = response.json()["message"]
@@ -434,16 +392,12 @@ def test_wire_rejects_whole_buffer_options_with_stream(wire_client, option, valu
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "generation_options",
-    [{"remove_dc_offset": True}, {"speed": 1}],
-)
+@pytest.mark.parametrize("generation_options", [{"remove_dc_offset": True}, {"speed": 1}])
 def test_wire_accepts_composable_options_with_stream(wire_client, generation_options):
     response = wire_client.client.post(
         "/v1/audio/speech",
         json=_tts_payload(
-            output_options={"stream": True, "format": "pcm", "sample_rate": 8000},
-            generation_options=generation_options,
+            output_options={"stream": True, "format": "pcm", "sample_rate": 8000}, generation_options=generation_options
         ),
     )
     # Admission passed and 14-3 streams the body: never a 400, never a buffered 200 JSON.
@@ -455,12 +409,10 @@ def test_wire_accepts_composable_options_with_stream(wire_client, generation_opt
 @pytest.mark.unit
 def test_wire_alias_and_stream_format_have_the_same_outcome(wire_client):
     alias = wire_client.client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream": True, "format": "mp3"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream": True, "format": "mp3"})
     )
     explicit = wire_client.client.post(
-        "/v1/audio/speech",
-        json=_tts_payload(output_options={"stream_format": "audio", "format": "mp3"}),
+        "/v1/audio/speech", json=_tts_payload(output_options={"stream_format": "audio", "format": "mp3"})
     )
     assert alias.status_code == explicit.status_code == 400
     assert alias.json()["message"] == explicit.json()["message"]
@@ -470,32 +422,22 @@ def test_wire_alias_and_stream_format_have_the_same_outcome(wire_client):
 def test_wire_native_speed_family_accepts_speed_while_streaming():
     """A native-speed family consumes ``speed`` itself, so streaming admits it."""
     with WireApp(
-        decode_inputs=True,
-        model_configs=[
-            SimpleNamespace(name="test-tts", model_type="KittenTTSSynthesizer")
-        ],
+        decode_inputs=True, model_configs=[SimpleNamespace(name="test-tts", model_type="KittenTTSSynthesizer")]
     ) as wire:
         response = wire.client.post(
             "/v1/audio/speech",
-            json=_tts_payload(
-                output_options={"stream": True, "format": "wav"},
-                generation_options={"speed": 2.0},
-            ),
+            json=_tts_payload(output_options={"stream": True, "format": "wav"}, generation_options={"speed": 2.0}),
         )
     assert response.status_code == 200
     assert response.content[:4] == b"RIFF"
 
     # Control: the same request on a non-native (Chatterbox) family is a 400.
     with WireApp(
-        decode_inputs=True,
-        model_configs=[SimpleNamespace(name="test-tts", model_type="ChatterboxTTS")],
+        decode_inputs=True, model_configs=[SimpleNamespace(name="test-tts", model_type="ChatterboxTTS")]
     ) as wire:
         rejected = wire.client.post(
             "/v1/audio/speech",
-            json=_tts_payload(
-                output_options={"stream": True, "format": "wav"},
-                generation_options={"speed": 2.0},
-            ),
+            json=_tts_payload(output_options={"stream": True, "format": "wav"}, generation_options={"speed": 2.0}),
         )
     assert rejected.status_code == 400
     assert "whole-buffer" in rejected.json()["message"]
@@ -504,18 +446,11 @@ def test_wire_native_speed_family_accepts_speed_while_streaming():
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "output_options",
-    [
-        None,
-        {"format": "wav"},
-        {"format": "wav", "stream": False},
-        {"format": "wav", "stream_format": None},
-    ],
+    [None, {"format": "wav"}, {"format": "wav", "stream": False}, {"format": "wav", "stream_format": None}],
 )
 def test_wire_non_streaming_output_is_byte_identical(wire_client, output_options):
     """Buffered requests (including explicit non-streaming fields) are unchanged."""
-    response = wire_client.client.post(
-        "/v1/audio/speech", json=_tts_payload(output_options=output_options)
-    )
+    response = wire_client.client.post("/v1/audio/speech", json=_tts_payload(output_options=output_options))
     assert response.status_code == 200
     body = response.json()
     assert body["data"] == wav_b64()

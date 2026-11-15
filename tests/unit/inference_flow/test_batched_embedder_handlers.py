@@ -51,10 +51,7 @@ ROOMY_BUDGET = 1_000_000
 def _fake_hf_config():
     return types.SimpleNamespace(
         data=types.SimpleNamespace(
-            sampling_rate=SAMPLE_RATE,
-            filter_length=FILTER_LENGTH,
-            hop_length=HOP_LENGTH,
-            win_length=WIN_LENGTH,
+            sampling_rate=SAMPLE_RATE, filter_length=FILTER_LENGTH, hop_length=HOP_LENGTH, win_length=WIN_LENGTH
         )
     )
 
@@ -94,9 +91,7 @@ def _ov_request(request_id: str, artifact: AudioArtifact, vad_source: str = "whi
     request = _embed_request(request_id, "openvoice")
     request.artifacts = {
         "input_audio": artifact,
-        "input_vad_data": VadArtifact(
-            segments=[{"start": 0.0, "end": 0.1, "text": "hi"}], source=vad_source
-        ),
+        "input_vad_data": VadArtifact(segments=[{"start": 0.0, "end": 0.1, "text": "hi"}], source=vad_source),
     }
     return request
 
@@ -125,10 +120,7 @@ def _recording_speaker_encoder() -> tuple[SpeakerEncoder, list]:
     """A tiny real ``SpeakerEncoder`` whose batched calls are recorded."""
     torch.manual_seed(0)
     encoder = SpeakerEncoder(
-        mel_n_channels=MEL_CHANNELS,
-        model_hidden_size=5,
-        model_num_layers=1,
-        model_embedding_size=4,
+        mel_n_channels=MEL_CHANNELS, model_hidden_size=5, model_num_layers=1, model_embedding_size=4
     ).eval()
     calls: list[list[int]] = []
     original = encoder.forward_batched
@@ -162,9 +154,10 @@ class _FailingBatchedRefEncoder:
 
 
 def _run_ov_encoder(runner, segments_per_request, requests):
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         return runner._execute_openvoice_tone_converter_encoder(segments_per_request, requests)
 
 
@@ -208,18 +201,14 @@ def test_openvoice_encoder_batched_matches_the_per_item_loop():
     model = types.SimpleNamespace(ref_enc=encoder)
     batched_runner = _runner(model, "OpenVoiceV2ToneConverterEncoder", batch_token_budget=ROOMY_BUDGET)
     loop_runner = _runner(
-        types.SimpleNamespace(ref_enc=encoder),
-        "OpenVoiceV2ToneConverterEncoder",
-        batched_inference=False,
+        types.SimpleNamespace(ref_enc=encoder), "OpenVoiceV2ToneConverterEncoder", batched_inference=False
     )
     segments, requests = _ov_batch()
 
     with torch.no_grad():
         batched = _run_ov_encoder(batched_runner, segments, requests)
         looped = _run_ov_encoder(
-            loop_runner,
-            segments,
-            [_ov_request(f"ov-loop-{index}", batch[0]) for index, batch in enumerate(segments)],
+            loop_runner, segments, [_ov_request(f"ov-loop-{index}", batch[0]) for index, batch in enumerate(segments)]
         )
 
     assert len(batched) == len(looped) == 3
@@ -275,18 +264,14 @@ def test_openvoice_encoder_batched_failure_falls_back_to_the_loop():
     failing = _FailingBatchedRefEncoder(encoder)
     batched_runner = _runner(types.SimpleNamespace(ref_enc=failing), "OpenVoiceV2ToneConverterEncoder")
     loop_runner = _runner(
-        types.SimpleNamespace(ref_enc=encoder),
-        "OpenVoiceV2ToneConverterEncoder",
-        batched_inference=False,
+        types.SimpleNamespace(ref_enc=encoder), "OpenVoiceV2ToneConverterEncoder", batched_inference=False
     )
     segments, requests = _ov_batch()
 
     with torch.no_grad():
         results = _run_ov_encoder(batched_runner, segments, requests)
         reference = _run_ov_encoder(
-            loop_runner,
-            segments,
-            [_ov_request(f"ov-ref-{index}", batch[0]) for index, batch in enumerate(segments)],
+            loop_runner, segments, [_ov_request(f"ov-ref-{index}", batch[0]) for index, batch in enumerate(segments)]
         )
 
     assert failing.batched_attempts >= 1
@@ -335,18 +320,12 @@ def test_openvoice_encoder_request_with_no_segment_errors_alone():
 def test_openvoice_encoder_single_request_with_no_segment_raises_the_honest_error():
     """The ``len == 1`` loop path (no batching) reports the same message."""
     encoder, calls = _recording_reference_encoder()
-    runner = _runner(
-        types.SimpleNamespace(ref_enc=encoder),
-        "OpenVoiceV2ToneConverterEncoder",
-        batched_inference=False,
-    )
+    runner = _runner(types.SimpleNamespace(ref_enc=encoder), "OpenVoiceV2ToneConverterEncoder", batched_inference=False)
 
     results = _run_ov_encoder(runner, [[]], [_ov_request("ov-empty-solo", _clip(2000))])
 
     assert results[0].result_data.finish_reason == "error"
-    assert results[0].result_data.error == (
-        "reference clip contains no detectable speech (VAD segments empty)"
-    )
+    assert results[0].result_data.error == ("reference clip contains no detectable speech (VAD segments empty)")
     assert calls == []
 
 
@@ -363,19 +342,17 @@ def _partials(preprocessed) -> np.ndarray:
     covered by ``tests/unit/modeling/test_batched_embedders.py``).
     """
     count = max(1, int(preprocessed.shape[-1]) // 400)
-    base = np.linspace(0.0, 1.0, PARTIAL_FRAMES * MEL_CHANNELS, dtype=np.float32).reshape(
-        PARTIAL_FRAMES, MEL_CHANNELS
-    )
+    base = np.linspace(0.0, 1.0, PARTIAL_FRAMES * MEL_CHANNELS, dtype=np.float32).reshape(PARTIAL_FRAMES, MEL_CHANNELS)
     return np.stack([base + 0.05 * index for index in range(count)])
 
 
 def _run_hs_encoder(runner, artifacts, requests):
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.preprocess_wav",
-        side_effect=lambda samples, source_sr: np.asarray(samples, dtype=np.float32),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_input_frames",
-        side_effect=_partials,
+    with (
+        patch(
+            "harmonyspeech.task_handler.model_runner_base.preprocess_wav",
+            side_effect=lambda samples, source_sr: np.asarray(samples, dtype=np.float32),
+        ),
+        patch("harmonyspeech.task_handler.model_runner_base.get_input_frames", side_effect=_partials),
     ):
         return runner._execute_harmonyspeech_encoder(artifacts, requests)
 
@@ -390,9 +367,7 @@ def _hs_batch():
 @pytest.mark.unit
 def test_harmonyspeech_encoder_forwards_all_partials_in_one_batch():
     encoder, calls = _recording_speaker_encoder()
-    runner = _runner(
-        encoder, "HarmonySpeechEncoder", max_batch_size=8, batch_token_budget=ROOMY_BUDGET
-    )
+    runner = _runner(encoder, "HarmonySpeechEncoder", max_batch_size=8, batch_token_budget=ROOMY_BUDGET)
     artifacts, requests = _hs_batch()
 
     results = _run_hs_encoder(runner, artifacts, requests)
@@ -439,17 +414,10 @@ def test_harmonyspeech_encoder_batch_of_four_with_two_hits_only_forwards_the_mis
         max_batch_size=8,
         batch_token_budget=ROOMY_BUDGET,
     )
-    artifacts = [
-        _clip(400, freq=220.0),
-        _clip(800, freq=330.0),
-        _clip(1200, freq=440.0),
-        _clip(1600, freq=550.0),
-    ]
+    artifacts = [_clip(400, freq=220.0), _clip(800, freq=330.0), _clip(1200, freq=440.0), _clip(1600, freq=550.0)]
 
     for index in (0, 2):
-        _run_hs_encoder(
-            runner, [artifacts[index]], [_embed_request(f"warm-{index}", "harmonyspeech")]
-        )
+        _run_hs_encoder(runner, [artifacts[index]], [_embed_request(f"warm-{index}", "harmonyspeech")])
     assert cache.stats()["stores"] == 2
     calls.clear()
 

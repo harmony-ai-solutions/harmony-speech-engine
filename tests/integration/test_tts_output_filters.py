@@ -109,9 +109,7 @@ async def test_edge_conditioning_bounds_chunk_edges_and_trim_is_a_no_op_there():
     plain_options = dict(CHUNK_OPTIONS, crossfade_ms=0, sentence_pause_ms=0)
     async with harness:
         untrimmed = await _speak(harness, _request(TWO_CHUNKS, **plain_options))
-        trimmed = await _speak(
-            harness, _request(TWO_CHUNKS, trim_silence=True, **plain_options)
-        )
+        trimmed = await _speak(harness, _request(TWO_CHUNKS, trim_silence=True, **plain_options))
 
     plain, _ = _decode(untrimmed)
     cut, _ = _decode(trimmed)
@@ -133,19 +131,12 @@ async def test_internal_silence_fixing_runs_after_stitching():
     pause_ms = 900  # above the 700 ms minimum
     async with harness:
         unfixed = await _speak(
-            harness,
-            _request(
-                TWO_CHUNKS, sentence_pause_ms=pause_ms, crossfade_ms=0, **CHUNK_OPTIONS
-            ),
+            harness, _request(TWO_CHUNKS, sentence_pause_ms=pause_ms, crossfade_ms=0, **CHUNK_OPTIONS)
         )
         fixed = await _speak(
             harness,
             _request(
-                TWO_CHUNKS,
-                sentence_pause_ms=pause_ms,
-                crossfade_ms=0,
-                fix_internal_silence=True,
-                **CHUNK_OPTIONS,
+                TWO_CHUNKS, sentence_pause_ms=pause_ms, crossfade_ms=0, fix_internal_silence=True, **CHUNK_OPTIONS
             ),
         )
 
@@ -218,12 +209,7 @@ async def test_filters_run_before_the_post_stitch_speed_stretch():
         response = await _speak(
             harness,
             _request(
-                TWO_CHUNKS,
-                sentence_pause_ms=900,
-                crossfade_ms=0,
-                fix_internal_silence=True,
-                speed=2.0,
-                **CHUNK_OPTIONS,
+                TWO_CHUNKS, sentence_pause_ms=900, crossfade_ms=0, fix_internal_silence=True, speed=2.0, **CHUNK_OPTIONS
             ),
         )
 
@@ -254,13 +240,7 @@ async def test_filters_run_before_the_single_watermark():
     async with harness:
         response = await _speak(
             harness,
-            _request(
-                TWO_CHUNKS,
-                sentence_pause_ms=900,
-                crossfade_ms=0,
-                fix_internal_silence=True,
-                **CHUNK_OPTIONS,
-            ),
+            _request(TWO_CHUNKS, sentence_pause_ms=900, crossfade_ms=0, fix_internal_silence=True, **CHUNK_OPTIONS),
         )
 
     waveform, _sr = _decode(response)
@@ -282,11 +262,7 @@ async def test_all_filters_off_is_byte_identical_to_omitting_them():
         explicit_off = await _speak(
             harness,
             _request(
-                TWO_CHUNKS,
-                remove_dc_offset=False,
-                trim_silence=False,
-                fix_internal_silence=False,
-                **CHUNK_OPTIONS,
+                TWO_CHUNKS, remove_dc_offset=False, trim_silence=False, fix_internal_silence=False, **CHUNK_OPTIONS
             ),
         )
     assert omitted.data == explicit_off.data
@@ -317,8 +293,7 @@ async def test_filter_flags_reach_chunk_sub_requests_without_double_applying():
     harness.prepare = prepare
     async with harness:
         response = await _speak(
-            harness,
-            _request(TWO_CHUNKS, remove_dc_offset=True, trim_silence=True, **CHUNK_OPTIONS),
+            harness, _request(TWO_CHUNKS, remove_dc_offset=True, trim_silence=True, **CHUNK_OPTIONS)
         )
 
     assert isinstance(response, TextToSpeechResponse), response

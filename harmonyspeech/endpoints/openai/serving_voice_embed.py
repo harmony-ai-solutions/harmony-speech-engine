@@ -35,11 +35,7 @@ class OpenAIServingVoiceEmbedding(OpenAIServing):
 
         request_data = SpeechEmbeddingRequestInput.from_openai(request_id=request_id, request=request)
         artifacts = from_wire_audio(request_data)
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.voice_embedding_full_generator(request, raw_request, result_generator, request_id)

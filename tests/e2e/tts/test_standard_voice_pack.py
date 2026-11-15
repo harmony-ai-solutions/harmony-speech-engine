@@ -14,10 +14,7 @@ import os
 
 import pytest
 
-from harmonyspeech.endpoints.openai.protocol import (
-    TextToSpeechRequest,
-    TextToSpeechResponse,
-)
+from harmonyspeech.endpoints.openai.protocol import TextToSpeechRequest, TextToSpeechResponse
 
 pytestmark = [
     pytest.mark.e2e,
@@ -42,13 +39,7 @@ def _decode(response):
 def _speak_pack_voice(serving_tts, raw_request, model, *, language=None):
     return asyncio.run(
         serving_tts.create_text_to_speech(
-            TextToSpeechRequest(
-                model=model,
-                input=TEXT,
-                mode="voice_cloning",
-                voice=VOICE,
-                language=language,
-            ),
+            TextToSpeechRequest(model=model, input=TEXT, mode="voice_cloning", voice=VOICE, language=language),
             raw_request,
         )
     )
@@ -56,29 +47,19 @@ def _speak_pack_voice(serving_tts, raw_request, model, *, language=None):
 
 def test_standard_voice_pack_on_chatterbox(chatterbox_engine, mock_raw_request):
     _engine, serving_tts, _embed, _vc = chatterbox_engine
-    wave, sample_rate = _decode(
-        _speak_pack_voice(serving_tts, mock_raw_request, "chatterbox")
-    )
+    wave, sample_rate = _decode(_speak_pack_voice(serving_tts, mock_raw_request, "chatterbox"))
     assert wave.size > 0 and sample_rate > 0
 
 
-def test_standard_voice_pack_on_chatterbox_turbo(
-    chatterbox_turbo_engine, mock_raw_request
-):
+def test_standard_voice_pack_on_chatterbox_turbo(chatterbox_turbo_engine, mock_raw_request):
     _engine, serving_tts, _embed = chatterbox_turbo_engine
-    wave, sample_rate = _decode(
-        _speak_pack_voice(serving_tts, mock_raw_request, "chatterbox_turbo")
-    )
+    wave, sample_rate = _decode(_speak_pack_voice(serving_tts, mock_raw_request, "chatterbox_turbo"))
     assert wave.size > 0 and sample_rate > 0
 
 
-def test_standard_voice_pack_on_chatterbox_multilingual(
-    chatterbox_multilingual_engine, mock_raw_request
-):
+def test_standard_voice_pack_on_chatterbox_multilingual(chatterbox_multilingual_engine, mock_raw_request):
     _engine, serving_tts, _embed = chatterbox_multilingual_engine
     wave, sample_rate = _decode(
-        _speak_pack_voice(
-            serving_tts, mock_raw_request, "chatterbox_multilingual", language="en"
-        )
+        _speak_pack_voice(serving_tts, mock_raw_request, "chatterbox_multilingual", language="en")
     )
     assert wave.size > 0 and sample_rate > 0

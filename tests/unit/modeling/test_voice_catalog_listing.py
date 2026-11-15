@@ -49,18 +49,8 @@ def _openvoice_v1_configs():
     return [
         _config("faster-whisper", "FasterWhisper"),
         _config("ov1-encoder", "OpenVoiceV1ToneConverterEncoder", language="EN"),
-        _config(
-            "ov1-synth-en",
-            "OpenVoiceV1Synthesizer",
-            language="EN",
-            voices=["default", "friendly"],
-        ),
-        _config(
-            "ov1-synth-zh",
-            "OpenVoiceV1Synthesizer",
-            language="ZH",
-            voices=["default"],
-        ),
+        _config("ov1-synth-en", "OpenVoiceV1Synthesizer", language="EN", voices=["default", "friendly"]),
+        _config("ov1-synth-zh", "OpenVoiceV1Synthesizer", language="ZH", voices=["default"]),
         _config("ov1-tone-converter", "OpenVoiceV1ToneConverter"),
     ]
 
@@ -185,9 +175,7 @@ def test_vc_target_kinds_are_listed_distinctly():
 def test_disabled_pack_hides_standard_entries_but_keeps_capability_flags():
     configs = _shipped_like_configs()
     enabled = _by_model(catalog.voice_catalog_listing(configs))
-    disabled = _by_model(
-        catalog.voice_catalog_listing(configs, standard_pack_enabled=False)
-    )
+    disabled = _by_model(catalog.voice_catalog_listing(configs, standard_pack_enabled=False))
 
     assert set(enabled) == set(disabled)
     for model, entry in disabled.items():
@@ -205,9 +193,7 @@ def test_tone_converter_without_its_encoder_is_honestly_not_capable():
     # A lone OpenVoice tone converter cannot embed a pack clip: no VAD, no
     # encoder, so no target_voice. The listing must not advertise pack names
     # the request path rejects.
-    listing = catalog.voice_catalog_listing(
-        [_config("ov1-tone-converter", "OpenVoiceV1ToneConverter")]
-    )
+    listing = catalog.voice_catalog_listing([_config("ov1-tone-converter", "OpenVoiceV1ToneConverter")])
 
     assert [entry.model for entry in listing] == ["ov1-tone-converter"]
     entry = listing[0]

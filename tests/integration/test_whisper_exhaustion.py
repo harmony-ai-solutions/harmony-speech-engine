@@ -30,12 +30,7 @@ from harmonyspeech.processing.scheduler import Scheduler
 from harmonyspeech.task_handler import model_runner_base, whisper_batching
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 from scripts.bench_throughput import whisper_flood_scenario
-from tests.unit.inference_flow.test_whisper_window_batching import (
-    SAMPLE_RATE,
-    _clips_for,
-    _FakeCT2,
-    _FakeWhisperModel,
-)
+from tests.unit.inference_flow.test_whisper_window_batching import SAMPLE_RATE, _clips_for, _FakeCT2, _FakeWhisperModel
 
 # ---------------------------------------------------------------------------
 # Harness
@@ -127,9 +122,7 @@ def _runner(model, config):
 
 def _engine(config, runner, *, request_timeout_s=600.0):
     with patch("harmonyspeech.executor.cpu_executor.CPUExecutor._init_worker"):
-        engine = HarmonySpeechEngine(
-            model_configs=[config], log_stats=False, request_timeout_s=request_timeout_s
-        )
+        engine = HarmonySpeechEngine(model_configs=[config], log_stats=False, request_timeout_s=request_timeout_s)
     engine.model_executors = {config.name: _StubExecutor(runner)}
     return engine
 
@@ -214,12 +207,7 @@ def test_tight_cap_100_request_flood_completes_with_zero_loss_and_zero_pairing_e
     try:
         for spec in specs:
             request_id = f"flood-{spec['index']}"
-            request = _request(
-                request_id,
-                spec["duration_s"],
-                task=spec["task"],
-                language=spec["language"],
-            )
+            request = _request(request_id, spec["duration_s"], task=spec["task"], language=spec["language"])
             engine.add_request(request_id, request.request_data, artifacts=request.artifacts)
         outputs = _drive(engine)
     finally:
@@ -288,9 +276,7 @@ def _patch_cuda(monkeypatch, free: dict, total: int = 1000):
     monkeypatch.setattr(torch.cuda, "memory_allocated", lambda index=None: 0)
     monkeypatch.setattr(torch.cuda, "memory_reserved", lambda index=None: 0)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda index=None: 0)
-    monkeypatch.setattr(
-        torch.cuda, "get_device_properties", lambda index=None: SimpleNamespace(total_memory=total)
-    )
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda index=None: SimpleNamespace(total_memory=total))
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda index=None: "fake-gpu")
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda index=None: (free["value"], total))
 
@@ -392,9 +378,7 @@ def test_abort_storm_loses_no_unrelated_request_and_errors_only_aborted_ones():
 
     # Unique short durations -> one unique window marker per request.
     durations = {f"abort-{index}": 1.0 + index * 0.1 for index in range(40)}
-    requests = {
-        request_id: _request(request_id, seconds) for request_id, seconds in durations.items()
-    }
+    requests = {request_id: _request(request_id, seconds) for request_id, seconds in durations.items()}
 
     # 10 requests are aborted while still waiting; 10 more are aborted while the
     # batcher is decoding their window; 20 must complete untouched.
@@ -421,8 +405,7 @@ def test_abort_storm_loses_no_unrelated_request_and_errors_only_aborted_ones():
         # point at *those* instances, not the caller-side stand-ins.
         engine_requests = {request.request_id: request for request in engine.scheduler.waiting}
         ct2.abort_by_marker = {
-            int(round(durations[request_id] * 1000)): engine_requests[request_id]
-            for request_id in in_flight_aborts
+            int(round(durations[request_id] * 1000)): engine_requests[request_id] for request_id in in_flight_aborts
         }
         for request_id in waiting_aborts:
             engine.abort_request(request_id)

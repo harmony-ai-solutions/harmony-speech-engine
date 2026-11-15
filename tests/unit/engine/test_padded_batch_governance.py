@@ -81,11 +81,7 @@ def _engine_shell() -> HarmonySpeechEngine:
     return engine
 
 
-def _padded_executor(
-    name: str = "ov2-tone-converter",
-    model_type: str = "OpenVoiceV2ToneConverter",
-    runner=None,
-):
+def _padded_executor(name: str = "ov2-tone-converter", model_type: str = "OpenVoiceV2ToneConverter", runner=None):
     config = ModelConfig(
         name=name,
         model="dummy/openvoice",
@@ -126,34 +122,26 @@ def test_tone_converter_states_map_to_the_task_files_expected_widths():
     lengths = [LONG_ROW_FRAMES] * 8
 
     # 5.6 GiB free (12-9 fixture): the static cap fits, no shrink, width 2.
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_MEL_FRAME_BATCH_BUDGET, FIXTURE_FREE, "mel_frame"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_MEL_FRAME_BATCH_BUDGET, FIXTURE_FREE, "mel_frame")
     assert decision["allowed_area"] == DEFAULT_MEL_FRAME_BATCH_BUDGET
     assert decision["shrunk"] is False
     assert _plan_width(lengths, decision["allowed_area"], 8) == 2
 
     # ~2.5 GiB free (shipped catalogue): the cap shrinks below 7500 but the
     # plan keeps width 2 for ~39 s rows.
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_MEL_FRAME_BATCH_BUDGET, SHIPPED_FREE, "mel_frame"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_MEL_FRAME_BATCH_BUDGET, SHIPPED_FREE, "mel_frame")
     assert decision["allowed_area"] == 7211
     assert decision["shrunk"] is True
     assert _plan_width(lengths, decision["allowed_area"], 8) == 2
 
     # ~0.9 GiB free: width floor, every long row alone.
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_MEL_FRAME_BATCH_BUDGET, TIGHT_FREE, "mel_frame"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_MEL_FRAME_BATCH_BUDGET, TIGHT_FREE, "mel_frame")
     assert decision["allowed_area"] == 2596
     assert decision["shrunk"] is True
     assert _plan_width(lengths, decision["allowed_area"], 8) == 1
 
     # The recorded 3660-frame paragraph is already width 1 at ~2.5 GiB.
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_MEL_FRAME_BATCH_BUDGET, SHIPPED_FREE, "mel_frame"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_MEL_FRAME_BATCH_BUDGET, SHIPPED_FREE, "mel_frame")
     assert _plan_width([RECORDED_PARAGRAPH_FRAMES] * 8, decision["allowed_area"], 8) == 1
 
 
@@ -162,17 +150,13 @@ def test_phone_axis_states_keep_the_static_cap_until_headroom_tightens():
     padded_batch = _padded_batch()
 
     # ~2.5 GiB still fits the 1024-phone cap (headroom area 1422).
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_PHONE_BATCH_BUDGET, SHIPPED_FREE, "phone"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_PHONE_BATCH_BUDGET, SHIPPED_FREE, "phone")
     assert decision["allowed_area"] == DEFAULT_PHONE_BATCH_BUDGET
     assert decision["shrunk"] is False
     assert _plan_width([500] * 8, decision["allowed_area"], 8) == 2
 
     # ~0.9 GiB shrinks to 512 phones: 500-phone rows alone, 128-phone chunks 4-wide.
-    decision = padded_batch.allowed_padded_area(
-        DEFAULT_PHONE_BATCH_BUDGET, TIGHT_FREE, "phone"
-    )
+    decision = padded_batch.allowed_padded_area(DEFAULT_PHONE_BATCH_BUDGET, TIGHT_FREE, "phone")
     assert decision["allowed_area"] == 512
     assert decision["shrunk"] is True
     assert _plan_width([500] * 8, decision["allowed_area"], 8) == 1
@@ -259,10 +243,7 @@ def test_render_metrics_zero_state_when_nothing_was_governed():
     assert "# TYPE hse_padded_batch_shrink_total counter" in body
     assert "# TYPE hse_padded_batch_headroom_bytes gauge" in body
     assert 'hse_padded_batch_shrink_total{model="none",axis="none"} 0' in body
-    assert (
-        'hse_padded_batch_headroom_bytes{model="none",axis="none",device="none"} 0'
-        in body
-    )
+    assert 'hse_padded_batch_headroom_bytes{model="none",axis="none",device="none"} 0' in body
 
 
 @pytest.mark.unit
@@ -292,14 +273,10 @@ def test_render_metrics_emits_the_recorded_model_axis_values():
 
     body = _render()(stats)
 
-    assert (
-        'hse_padded_batch_shrink_total{model="ov2-tone-converter",axis="mel_frame"} 3'
-        in body
-    )
+    assert 'hse_padded_batch_shrink_total{model="ov2-tone-converter",axis="mel_frame"} 3' in body
     assert (
         'hse_padded_batch_headroom_bytes{model="ov2-tone-converter",axis="mel_frame",'
-        f'device="cuda:0"}} {TIGHT_FREE}'
-        in body
+        f'device="cuda:0"}} {TIGHT_FREE}' in body
     )
     assert 'model="none"' not in body
 
@@ -397,26 +374,15 @@ def test_metrics_endpoint_renders_the_padded_batch_series(monkeypatch):
     response = asyncio.run(api_server.metrics())
     body = response.body.decode()
 
-    assert (
-        'hse_padded_batch_shrink_total{model="ov2-tone-converter",axis="mel_frame"} 0'
-        in body
-    )
-    assert (
-        'hse_padded_batch_headroom_bytes{model="ov2-tone-converter",axis="mel_frame"'
-        in body
-    )
+    assert 'hse_padded_batch_shrink_total{model="ov2-tone-converter",axis="mel_frame"} 0' in body
+    assert 'hse_padded_batch_headroom_bytes{model="ov2-tone-converter",axis="mel_frame"' in body
 
 
 @pytest.mark.unit
 def test_metrics_endpoint_renders_zero_state_without_an_engine(monkeypatch):
     from harmonyspeech.endpoints.openai import api_server
 
-    for attribute in (
-        "openai_serving_tts",
-        "openai_serving_stt",
-        "openai_serving_vc",
-        "openai_serving_embedding",
-    ):
+    for attribute in ("openai_serving_tts", "openai_serving_stt", "openai_serving_vc", "openai_serving_embedding"):
         monkeypatch.setattr(api_server, attribute, None)
 
     body = asyncio.run(api_server.metrics()).body.decode()

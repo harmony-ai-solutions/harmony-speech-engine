@@ -22,13 +22,7 @@ import numpy as np
 import pytest
 
 from harmonyspeech.common import audio_codec
-from tests.wire_contract_support import (
-    TRANSCRIPTION_PAYLOAD,
-    WireApp,
-    sample_b64,
-    sample_bytes,
-    wav_b64,
-)
+from tests.wire_contract_support import TRANSCRIPTION_PAYLOAD, WireApp, sample_b64, sample_bytes, wav_b64
 
 pytestmark = pytest.mark.e2e
 
@@ -39,12 +33,7 @@ NEEDS_MODELS = pytest.mark.skipif(
 )
 
 INPUT_FORMATS = ["wav", "flac", "mp3"] + (["aac"] if FFMPEG_AVAILABLE else [])
-INPUT_FILES = {
-    "wav": "codec_tone.wav",
-    "flac": "codec_tone.flac",
-    "mp3": "codec_tone.mp3",
-    "aac": "codec_tone.aac",
-}
+INPUT_FILES = {"wav": "codec_tone.wav", "flac": "codec_tone.flac", "mp3": "codec_tone.mp3", "aac": "codec_tone.aac"}
 TRANSPORTS = ["json", "multipart"]
 
 OUTPUT_CASES = [
@@ -98,9 +87,7 @@ def test_input_format_and_transport_matrix(wire, test_data_dir, input_format, tr
         response = wire.client.post(url, json={"model": model, "input_audio": expected_b64})
     else:
         response = wire.client.post(
-            url,
-            files={"file": (f"tone.{input_format}", payload, f"audio/{input_format}")},
-            data={"model": model},
+            url, files={"file": (f"tone.{input_format}", payload, f"audio/{input_format}")}, data={"model": model}
         )
 
     assert response.status_code == 200, response.text
@@ -116,18 +103,13 @@ def test_tts_reference_audio_format_and_transport(wire, test_data_dir, input_for
 
     if transport == "json":
         response = wire.client.post(
-            "/v1/audio/speech",
-            json=_tts_payload(mode="voice_cloning", input_audio=expected_b64),
+            "/v1/audio/speech", json=_tts_payload(mode="voice_cloning", input_audio=expected_b64)
         )
     else:
         response = wire.client.post(
             "/v1/audio/speech",
             files={"input_audio": (f"ref.{input_format}", payload, f"audio/{input_format}")},
-            data={
-                "model": WireApp.MODEL_IDS["tts"],
-                "mode": "voice_cloning",
-                "input": "hello world",
-            },
+            data={"model": WireApp.MODEL_IDS["tts"], "mode": "voice_cloning", "input": "hello world"},
         )
 
     assert response.status_code == 200, response.text
@@ -193,11 +175,7 @@ def test_unknown_stt_response_format_is_rejected(wire, endpoint):
     before = len(wire.engine.requests)
     response = wire.client.post(
         endpoint,
-        json={
-            "model": WireApp.MODEL_IDS["stt"],
-            "input_audio": sample_b64("codec_tone.wav"),
-            "response_format": "ass",
-        },
+        json={"model": WireApp.MODEL_IDS["stt"], "input_audio": sample_b64("codec_tone.wav"), "response_format": "ass"},
     )
     assert response.status_code == 400
     assert "Unsupported response_format" in response.json()["message"]
@@ -299,8 +277,7 @@ def test_unsupported_sample_rate_is_rejected(wire):
 
 def test_garbage_audio_is_a_typed_error_over_both_transports(wire):
     json_response = wire.client.post(
-        "/v1/audio/transcriptions",
-        json={"model": "test-stt", "input_audio": base64.b64encode(b"garbage").decode()},
+        "/v1/audio/transcriptions", json={"model": "test-stt", "input_audio": base64.b64encode(b"garbage").decode()}
     )
     multipart_response = wire.client.post(
         "/v1/audio/transcriptions",
@@ -314,9 +291,7 @@ def test_garbage_audio_is_a_typed_error_over_both_transports(wire):
 
 def test_oversized_upload_is_rejected(wire_small_limit):
     response = wire_small_limit.client.post(
-        "/v1/audio/transcriptions",
-        files={"file": ("big.wav", b"0" * 8192, "audio/wav")},
-        data={"model": "test-stt"},
+        "/v1/audio/transcriptions", files={"file": ("big.wav", b"0" * 8192, "audio/wav")}, data={"model": "test-stt"}
     )
     assert response.status_code == 413
     assert response.json()["type"] == "PayloadTooLargeError"

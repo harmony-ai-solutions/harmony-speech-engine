@@ -84,11 +84,7 @@ from chatterbox.models.t3.inference.alignment_stream_analyzer import AlignmentSt
 from chatterbox.models.t3.inference.t3_hf_backend import T3HuggingfaceBackend
 from loguru import logger
 from torch import Tensor
-from transformers.generation.logits_process import (
-    MinPLogitsWarper,
-    RepetitionPenaltyLogitsProcessor,
-    TopPLogitsWarper,
-)
+from transformers.generation.logits_process import MinPLogitsWarper, RepetitionPenaltyLogitsProcessor, TopPLogitsWarper
 
 #: Opt-in debug flag: set to ``1``/``true``/``yes``/``on`` to bring back
 #: upstream's per-token progress bar. Default off — the bar is a per-request
@@ -206,16 +202,7 @@ class _SafeAlignmentStreamAnalyzer(AlignmentStreamAnalyzer):
       removal, so no hook ever lives on the shared ``tfmr``.
     """
 
-    def __init__(
-        self,
-        tfmr,
-        queue,
-        text_tokens_slice,
-        alignment_layer_idx=9,
-        eos_idx=0,
-        *,
-        attach_hooks: bool = True,
-    ):
+    def __init__(self, tfmr, queue, text_tokens_slice, alignment_layer_idx=9, eos_idx=0, *, attach_hooks: bool = True):
         # Head table is resolved here (not at import) so a test can monkeypatch it
         # and so tiny models (2 layers / 4 heads) never raise ``IndexError``.
         import chatterbox.models.t3.inference.alignment_stream_analyzer as analyzer_module
@@ -246,7 +233,9 @@ class _SafeAlignmentStreamAnalyzer(AlignmentStreamAnalyzer):
         config = getattr(tfmr, "config", None)
         self._tfmr_config = config if self.attach_hooks else None
         self._previous_attn_implementation = None
-        self.original_output_attentions = bool(getattr(config, "output_attentions", False)) if config is not None else False
+        self.original_output_attentions = (
+            bool(getattr(config, "output_attentions", False)) if config is not None else False
+        )
 
         if self.attach_hooks:
             # ``config.output_attentions = True`` raises when the implementation
@@ -352,9 +341,7 @@ class _SafeAlignmentStreamAnalyzer(AlignmentStreamAnalyzer):
             logits[..., self.eos_idx] = -(2**15)
 
         if long_tail or alignment_repetition or token_repetition:
-            logger.warning(
-                f"forcing EOS token, {long_tail=}, {alignment_repetition=}, {token_repetition=}"
-            )
+            logger.warning(f"forcing EOS token, {long_tail=}, {alignment_repetition=}, {token_repetition=}")
             logits = -(2**15) * torch.ones_like(logits)
             logits[..., self.eos_idx] = 2**15
 
@@ -415,9 +402,7 @@ class ChatterboxT3AR(T3):
         """
         return getattr(backend, "alignment_stream_analyzer", None) is not None
 
-    def build_ar_backend(
-        self, *, len_cond: int | None = None, text_len: int | None = None
-    ) -> T3HuggingfaceBackend:
+    def build_ar_backend(self, *, len_cond: int | None = None, text_len: int | None = None) -> T3HuggingfaceBackend:
         """Build the HF-generation backend over the existing modules.
 
         Mirrors upstream ``t3.py:277-298``. Multilingual models need the text
@@ -443,9 +428,7 @@ class ChatterboxT3AR(T3):
             alignment_stream_analyzer=analyzer,
         )
 
-    def get_ar_backend(
-        self, *, len_cond: int | None = None, text_len: int | None = None
-    ) -> T3HuggingfaceBackend:
+    def get_ar_backend(self, *, len_cond: int | None = None, text_len: int | None = None) -> T3HuggingfaceBackend:
         """Return the backend, rebuilding it when ``self.compiled`` is cleared.
 
         Upstream clears ``self.compiled`` at the top of every ``inference`` call
@@ -482,19 +465,11 @@ class ChatterboxT3AR(T3):
         return embed + self.speech_pos_emb.get_fixed_embedding(position)
 
     def ar_prefill(
-        self,
-        *,
-        t3_cond,
-        text_tokens: Tensor,
-        initial_speech_tokens: Tensor,
-        cfg_weight: float = 0.0,
+        self, *, t3_cond, text_tokens: Tensor, initial_speech_tokens: Tensor, cfg_weight: float = 0.0
     ) -> T3ARDecodeState:
         """Compose conditioning + text + BOS and run the uncached prefill forward."""
         embeds, len_cond = self.prepare_input_embeds(
-            t3_cond=t3_cond,
-            text_tokens=text_tokens,
-            speech_tokens=initial_speech_tokens,
-            cfg_weight=cfg_weight,
+            t3_cond=t3_cond, text_tokens=text_tokens, speech_tokens=initial_speech_tokens, cfg_weight=cfg_weight
         )
 
         # Build the backend right after the embeds are known (the multilingual
@@ -591,11 +566,7 @@ class ChatterboxT3AR(T3):
         analyzer_enabled = bool(self.hp.is_multilingual and self.analyzer_enabled())
         tfmr_config = getattr(self.tfmr, "config", None)
         sentinel = object()
-        previous_attn = (
-            getattr(tfmr_config, "_attn_implementation", sentinel)
-            if tfmr_config is not None
-            else sentinel
-        )
+        previous_attn = getattr(tfmr_config, "_attn_implementation", sentinel) if tfmr_config is not None else sentinel
         if analyzer_enabled and tfmr_config is not None:
             tfmr_config._attn_implementation = "eager"
 

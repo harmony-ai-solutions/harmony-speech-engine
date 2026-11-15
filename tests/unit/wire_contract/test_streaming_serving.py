@@ -52,10 +52,7 @@ async def test_wav_header_rides_on_the_first_frame_only():
     state = StreamState(source_rate=24000, target_rate=24000)
 
     frames = [
-        frame
-        async for frame in _encode_stream_frames(
-            _segments([first, second]), audio_format="wav", state=state
-        )
+        frame async for frame in _encode_stream_frames(_segments([first, second]), audio_format="wav", state=state)
     ]
 
     assert frames[0] == wav_stream_header(24000) + pcm16_frame(first, 24000)
@@ -69,12 +66,7 @@ async def test_pcm_envelope_never_carries_a_header():
     segment = np.full(8, 0.25, dtype=np.float32)
     state = StreamState(source_rate=8000, target_rate=8000)
 
-    frames = [
-        frame
-        async for frame in _encode_stream_frames(
-            _segments([segment]), audio_format="pcm", state=state
-        )
-    ]
+    frames = [frame async for frame in _encode_stream_frames(_segments([segment]), audio_format="pcm", state=state)]
 
     assert frames == [pcm16_frame(segment, 8000)]
 
@@ -87,10 +79,7 @@ async def test_empty_segments_are_skipped_and_do_not_consume_the_header():
     state = StreamState(source_rate=16000, target_rate=16000)
 
     frames = [
-        frame
-        async for frame in _encode_stream_frames(
-            _segments([empty, first]), audio_format="wav", state=state
-        )
+        frame async for frame in _encode_stream_frames(_segments([empty, first]), audio_format="wav", state=state)
     ]
 
     assert len(frames) == 1
@@ -103,12 +92,7 @@ async def test_header_uses_the_target_rate_not_the_source_rate():
     segment = np.full(4, 0.1, dtype=np.float32)
     state = StreamState(source_rate=24000, target_rate=8000)
 
-    frames = [
-        frame
-        async for frame in _encode_stream_frames(
-            _segments([segment]), audio_format="wav", state=state
-        )
-    ]
+    frames = [frame async for frame in _encode_stream_frames(_segments([segment]), audio_format="wav", state=state)]
 
     assert frames[0][:44] == wav_stream_header(8000)
     assert frames[0][44:] == pcm16_frame(segment, 8000)
@@ -129,9 +113,7 @@ async def test_quantization_runs_on_a_worker_thread(monkeypatch):
     state = StreamState(source_rate=24000, target_rate=24000)
     segment = np.full(8, 0.25, dtype=np.float32)
 
-    [_frame async for _frame in _encode_stream_frames(
-        _segments([segment]), audio_format="pcm", state=state
-    )]
+    [_frame async for _frame in _encode_stream_frames(_segments([segment]), audio_format="pcm", state=state)]
 
     assert calls and all(ident != threading.get_ident() for ident in calls)
 

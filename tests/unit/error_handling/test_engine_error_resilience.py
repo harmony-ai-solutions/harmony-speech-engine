@@ -27,10 +27,7 @@ import pytest
 from harmonyspeech.common import audio_codec
 from harmonyspeech.common.artifacts import AudioArtifact
 from harmonyspeech.common.config import DeviceConfig, ModelConfig
-from harmonyspeech.common.inputs import (
-    SpeechEmbeddingRequestInput,
-    TextToSpeechRequestInput,
-)
+from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput, TextToSpeechRequestInput
 from harmonyspeech.common.outputs import RequestOutput, SpeechEmbeddingRequestOutput
 from harmonyspeech.common.request import EngineRequest, ExecutorResult, RequestStatus
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
@@ -212,9 +209,7 @@ def test_check_forward_processing_error_result_updates_scheduler():
 
     engine.check_forward_processing(result)
 
-    engine.scheduler.update_request_status.assert_called_once_with(
-        "cleanup-test-001", RequestStatus.FINISHED_STOPPED
-    )
+    engine.scheduler.update_request_status.assert_called_once_with("cleanup-test-001", RequestStatus.FINISHED_STOPPED)
 
 
 @pytest.mark.unit
@@ -241,9 +236,7 @@ def test_check_forward_processing_normal_embedding_still_forwards():
         input_audio="base64audio==",
     )
     speaker = SpeakerArtifact(conditionals=SimpleNamespace(), backend="chatterbox")
-    embed_output = SpeechEmbeddingRequestOutput(
-        request_id="fwd-001", output="", embedding_artifact=speaker
-    )
+    embed_output = SpeechEmbeddingRequestOutput(request_id="fwd-001", output="", embedding_artifact=speaker)
     result = ExecutorResult(request_id="fwd-001", input_data=tts_input, result_data=embed_output)
 
     with patch.object(engine, "add_request") as mock_add:

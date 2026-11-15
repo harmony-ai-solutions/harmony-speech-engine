@@ -38,15 +38,8 @@ from harmonyspeech.endpoints.openai.protocol import (
     GenerationOptions,
     TextToSpeechRequest,
 )
-from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-    StreamingAudioResponse,
-    StreamState,
-)
-from harmonyspeech.endpoints.openai.streaming import (
-    HEADER_AUDIO_SAMPLE_RATE,
-    pcm16_frame,
-    wav_stream_header,
-)
+from harmonyspeech.endpoints.openai.serving_text_to_speech import StreamingAudioResponse, StreamState
+from harmonyspeech.endpoints.openai.streaming import HEADER_AUDIO_SAMPLE_RATE, pcm16_frame, wav_stream_header
 from tests.integration.test_tts_chunking import (
     RAW,
     SAMPLE_RATE,
@@ -87,11 +80,7 @@ SLOW_TEXT = "ZZZZ slow row."
 
 
 def _stream_request(
-    text: str,
-    *,
-    model: str = "chatterbox",
-    output: dict | None = None,
-    **generation_options,
+    text: str, *, model: str = "chatterbox", output: dict | None = None, **generation_options
 ) -> TextToSpeechRequest:
     """A TTS request that selects the binary envelope (default: wav)."""
     options = {"stream_format": "audio", "format": "wav"}
@@ -144,9 +133,7 @@ async def test_one_chunk_stream_matches_buffered_pre_watermark_pcm(remove_dc):
     text = "A short single-chunk sentence."
     async with harness:
         buffered = await _speak(harness, _request(text, remove_dc_offset=remove_dc))
-        streamed = await _speak(
-            harness, _stream_request(text, remove_dc_offset=remove_dc)
-        )
+        streamed = await _speak(harness, _stream_request(text, remove_dc_offset=remove_dc))
         body = await _collect(streamed)
 
     expected = _chunk_waveform(text)
@@ -170,13 +157,7 @@ async def test_one_chunk_stream_matches_buffered_pre_watermark_pcm(remove_dc):
 async def test_multi_chunk_stream_matches_whole_buffer_stitch_sample_for_sample():
     """The generator's ordering + frame slicing reproduce ``crossfade_stitch``."""
     harness, model = _chatterbox_harness()
-    request = _stream_request(
-        TEXT_3,
-        split_text=True,
-        chunk_size=CHUNK_SIZE,
-        crossfade_ms=8,
-        sentence_pause_ms=40,
-    )
+    request = _stream_request(TEXT_3, split_text=True, chunk_size=CHUNK_SIZE, crossfade_ms=8, sentence_pause_ms=40)
     async with harness:
         response = await _speak(harness, request)
         body = await _collect(response)
@@ -210,11 +191,7 @@ async def test_carry_continuity_across_frame_boundaries(pause_ms):
     """
     harness, _model = _chatterbox_harness()
     request = _stream_request(
-        TEXT_CONTRAST,
-        split_text=True,
-        chunk_size=CHUNK_SIZE,
-        crossfade_ms=40,
-        sentence_pause_ms=pause_ms,
+        TEXT_CONTRAST, split_text=True, chunk_size=CHUNK_SIZE, crossfade_ms=40, sentence_pause_ms=pause_ms
     )
     async with harness:
         response = await _speak(harness, request)
@@ -381,9 +358,7 @@ async def test_sequential_stream_stamps_the_base_deadline_per_chunk():
     """Sequential submission ⇒ ``base`` per chunk, not ``base * (chunks + 1)``."""
     config = _model_config("chatterbox", "ChatterboxTTS")
     model = ChatterboxStubModel()
-    harness = EngineHarness(
-        [config], {"chatterbox": model}, engine_kwargs={"request_timeout_s": 60.0}
-    )
+    harness = EngineHarness([config], {"chatterbox": model}, engine_kwargs={"request_timeout_s": 60.0})
     async with harness:
         serving = harness.serving
         deadlines: list[float | None] = []
@@ -466,10 +441,7 @@ class _BatchModelExecutor:
         return 0.25 if text.startswith("Z") else 0.02
 
     async def execute_model_async(self, requests_to_batch):
-        rows = [
-            (entry.request_id, getattr(entry.request_data, "input_text", "") or "")
-            for entry in requests_to_batch
-        ]
+        rows = [(entry.request_id, getattr(entry.request_data, "input_text", "") or "") for entry in requests_to_batch]
         self.batches.append(rows)
         await asyncio.sleep(max(self._row_duration(text) for _, text in rows))
         outputs = self.runner.execute_model(requests_to_batch)
@@ -507,9 +479,7 @@ async def test_ttfa_structural_chunk_zero_alone_emits_before_the_slow_row():
     harness = EngineHarness([config], {"chatterbox": model})
     events: list[tuple] = []
     async with harness:
-        executor = _BatchModelExecutor(
-            harness.engine.engine.model_executors["chatterbox"].runner, events
-        )
+        executor = _BatchModelExecutor(harness.engine.engine.model_executors["chatterbox"].runner, events)
         harness.engine.engine.model_executors["chatterbox"] = executor
 
         response = await harness.serving.create_text_to_speech(
@@ -518,9 +488,7 @@ async def test_ttfa_structural_chunk_zero_alone_emits_before_the_slow_row():
         events.append(("first-frame",))
 
         # The other client's slow row arrives only afterwards.
-        slow_stream = await harness.engine.add_request(
-            "slow-row", _slow_request_input(), artifacts={}
-        )
+        slow_stream = await harness.engine.add_request("slow-row", _slow_request_input(), artifacts={})
         await _collect(response)
         async for _output in slow_stream:
             pass
@@ -541,16 +509,12 @@ async def test_ttfa_structural_cobatched_chunk_zero_waits_for_the_slowest_row():
     harness = EngineHarness([config], {"chatterbox": model})
     events: list[tuple] = []
     async with harness:
-        executor = _BatchModelExecutor(
-            harness.engine.engine.model_executors["chatterbox"].runner, events
-        )
+        executor = _BatchModelExecutor(harness.engine.engine.model_executors["chatterbox"].runner, events)
         harness.engine.engine.model_executors["chatterbox"] = executor
 
         # The slow row is queued first; chunk 0 is submitted in the same engine
         # iteration (add_request never yields), so both land in one batch.
-        slow_stream = await harness.engine.add_request(
-            "slow-row", _slow_request_input(), artifacts={}
-        )
+        slow_stream = await harness.engine.add_request("slow-row", _slow_request_input(), artifacts={})
         response = await harness.serving.create_text_to_speech(
             _stream_request(TEXT_3, split_text=True, chunk_size=CHUNK_SIZE), RAW
         )
@@ -604,10 +568,7 @@ async def test_stream_state_counts_emitted_source_samples():
     assert state.segments == len(segments)
     # The counter equals the whole-buffer stitch length (sum of feed + flush).
     stitched = crossfade_stitch(
-        [_chunk_waveform(text) for text in chunks],
-        crossfade_ms=40,
-        sentence_pause_ms=120,
-        sample_rate=SAMPLE_RATE,
+        [_chunk_waveform(text) for text in chunks], crossfade_ms=40, sentence_pause_ms=120, sample_rate=SAMPLE_RATE
     )
     assert state.emitted_samples == stitched.size
     assert state.duration_s == pytest.approx(stitched.size / SAMPLE_RATE)

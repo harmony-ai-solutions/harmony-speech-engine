@@ -22,7 +22,6 @@ from harmonyspeech.modeling.voice_pack_cache import (
 )
 from harmonyspeech.processing.embedding_cache import EmbeddingCache
 
-
 # ---------------------------------------------------------------------------
 # Fakes (no engine / no weights)
 # ---------------------------------------------------------------------------
@@ -87,10 +86,7 @@ def _conditionals_artifact():
 
     return SpeakerArtifact(
         conditionals=Conditionals(
-            T3Cond(
-                speaker_emb=torch.tensor([[1.0, 2.0]]),
-                emotion_adv=torch.tensor([[[0.5]]]),
-            ),
+            T3Cond(speaker_emb=torch.tensor([[1.0, 2.0]]), emotion_adv=torch.tensor([[[0.5]]])),
             {"ge_bes": torch.tensor([0.25])},
         ),
         backend="chatterbox",
@@ -254,9 +250,7 @@ def test_build_warmup_targets_predicts_silero_as_the_default_vad_source():
             _config("silero", "SileroVAD"),
             _config("ov1-encoder", "OpenVoiceV1ToneConverterEncoder"),
         ],
-        {
-            "ov1-encoder": _FakeExecutor("ov1|OpenVoiceV1ToneConverterEncoder|float32|stub/model@main|v1"),
-        },
+        {"ov1-encoder": _FakeExecutor("ov1|OpenVoiceV1ToneConverterEncoder|float32|stub/model@main|v1")},
         EmbeddingCache(),
     )
     target = next(t for t in build_warmup_targets(engine) if t.model_name == "ov1-encoder")
@@ -280,9 +274,7 @@ def test_build_warmup_targets_is_empty_without_cache_or_executors():
 def test_hydrate_restores_disk_artifact_into_the_memory_cache(tmp_path):
     cache = EmbeddingCache()
     engine = _FakeEngine(
-        [_config("chatterbox_embedding", "ChatterboxEmbedding")],
-        {"chatterbox_embedding": _FakeExecutor("id")},
-        cache,
+        [_config("chatterbox_embedding", "ChatterboxEmbedding")], {"chatterbox_embedding": _FakeExecutor("id")}, cache
     )
     targets = build_warmup_targets(engine)
     target = next(t for t in targets if t.voice == "Abigail")
@@ -300,9 +292,7 @@ def test_hydrate_restores_disk_artifact_into_the_memory_cache(tmp_path):
 def test_hydrate_ignores_a_missing_disk_entry(tmp_path):
     cache = EmbeddingCache()
     engine = _FakeEngine(
-        [_config("chatterbox_embedding", "ChatterboxEmbedding")],
-        {"chatterbox_embedding": _FakeExecutor("id")},
-        cache,
+        [_config("chatterbox_embedding", "ChatterboxEmbedding")], {"chatterbox_embedding": _FakeExecutor("id")}, cache
     )
     assert hydrate_embedding_cache(engine, VoicePackDiskCache(tmp_path)) == 0
     assert cache.stats()["entries"] == 0
@@ -317,9 +307,7 @@ def test_pack_content_change_invalidates_the_disk_entry(tmp_path, monkeypatch):
 
     cache = EmbeddingCache()
     engine = _FakeEngine(
-        [_config("chatterbox_embedding", "ChatterboxEmbedding")],
-        {"chatterbox_embedding": _FakeExecutor("id")},
-        cache,
+        [_config("chatterbox_embedding", "ChatterboxEmbedding")], {"chatterbox_embedding": _FakeExecutor("id")}, cache
     )
     original = next(t for t in build_warmup_targets(engine) if t.voice == "Abigail")
     disk = VoicePackDiskCache(tmp_path)
@@ -330,9 +318,7 @@ def test_pack_content_change_invalidates_the_disk_entry(tmp_path, monkeypatch):
     updated_wav.write_bytes(encode_audio(np.full(16000, 0.05, dtype=np.float32), 16000, "wav"))
     real_path = voice_pack_cache.standard_voice_path
     monkeypatch.setattr(
-        voice_pack_cache,
-        "standard_voice_path",
-        lambda name: updated_wav if name == "Abigail" else real_path(name),
+        voice_pack_cache, "standard_voice_path", lambda name: updated_wav if name == "Abigail" else real_path(name)
     )
 
     updated = next(t for t in build_warmup_targets(engine) if t.voice == "Abigail")

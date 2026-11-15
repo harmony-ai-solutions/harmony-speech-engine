@@ -132,10 +132,7 @@ def test_native_entries_carry_the_config_language():
     kitten = _config("kitten", "KittenTTSSynthesizer", voices=["Bella", "Jasper"])
     assert _sources(catalog.voices_for_model(melo)) == [("EN-Newest", "native")]
     assert catalog.voices_for_model(melo)[0].languages == ("EN",)
-    assert _sources(catalog.voices_for_model(kitten)) == [
-        ("Bella", "native"),
-        ("Jasper", "native"),
-    ]
+    assert _sources(catalog.voices_for_model(kitten)) == [("Bella", "native"), ("Jasper", "native")]
     assert catalog.voices_for_model(kitten)[0].languages == ("default",)
 
 
@@ -161,18 +158,8 @@ def _openvoice_v1_configs():
     return [
         _config("faster-whisper", "FasterWhisper"),
         _config("ov1-encoder", "OpenVoiceV1ToneConverterEncoder", language="EN"),
-        _config(
-            "ov1-synth-en",
-            "OpenVoiceV1Synthesizer",
-            language="EN",
-            voices=["default", "friendly"],
-        ),
-        _config(
-            "ov1-synth-zh",
-            "OpenVoiceV1Synthesizer",
-            language="ZH",
-            voices=["default"],
-        ),
+        _config("ov1-synth-en", "OpenVoiceV1Synthesizer", language="EN", voices=["default", "friendly"]),
+        _config("ov1-synth-zh", "OpenVoiceV1Synthesizer", language="ZH", voices=["default"]),
         _config("ov1-tone-converter", "OpenVoiceV1ToneConverter"),
     ]
 
@@ -183,59 +170,34 @@ def test_pipeline_capability_is_structural_not_a_model_type_blanket():
     # A concrete synthesizer is a pipeline member but never reads the reference.
     assert not catalog.request_cloning_capable(configs, "ov1-synth-en")
     assert not catalog.request_cloning_capable(
-        [_config("melo", "MeloTTSSynthesizer", language="EN", voices=["EN-Newest"])],
-        "melo",
+        [_config("melo", "MeloTTSSynthesizer", language="EN", voices=["EN-Newest"])], "melo"
     )
-    assert not catalog.request_cloning_capable(
-        [_config("kitten", "KittenTTSSynthesizer", voices=["Jasper"])], "kitten"
-    )
+    assert not catalog.request_cloning_capable([_config("kitten", "KittenTTSSynthesizer", voices=["Jasper"])], "kitten")
     # Chatterbox pipelines and directly named executors are capable.
-    assert catalog.request_cloning_capable(
-        [_config("cb", "ChatterboxTTS")], "chatterbox"
-    )
+    assert catalog.request_cloning_capable([_config("cb", "ChatterboxTTS")], "chatterbox")
     assert catalog.request_cloning_capable([_config("cb", "ChatterboxTTS")], "cb")
 
 
 def test_request_native_voices_filters_by_language():
     configs = _openvoice_v1_configs()
-    assert catalog.request_native_voices(
-        configs, "openvoice_v1", language_id="EN"
-    ) == ("default", "friendly")
-    assert catalog.request_native_voices(
-        configs, "openvoice_v1", language_id="ZH"
-    ) == ("default",)
+    assert catalog.request_native_voices(configs, "openvoice_v1", language_id="EN") == ("default", "friendly")
+    assert catalog.request_native_voices(configs, "openvoice_v1", language_id="ZH") == ("default",)
 
 
 def test_vc_target_audio_capability_is_chatterbox_only():
-    assert catalog.request_vc_target_audio_capable(
-        [_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc"
-    )
+    assert catalog.request_vc_target_audio_capable([_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc")
     # OpenVoice VC consumes target_embedding, not target_audio.
-    assert not catalog.request_vc_target_audio_capable(
-        _openvoice_v1_configs(), "openvoice_v1"
-    )
+    assert not catalog.request_vc_target_audio_capable(_openvoice_v1_configs(), "openvoice_v1")
 
 
 def test_vc_target_voice_kind_keeps_the_two_kinds_distinct():
     # Target-audio: the executor consumes the clip itself.
-    assert (
-        catalog.vc_target_voice_kind_for_model_type("ChatterboxVC")
-        == catalog.VC_TARGET_AUDIO
-    )
-    assert (
-        catalog.voice_catalog(_config("vc", "ChatterboxVC")).vc_target_kind
-        == catalog.VC_TARGET_AUDIO
-    )
+    assert catalog.vc_target_voice_kind_for_model_type("ChatterboxVC") == catalog.VC_TARGET_AUDIO
+    assert catalog.voice_catalog(_config("vc", "ChatterboxVC")).vc_target_kind == catalog.VC_TARGET_AUDIO
     # Target-embedding: the serving layer must embed the clip first.
     for model_type in ("OpenVoiceV1ToneConverter", "OpenVoiceV2ToneConverter"):
-        assert (
-            catalog.vc_target_voice_kind_for_model_type(model_type)
-            == catalog.VC_TARGET_EMBEDDING
-        )
-        assert (
-            catalog.voice_catalog(_config("ov", model_type)).vc_target_kind
-            == catalog.VC_TARGET_EMBEDDING
-        )
+        assert catalog.vc_target_voice_kind_for_model_type(model_type) == catalog.VC_TARGET_EMBEDDING
+        assert catalog.voice_catalog(_config("ov", model_type)).vc_target_kind == catalog.VC_TARGET_EMBEDDING
     # Everything else is not a VC target.
     for model_type in ("ChatterboxTTS", "MeloTTSSynthesizer", None):
         assert catalog.vc_target_voice_kind_for_model_type(model_type) is None
@@ -243,37 +205,22 @@ def test_vc_target_voice_kind_keeps_the_two_kinds_distinct():
 
 def test_request_vc_target_voice_kind_requires_a_configured_embed_path():
     configs = _openvoice_v1_configs()
-    assert (
-        catalog.request_vc_target_voice_kind(configs, "openvoice_v1")
-        == catalog.VC_TARGET_EMBEDDING
-    )
+    assert catalog.request_vc_target_voice_kind(configs, "openvoice_v1") == catalog.VC_TARGET_EMBEDDING
     # A concrete tone converter resolves through its sibling pipeline encoder.
-    assert (
-        catalog.request_vc_target_voice_kind(configs, "ov1-tone-converter")
-        == catalog.VC_TARGET_EMBEDDING
-    )
+    assert catalog.request_vc_target_voice_kind(configs, "ov1-tone-converter") == catalog.VC_TARGET_EMBEDDING
     # Without the encoder the target cannot be embedded: honestly not capable.
     no_encoder = [c for c in configs if c.name != "ov1-encoder"]
     assert catalog.request_vc_target_voice_kind(no_encoder, "openvoice_v1") is None
-    assert (
-        catalog.request_vc_target_voice_kind(no_encoder, "ov1-tone-converter") is None
-    )
+    assert catalog.request_vc_target_voice_kind(no_encoder, "ov1-tone-converter") is None
     # Without the mandatory VAD step the embed path is incomplete too.
     no_vad = [c for c in configs if c.name != "faster-whisper"]
     assert catalog.request_vc_target_voice_kind(no_vad, "openvoice_v1") is None
     # A target-audio model is unaffected.
     assert (
-        catalog.request_vc_target_voice_kind(
-            [_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc"
-        )
+        catalog.request_vc_target_voice_kind([_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc")
         == catalog.VC_TARGET_AUDIO
     )
-    assert (
-        catalog.request_vc_target_voice_kind(
-            [_config("melo", "MeloTTSSynthesizer", language="EN")], "melo"
-        )
-        is None
-    )
+    assert catalog.request_vc_target_voice_kind([_config("melo", "MeloTTSSynthesizer", language="EN")], "melo") is None
 
 
 def test_resolve_target_embedding_route_names_the_pipeline_and_encoder():
@@ -289,12 +236,7 @@ def test_resolve_target_embedding_route_names_the_pipeline_and_encoder():
     assert route.encoder_model_name == "ov1-encoder"
 
     # A non-target-embedding model has no route.
-    assert (
-        catalog.resolve_target_embedding_route(
-            [_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc"
-        )
-        is None
-    )
+    assert catalog.resolve_target_embedding_route([_config("chatterbox_vc", "ChatterboxVC")], "chatterbox_vc") is None
 
 
 def test_lookup_resolves_a_pack_name_on_a_capable_model():
@@ -309,9 +251,7 @@ def test_lookup_resolves_a_pack_name_on_a_capable_model():
 
 def test_lookup_substitutes_the_native_default_source_voice():
     configs = _openvoice_v1_configs()
-    lookup = catalog.lookup_standard_voice(
-        configs, "openvoice_v1", "Abigail", language_id="EN"
-    )
+    lookup = catalog.lookup_standard_voice(configs, "openvoice_v1", "Abigail", language_id="EN")
     assert lookup.error is None and lookup.resolution.kind == "standard"
     # OpenVoice needs a valid source voice id for its synthesizer step.
     assert lookup.native_default == "default"
@@ -333,9 +273,7 @@ def test_lookup_honest_errors():
     assert "does not support voice cloning" in not_capable.error
     assert "EN-Newest" in not_capable.error
 
-    disabled = catalog.lookup_standard_voice(
-        [_config("cb", "ChatterboxTTS")], "cb", "Abigail", enabled=False
-    )
+    disabled = catalog.lookup_standard_voice([_config("cb", "ChatterboxTTS")], "cb", "Abigail", enabled=False)
     assert "standard voice pack is disabled" in disabled.error
 
     conflict = catalog.lookup_standard_voice(
@@ -358,28 +296,17 @@ def test_lookup_target_voice_errors_and_success():
 
     # OpenVoice VC now resolves a pack target through its encoder (13-1
     # addendum); the kind tells the serving layer to embed it first.
-    openvoice = catalog.lookup_standard_voice(
-        _openvoice_v1_configs(), "openvoice_v1", "Abigail", target=True
-    )
+    openvoice = catalog.lookup_standard_voice(_openvoice_v1_configs(), "openvoice_v1", "Abigail", target=True)
     assert openvoice.error is None
     assert openvoice.resolution.kind == "standard"
     assert openvoice.vc_target_kind == catalog.VC_TARGET_EMBEDDING
 
-    conflict = catalog.lookup_standard_voice(
-        vc,
-        "chatterbox_vc",
-        "Abigail",
-        target=True,
-        has_explicit_reference=True,
-    )
+    conflict = catalog.lookup_standard_voice(vc, "chatterbox_vc", "Abigail", target=True, has_explicit_reference=True)
     assert "not both" in conflict.error
 
     # A lone tone converter with no configured encoder cannot embed the pack.
     unsupported = catalog.lookup_standard_voice(
-        [_config("ov1-tone-converter", "OpenVoiceV1ToneConverter")],
-        "ov1-tone-converter",
-        "Abigail",
-        target=True,
+        [_config("ov1-tone-converter", "OpenVoiceV1ToneConverter")], "ov1-tone-converter", "Abigail", target=True
     )
     assert "does not accept a standard target voice" in unsupported.error
     assert unsupported.vc_target_kind is None

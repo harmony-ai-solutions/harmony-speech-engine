@@ -5,7 +5,6 @@ measurement helpers are correct and that the artifact path performs no
 serialization (the decode/encode-count assertions the phase requires).
 """
 
-
 import numpy as np
 import pytest
 

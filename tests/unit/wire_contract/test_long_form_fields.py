@@ -61,10 +61,7 @@ def test_internal_watermark_suppression_is_not_a_wire_field():
     # The one-time reference-embedding sub-request may carry the originating
     # request's options (internal, not serialized).
     embed = SpeechEmbeddingRequestInput(
-        request_id="embed-1",
-        requested_model="tts",
-        model="tts",
-        generation_options=options,
+        request_id="embed-1", requested_model="tts", model="tts", generation_options=options
     )
     assert embed.generation_options is options
 
@@ -84,9 +81,7 @@ def test_chunk_request_timeout_override_formula():
     """Every chunk gets ``base_timeout * (chunk_count + 1)``; off stays off."""
     from types import SimpleNamespace
 
-    from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-        OpenAIServingTextToSpeech,
-    )
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 
     serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
     serving.engine = SimpleNamespace(engine=SimpleNamespace(request_timeout_s=120.0))
@@ -135,7 +130,6 @@ def test_chunked_join_defaults_are_tuned_but_explicit_values_win():
     assert _resolve_join_timing(GenerationOptions(sentence_pause_ms=90)) == (40, 90)
 
 
-
 # ---------------------------------------------------------------------------
 # Phase 12-3 output filters
 # ---------------------------------------------------------------------------
@@ -149,9 +143,7 @@ def test_generation_options_output_filters_default_off():
 
 
 def test_generation_options_accepts_output_filters():
-    opts = GenerationOptions(
-        remove_dc_offset=True, trim_silence=True, fix_internal_silence=True
-    )
+    opts = GenerationOptions(remove_dc_offset=True, trim_silence=True, fix_internal_silence=True)
     assert opts.remove_dc_offset is True
     assert opts.trim_silence is True
     assert opts.fix_internal_silence is True
@@ -177,9 +169,7 @@ def test_internal_generation_options_output_filter_defaults():
 def test_output_filters_do_not_enable_chunking():
     """The filters are post-steps; they must not change the chunking decision."""
     from harmonyspeech.common.inputs import TextToSpeechRequestInput
-    from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-        OpenAIServingTextToSpeech,
-    )
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 
     serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
     options = GenerationOptions(remove_dc_offset=True, trim_silence=True, fix_internal_silence=True)
@@ -196,9 +186,7 @@ def test_output_filters_do_not_enable_chunking():
 def _serving_with_configs(configs):
     from types import SimpleNamespace
 
-    from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-        OpenAIServingTextToSpeech,
-    )
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 
     serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
     serving.engine = SimpleNamespace(engine=SimpleNamespace(model_configs=configs))
@@ -223,11 +211,7 @@ def test_default_chunk_budget_is_the_unified_300():
     # Phase 12-7/12-8 removed the per-model overrides; every family shares 300.
     import harmonyspeech.endpoints.openai.serving_text_to_speech as serving_module
 
-    for removed in (
-        "DEFAULT_CHUNK_SIZE_TURBO",
-        "DEFAULT_CHUNK_SIZE_MULTILINGUAL",
-        "DEFAULT_CHUNK_SIZE_BY_MODEL_TYPE",
-    ):
+    for removed in ("DEFAULT_CHUNK_SIZE_TURBO", "DEFAULT_CHUNK_SIZE_MULTILINGUAL", "DEFAULT_CHUNK_SIZE_BY_MODEL_TYPE"):
         assert not hasattr(serving_module, removed), f"{removed} must be gone"
 
 
@@ -250,14 +234,9 @@ def test_concrete_turbo_model_name_resolves_the_300_default():
 def test_multilingual_pipeline_sentinel_resolves_the_300_default():
     from types import SimpleNamespace
 
-    config = SimpleNamespace(
-        name="chatterbox_multilingual", model_type="ChatterboxMultilingualTTS"
-    )
+    config = SimpleNamespace(name="chatterbox_multilingual", model_type="ChatterboxMultilingualTTS")
     serving = _serving_with_configs([config])
-    assert (
-        serving._resolve_default_chunk_size(_budget_input("chatterbox_multilingual"))
-        == 300
-    )
+    assert serving._resolve_default_chunk_size(_budget_input("chatterbox_multilingual")) == 300
 
 
 def test_concrete_multilingual_model_name_resolves_the_300_default():
@@ -285,9 +264,7 @@ def test_unknown_model_falls_back_to_the_global_default():
 
 
 def test_bare_serving_without_an_engine_falls_back_to_the_global_default():
-    from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-        OpenAIServingTextToSpeech,
-    )
+    from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech
 
     serving = OpenAIServingTextToSpeech.__new__(OpenAIServingTextToSpeech)
     assert serving._resolve_default_chunk_size(_budget_input("chatterbox_turbo")) == 300
@@ -326,15 +303,10 @@ def test_turbo_resolve_chunks_uses_the_unified_300_default():
 def test_multilingual_resolve_chunks_uses_the_unified_300_default():
     from types import SimpleNamespace
 
-    config = SimpleNamespace(
-        name="chatterbox_multilingual", model_type="ChatterboxMultilingualTTS"
-    )
+    config = SimpleNamespace(name="chatterbox_multilingual", model_type="ChatterboxMultilingualTTS")
     serving = _serving_with_configs([config])
     text = " ".join(f"Sentence number {index} is here." for index in range(20))
 
-    chunks = serving._resolve_chunks(
-        _budget_input("chatterbox_multilingual", text, split_text=True)
-    )
+    chunks = serving._resolve_chunks(_budget_input("chatterbox_multilingual", text, split_text=True))
     assert chunks is not None and len(chunks) > 1
     assert all(len(chunk) <= 300 for chunk in chunks)
-

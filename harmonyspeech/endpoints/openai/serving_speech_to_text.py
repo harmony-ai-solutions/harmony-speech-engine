@@ -74,15 +74,9 @@ class OpenAIServingSpeechToText(OpenAIServing):
 
         request_id = f"stt-{random_uuid()}"
 
-        request_data = SpeechTranscribeRequestInput.from_openai(
-            request_id=request_id, request=request, task=task
-        )
+        request_data = SpeechTranscribeRequestInput.from_openai(request_id=request_id, request=request, task=task)
         artifacts = from_wire_audio(request_data)
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.speech_transcription_full_generator(request, raw_request, result_generator, request_id)

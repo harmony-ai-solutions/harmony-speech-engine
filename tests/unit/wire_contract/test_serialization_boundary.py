@@ -11,10 +11,7 @@ import torch
 
 from harmonyspeech.common.artifacts import AudioArtifact, SpeakerArtifact
 from harmonyspeech.common.inputs import TextToSpeechRequestInput
-from harmonyspeech.common.outputs import (
-    SpeechEmbeddingRequestOutput,
-    TextToSpeechRequestOutput,
-)
+from harmonyspeech.common.outputs import SpeechEmbeddingRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.common.serialization import conditionals_to_payload
 from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions
@@ -24,11 +21,7 @@ from tests.audio_fixtures import tiny_wav_b64
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: The only places allowed to know about wire text encoding.
-ALLOWED_ENCODING_FILES = {
-    "common/audio_codec.py",
-    "common/inputs.py",
-    "common/outputs.py",
-}
+ALLOWED_ENCODING_FILES = {"common/audio_codec.py", "common/inputs.py", "common/outputs.py"}
 ALLOWED_ENCODING_PREFIX = "endpoints/"
 
 
@@ -200,10 +193,7 @@ def test_to_wire_audio_from_artifact_matches_legacy_payload():
     legacy = _legacy_wav_b64(waveform, 24000)
 
     with_artifact = TextToSpeechRequestOutput(
-        request_id="tts-1",
-        text="hello",
-        output="",
-        audio_artifact=AudioArtifact.from_numpy(waveform, 24000),
+        request_id="tts-1", text="hello", output="", audio_artifact=AudioArtifact.from_numpy(waveform, 24000)
     )
     without_artifact = TextToSpeechRequestOutput(request_id="tts-2", text="hello", output=legacy)
 
@@ -220,10 +210,7 @@ def test_to_wire_audio_from_artifact_matches_legacy_payload():
 def test_to_wire_audio_honors_output_options():
     waveform = _waveform(seconds=0.25, sample_rate=24000)
     result = TextToSpeechRequestOutput(
-        request_id="tts-3",
-        text="hello",
-        output="",
-        audio_artifact=AudioArtifact.from_numpy(waveform, 24000),
+        request_id="tts-3", text="hello", output="", audio_artifact=AudioArtifact.from_numpy(waveform, 24000)
     )
 
     encoded = to_wire_audio(result, AudioOutputOptions(format="pcm"))
@@ -257,9 +244,7 @@ def test_to_wire_audio_falls_back_to_legacy_string_with_options():
 def test_to_wire_embedding_harmonyspeech_is_raw_float32():
     embedding = torch.arange(8, dtype=torch.float32)
     result = SpeechEmbeddingRequestOutput(
-        request_id="emb-1",
-        output="",
-        embedding_artifact=SpeakerArtifact(embedding=embedding, backend="harmonyspeech"),
+        request_id="emb-1", output="", embedding_artifact=SpeakerArtifact(embedding=embedding, backend="harmonyspeech")
     )
 
     expected = base64.b64encode(np.ascontiguousarray(embedding.numpy(), dtype=np.float32).tobytes()).decode()
@@ -270,9 +255,7 @@ def test_to_wire_embedding_harmonyspeech_is_raw_float32():
 def test_to_wire_embedding_openvoice_is_torch_save():
     embedding = torch.arange(8, dtype=torch.float32).reshape(1, 2, 4)
     result = SpeechEmbeddingRequestOutput(
-        request_id="emb-2",
-        output="",
-        embedding_artifact=SpeakerArtifact(embedding=embedding, backend="openvoice"),
+        request_id="emb-2", output="", embedding_artifact=SpeakerArtifact(embedding=embedding, backend="openvoice")
     )
 
     buffer = io.BytesIO()
@@ -286,8 +269,7 @@ def test_to_wire_embedding_conditionals_uses_safe_payload():
     from chatterbox.tts import Conditionals
 
     conditionals = Conditionals(
-        t3=T3Cond(speaker_emb=torch.zeros(1, 4)),
-        gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)},
+        t3=T3Cond(speaker_emb=torch.zeros(1, 4)), gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)}
     )
     result = SpeechEmbeddingRequestOutput(
         request_id="emb-3",

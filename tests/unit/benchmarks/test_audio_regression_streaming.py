@@ -59,10 +59,7 @@ def _broadband(seconds=1.0, sr=24000):
     t = np.arange(int(sr * seconds)) / sr
     freqs = np.random.default_rng(2026).uniform(150.0, 6000.0, 30)
     phases = np.random.default_rng(7).uniform(0.0, 2 * np.pi, 30)
-    signal = sum(
-        np.sin(2 * np.pi * freq * t + phase)
-        for freq, phase in zip(freqs, phases, strict=True)
-    )
+    signal = sum(np.sin(2 * np.pi * freq * t + phase) for freq, phase in zip(freqs, phases, strict=True))
     return (0.3 * signal / np.max(np.abs(signal))).astype(np.float32)
 
 
@@ -110,9 +107,7 @@ def test_streaming_axis_cases_are_multi_chunk_tts_cases_at_family_breadth():
         assert "text_literal" in case and "text" not in case
         assert case["text_literal"] == ar.LONGFORM_CHUNKED_TEXT
         chunks = split_text_into_chunks(
-            case["text_literal"],
-            chunk_size=ar.LONGFORM_AXIS_CHUNK_SIZE,
-            language=case.get("language"),
+            case["text_literal"], chunk_size=ar.LONGFORM_AXIS_CHUNK_SIZE, language=case.get("language")
         )
         assert len(chunks) >= 2
         # The case still names a configured model / the family alias.
@@ -206,9 +201,7 @@ def test_streaming_worker_renders_both_sides_with_the_same_chunk_plan(tmp_path):
     from harmonyspeech.common.audio_utils import split_text_into_chunks
 
     chunks = split_text_into_chunks(text, chunk_size=ar.LONGFORM_AXIS_CHUNK_SIZE)
-    samples = np.concatenate(
-        [np.full(64, 0.1, dtype=np.float32) for _ in chunks]
-    )
+    samples = np.concatenate([np.full(64, 0.1, dtype=np.float32) for _ in chunks])
 
     manifests = {}
     for side in ("off", "on"):
@@ -225,17 +218,13 @@ def test_streaming_worker_renders_both_sides_with_the_same_chunk_plan(tmp_path):
         }
         os.makedirs(job["out_dir"], exist_ok=True)
         serving = _FakeServing(samples, 8000)
-        manifests[side] = ar._run_streaming_worker(
-            job, engine=None, serving_tts=serving, text_table={}
-        )
+        manifests[side] = ar._run_streaming_worker(job, engine=None, serving_tts=serving, text_table={})
         assert serving.calls == (["stream"] if side == "on" else ["buffered"])
         assert manifests[side][case["name"]]["samples"] == samples.size
 
     # Both sides wrote a readable WAV with the same sample count.
     metrics = ar.compute_metrics(
-        manifests["off"][case["name"]]["wav"],
-        manifests["on"][case["name"]]["wav"],
-        "deterministic",
+        manifests["off"][case["name"]]["wav"], manifests["on"][case["name"]]["wav"], "deterministic"
     )
     assert metrics["identical"] is True
 
@@ -272,16 +261,12 @@ MEASURED_STREAMING_METRICS = {
 
 def test_streaming_axis_splits_clone_pipelines_from_the_strict_six():
     assert frozenset({"openvoice_v1", "openvoice_v2"}) == ar.STREAMING_AXIS_DISTRIBUTIONAL
-    assert frozenset(
-        {
-            "chatterbox",
-            "chatterbox_turbo",
-            "chatterbox_multilingual",
-            "melotts",
-            "harmonyspeech",
-            "kittentts",
-        }
-    ) == ar.STREAMING_AXIS_STRICT
+    assert (
+        frozenset(
+            {"chatterbox", "chatterbox_turbo", "chatterbox_multilingual", "melotts", "harmonyspeech", "kittentts"}
+        )
+        == ar.STREAMING_AXIS_STRICT
+    )
     # The sub-check runs for the whole axis, not only the distributional pair.
     assert frozenset(ar.STREAMING_AXIS_FAMILIES) == ar.STREAMING_DETERMINISM_FAMILIES
     assert set(ar.STREAMING_AXIS_FAMILIES) > ar.STREAMING_AXIS_DISTRIBUTIONAL
@@ -297,23 +282,17 @@ def test_streaming_distributional_class_accepts_the_measured_clone_divergence(fa
     """
     axis = ar.parse_axis("streaming:off-vs-on")
 
-    passed, failures = ar.verdict_for_axis(
-        axis, dict(MEASURED_STREAMING_METRICS[family]), family=family
-    )
+    passed, failures = ar.verdict_for_axis(axis, dict(MEASURED_STREAMING_METRICS[family]), family=family)
 
     assert passed is True, failures
 
 
-@pytest.mark.parametrize(
-    "family", sorted(ar.STREAMING_AXIS_STRICT - ar.MODEL_SAMPLES_EVERY_RUN)
-)
+@pytest.mark.parametrize("family", sorted(ar.STREAMING_AXIS_STRICT - ar.MODEL_SAMPLES_EVERY_RUN))
 def test_streaming_strict_families_still_reject_the_clone_divergence(family):
     """Nothing was weakened for the other six: the same metrics still fail."""
     axis = ar.parse_axis("streaming:off-vs-on")
 
-    passed, failures = ar.verdict_for_axis(
-        axis, dict(MEASURED_STREAMING_METRICS["openvoice_v2"]), family=family
-    )
+    passed, failures = ar.verdict_for_axis(axis, dict(MEASURED_STREAMING_METRICS["openvoice_v2"]), family=family)
 
     assert passed is False
     assert failures
@@ -387,9 +366,7 @@ def test_streaming_distributional_case_label_records_the_phase_8_3_reason():
         assert "Phase 8-3" in label
 
     for family in ar.STREAMING_AXIS_STRICT:
-        assert ar._cases_for_axis(axis, family)[0]["label"] == (
-            "streamed vs buffered (multi-chunk, pre-watermark)"
-        )
+        assert ar._cases_for_axis(axis, family)[0]["label"] == ("streamed vs buffered (multi-chunk, pre-watermark)")
 
 
 def test_streaming_determinism_entry_mirrors_the_determinism_axis_class(tmp_path):
@@ -454,12 +431,8 @@ def test_streaming_axis_renders_twice_and_folds_the_determinism_subcheck(monkeyp
             workdir=str(tmp_path / "work"),
         )
         monkeypatch.setattr(ar, "_run_side", fake_run_side)
-        monkeypatch.setattr(
-            ar, "_cases_for_axis", lambda axis, family: [{"name": "streamed_case"}]
-        )
-        monkeypatch.setattr(
-            ar, "partition_optional_cases", lambda cases, available=None: (cases, [])
-        )
+        monkeypatch.setattr(ar, "_cases_for_axis", lambda axis, family: [{"name": "streamed_case"}])
+        monkeypatch.setattr(ar, "partition_optional_cases", lambda cases, available=None: (cases, []))
         monkeypatch.setattr(ar, "_family_kind", lambda family: "stochastic")
         monkeypatch.setattr(ar, "_markdown_table", lambda report: reports.append(report) or "")
         monkeypatch.setattr(ar, "_gpu_description", lambda: {})

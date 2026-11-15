@@ -23,13 +23,7 @@ from dataclasses import dataclass
 from harmonyspeech.common import audio_codec
 from harmonyspeech.endpoints.openai.protocol import AudioOutputOptions
 
-__all__ = [
-    "EncodedAudio",
-    "apply_output_options",
-    "encode_artifact",
-    "normalize_format",
-    "validate_output_options",
-]
+__all__ = ["EncodedAudio", "apply_output_options", "encode_artifact", "normalize_format", "validate_output_options"]
 
 
 @dataclass(frozen=True)
@@ -66,10 +60,7 @@ def validate_output_options(opts: AudioOutputOptions | None) -> str | None:
             return f"Invalid output sample_rate '{sample_rate}'. It must be a positive integer in Hz."
         if sample_rate not in audio_codec.SUPPORTED_SAMPLE_RATES:
             supported = ", ".join(str(rate) for rate in sorted(audio_codec.SUPPORTED_SAMPLE_RATES))
-            return (
-                f"Unsupported output sample_rate '{sample_rate}'. "
-                f"Supported sample rates: {supported}."
-            )
+            return f"Unsupported output sample_rate '{sample_rate}'. Supported sample rates: {supported}."
 
     return None
 
@@ -94,11 +85,7 @@ def apply_output_options(b64_wav: str, opts: AudioOutputOptions | None) -> Encod
     waveform, source_sr = audio_codec.decode_wav_b64(b64_wav)
     effective_sr = int(target_sr) if target_sr is not None else source_sr
     encoded = audio_codec.encode_audio(waveform, source_sr, fmt, target_sr=target_sr)
-    return EncodedAudio(
-        data=base64.b64encode(encoded).decode("ascii"),
-        format=fmt,
-        sample_rate=effective_sr,
-    )
+    return EncodedAudio(data=base64.b64encode(encoded).decode("ascii"), format=fmt, sample_rate=effective_sr)
 
 
 def encode_artifact(artifact, opts: AudioOutputOptions | None) -> EncodedAudio:

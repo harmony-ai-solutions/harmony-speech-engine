@@ -28,21 +28,9 @@ import pytest
 
 from harmonyspeech.endpoints.openai import api_server
 from harmonyspeech.endpoints.openai.args import make_arg_parser
-from harmonyspeech.endpoints.openai.streaming_metrics import (
-    get_stream_stats,
-    reset_stream_metrics,
-)
-from tests.integration.test_tts_chunking import (
-    ChatterboxStubModel,
-    EngineHarness,
-    _model_config,
-)
-from tests.integration.test_tts_streaming import (
-    CHUNK_SIZE,
-    SENTENCE_A,
-    SENTENCE_C,
-    TEXT_3,
-)
+from harmonyspeech.endpoints.openai.streaming_metrics import get_stream_stats, reset_stream_metrics
+from tests.integration.test_tts_chunking import ChatterboxStubModel, EngineHarness, _model_config
+from tests.integration.test_tts_streaming import CHUNK_SIZE, SENTENCE_A, SENTENCE_C, TEXT_3
 
 #: Per-chunk synthesis time. Long enough that the client can abort while chunk 1
 #: is in flight, short enough that the test stays fast.
@@ -58,24 +46,14 @@ async def _live_app(serving, engine):
     with (
         patch.object(api_server, "openai_serving_tts", serving),
         patch.object(api_server, "engine", engine),
-        patch.object(
-            api_server,
-            "engine_args",
-            SimpleNamespace(disable_log_stats=True),
-        ),
+        patch.object(api_server, "engine_args", SimpleNamespace(disable_log_stats=True)),
     ):
         app = api_server.build_app(args)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind(("127.0.0.1", 0))
         sock.listen(2048)
         port = sock.getsockname()[1]
-        config = uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-            lifespan="off",
-        )
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
         server = uvicorn.Server(config)
         # The loop runs in the pytest main thread; do not install process
         # signal handlers for a test server.
@@ -110,9 +88,7 @@ async def test_tcp_disconnect_aborts_the_in_flight_chunk_and_stops_synthesis():
     reset_stream_metrics()
     config = _model_config("chatterbox", "ChatterboxTTS")
     model = ChatterboxStubModel()
-    harness = EngineHarness(
-        [config], {"chatterbox": model}, executor_delay_s=EXECUTOR_DELAY_S
-    )
+    harness = EngineHarness([config], {"chatterbox": model}, executor_delay_s=EXECUTOR_DELAY_S)
 
     async with harness:
         aborts: list[str] = []
@@ -124,20 +100,20 @@ async def test_tcp_disconnect_aborts_the_in_flight_chunk_and_stops_synthesis():
 
         harness.engine.abort = spy_abort
 
-        async with _live_app(harness.serving, harness.engine) as base_url:
-            async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
-                async with client.stream(
-                    "POST", "/v1/audio/speech", json=_payload()
-                ) as response:
-                    assert response.status_code == 200
-                    first = None
-                    async for chunk in response.aiter_raw():
-                        first = chunk
-                        break
-                    assert first is not None and first[:4] == b"RIFF"
-                    # Chunk 0 is in hand; the generator has resumed and chunk 1
-                    # is now in flight. Closing the context closes the socket.
-                    await asyncio.sleep(0.05)
+        async with (
+            _live_app(harness.serving, harness.engine) as base_url,
+            httpx.AsyncClient(base_url=base_url, timeout=30.0) as client,
+            client.stream("POST", "/v1/audio/speech", json=_payload()) as response,
+        ):
+            assert response.status_code == 200
+            first = None
+            async for chunk in response.aiter_raw():
+                first = chunk
+                break
+            assert first is not None and first[:4] == b"RIFF"
+            # Chunk 0 is in hand; the generator has resumed and chunk 1
+            # is now in flight. Closing the context closes the socket.
+            await asyncio.sleep(0.05)
 
         # Give uvicorn/Starlette a moment to deliver http.disconnect and the
         # serving layer to abort the in-flight chunk.

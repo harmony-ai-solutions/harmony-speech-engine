@@ -25,9 +25,7 @@ _HELP = {
     "hse_ar_decode_slots_active": "Slots of one AR model's arena granted to an in-flight request.",
     "hse_ar_decode_slots_free": "Slots of one AR model's arena available for a new request.",
     "hse_ar_decode_tokens_total": "Tokens decoded across every finished/progressing request of one AR model.",
-    "hse_ar_decode_steps_total": (
-        "Engine steps in which one AR model advanced at least one decode row."
-    ),
+    "hse_ar_decode_steps_total": ("Engine steps in which one AR model advanced at least one decode row."),
     "hse_ar_decode_tokens_per_step": (
         "Average tokens decoded per engine step for one AR model (≈ active batch width)."
     ),
@@ -40,10 +38,7 @@ _GAUGES = (
     ("hse_ar_decode_slots_free", "slots_free"),
 )
 
-_COUNTERS = (
-    ("hse_ar_decode_tokens_total", "tokens_total"),
-    ("hse_ar_decode_steps_total", "steps_total"),
-)
+_COUNTERS = (("hse_ar_decode_tokens_total", "tokens_total"), ("hse_ar_decode_steps_total", "steps_total"))
 
 
 def _as_int(value) -> int:

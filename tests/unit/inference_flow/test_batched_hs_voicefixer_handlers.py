@@ -27,10 +27,7 @@ from harmonyspeech.common.config import DeviceConfig, ModelConfig
 from harmonyspeech.common.inputs import AudioConversionRequestInput
 from harmonyspeech.common.request import EngineRequest
 from harmonyspeech.modeling.models.harmonyspeech.harmonyspeech import MelGANGenerator
-from harmonyspeech.modeling.models.voicefixer.voicefixer import (
-    VoiceFixerRestorer,
-    VoiceFixerVocoder,
-)
+from harmonyspeech.modeling.models.voicefixer.voicefixer import VoiceFixerRestorer, VoiceFixerVocoder
 from harmonyspeech.task_handler.model_runner_base import ModelRunnerBase
 
 #: Big enough that length similarity, not the padded-area budget, decides groups.
@@ -78,9 +75,7 @@ def _mel(frames: int, bins: int = 4, seed: int = 1, value: float | None = None) 
 
 def _clip(samples: int, freq: float = 220.0, amplitude: float = 0.1) -> AudioArtifact:
     t = np.arange(samples) / 44100.0
-    return AudioArtifact.from_numpy(
-        (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32), 44100
-    )
+    return AudioArtifact.from_numpy((amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32), 44100)
 
 
 # ---------------------------------------------------------------------------
@@ -204,9 +199,7 @@ def test_harmonyspeech_vocoder_batched_matches_the_per_item_loop():
     batched = _run_harmonyspeech_vocoder(
         batched_runner, _vocoder_inputs(frames), [_request(f"b-{i}") for i in range(4)]
     )
-    looped = _run_harmonyspeech_vocoder(
-        loop_runner, _vocoder_inputs(frames), [_request(f"l-{i}") for i in range(4)]
-    )
+    looped = _run_harmonyspeech_vocoder(loop_runner, _vocoder_inputs(frames), [_request(f"l-{i}") for i in range(4)])
 
     for index in range(4):
         produced = batched[index].result_data.audio_artifact
@@ -225,9 +218,7 @@ def test_harmonyspeech_vocoder_keeps_breaks_per_request_under_batching():
     frames = [5, 4]
     inputs = _vocoder_inputs(frames, with_breaks={0: [1]})
 
-    batched = _run_harmonyspeech_vocoder(
-        batched_runner, inputs, [_request("with-breaks"), _request("plain")]
-    )
+    batched = _run_harmonyspeech_vocoder(batched_runner, inputs, [_request("with-breaks"), _request("plain")])
     looped = _run_harmonyspeech_vocoder(
         loop_runner, _vocoder_inputs(frames, with_breaks={0: [1]}), [_request("solo-0"), _request("solo-1")]
     )
@@ -240,9 +231,7 @@ def test_harmonyspeech_vocoder_keeps_breaks_per_request_under_batching():
     assert plain.num_samples == 4 * 4
     for index in range(2):
         assert np.allclose(
-            batched[index].result_data.audio_artifact.numpy,
-            looped[index].result_data.audio_artifact.numpy,
-            atol=1e-6,
+            batched[index].result_data.audio_artifact.numpy, looped[index].result_data.audio_artifact.numpy, atol=1e-6
         ), index
 
 
@@ -306,12 +295,8 @@ def test_voicefixer_restorer_batched_matches_the_per_item_loop():
     loop_runner = _runner(shared, "VoiceFixerRestorer", batched_inference=False)
     clips = [_clip(4096), _clip(6000, freq=330.0), _clip(5000, freq=440.0), _clip(7000, freq=550.0)]
 
-    batched = batched_runner._execute_voicefixer_restorer(
-        clips, [_request(f"b-{index}") for index in range(4)]
-    )
-    looped = loop_runner._execute_voicefixer_restorer(
-        clips, [_request(f"l-{index}") for index in range(4)]
-    )
+    batched = batched_runner._execute_voicefixer_restorer(clips, [_request(f"b-{index}") for index in range(4)])
+    looped = loop_runner._execute_voicefixer_restorer(clips, [_request(f"l-{index}") for index in range(4)])
 
     for index in range(4):
         produced = batched[index].result_data.mel_artifact
@@ -411,12 +396,8 @@ def test_voicefixer_vocoder_batched_matches_the_per_item_loop():
     loop_runner = _runner(shared, "VoiceFixerVocoder", batched_inference=False)
     inputs = [_mel(5, bins=128, seed=1), _mel(9, bins=128, seed=2), _mel(7, bins=128, seed=3)]
 
-    batched = batched_runner._execute_voicefixer_vocoder(
-        inputs, [_request(f"b-{index}") for index in range(3)]
-    )
-    looped = loop_runner._execute_voicefixer_vocoder(
-        inputs, [_request(f"l-{index}") for index in range(3)]
-    )
+    batched = batched_runner._execute_voicefixer_vocoder(inputs, [_request(f"b-{index}") for index in range(3)])
+    looped = loop_runner._execute_voicefixer_vocoder(inputs, [_request(f"l-{index}") for index in range(3)])
 
     assert len(shared.batched_calls) == 1
     for index in range(3):
@@ -431,9 +412,7 @@ def test_voicefixer_vocoder_single_request_keeps_the_loop_path():
     model = _AmplitudeStubVocoder()
     runner = _runner(model, "VoiceFixerVocoder")
 
-    results = runner._execute_voicefixer_vocoder(
-        [_mel(6, bins=128, value=1.0)], [_request("solo")]
-    )
+    results = runner._execute_voicefixer_vocoder([_mel(6, bins=128, value=1.0)], [_request("solo")])
 
     assert model.batched_calls == []
     assert model.loop_calls == [6]

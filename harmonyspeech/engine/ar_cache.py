@@ -172,19 +172,19 @@ class ARCacheDescriptor:
         if not isinstance(self.dtype, torch.dtype):
             raise TypeError(f"dtype must be a torch.dtype, got {type(self.dtype).__name__}")
         if self.cap_tokens is not None and (
-            isinstance(self.cap_tokens, bool)
-            or not isinstance(self.cap_tokens, int)
-            or self.cap_tokens < 1
+            isinstance(self.cap_tokens, bool) or not isinstance(self.cap_tokens, int) or self.cap_tokens < 1
         ):
             raise ValueError(f"cap_tokens must be a positive int or None, got {self.cap_tokens!r}")
         if self.slots is not None and (
             isinstance(self.slots, bool) or not isinstance(self.slots, int) or self.slots < 1
         ):
             raise ValueError(f"slots must be a positive int or None, got {self.slots!r}")
-        if isinstance(self.rows_per_request, bool) or not isinstance(self.rows_per_request, int) or self.rows_per_request < 1:
-            raise ValueError(
-                f"rows_per_request must be a positive int, got {self.rows_per_request!r}"
-            )
+        if (
+            isinstance(self.rows_per_request, bool)
+            or not isinstance(self.rows_per_request, int)
+            or self.rows_per_request < 1
+        ):
+            raise ValueError(f"rows_per_request must be a positive int, got {self.rows_per_request!r}")
 
     @property
     def element_size(self) -> int:
@@ -515,10 +515,7 @@ class ARCachePool:
             return self._used_bytes if self.enabled else 0
 
     def register(
-        self,
-        descriptor: ARCacheDescriptor,
-        *,
-        device: torch.device | str | None = None,
+        self, descriptor: ARCacheDescriptor, *, device: torch.device | str | None = None
     ) -> ARCacheArena | None:
         """Allocate ``descriptor``'s arena on ``device``; refuse it if it cannot fit.
 
@@ -566,13 +563,7 @@ class ARCachePool:
                 )
 
             try:
-                arena = ARCacheArena(
-                    descriptor,
-                    cap_tokens=cap_tokens,
-                    slots=slots,
-                    device=target,
-                    pool=self,
-                )
+                arena = ARCacheArena(descriptor, cap_tokens=cap_tokens, slots=slots, device=target, pool=self)
             except (RuntimeError, MemoryError) as error:
                 # The budget is a logical bound, not a device guarantee: a driver
                 # OOM at boot becomes a typed configuration error rather than a

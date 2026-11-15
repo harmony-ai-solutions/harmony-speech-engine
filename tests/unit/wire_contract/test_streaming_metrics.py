@@ -89,14 +89,12 @@ def test_idle_renderer_has_every_series_and_zero_values():
     assert "# TYPE hse_tts_stream_bytes_total counter" in body
     assert _metric_value(body, "hse_tts_stream_first_frame_seconds_count") == 0
     assert _metric_value(body, "hse_tts_stream_first_frame_seconds_sum") == 0
-    assert _metric_value(body, 'hse_tts_stream_first_frame_seconds_bucket', le="+Inf") == 0
+    assert _metric_value(body, "hse_tts_stream_first_frame_seconds_bucket", le="+Inf") == 0
     for outcome in STREAM_OUTCOMES:
         assert _metric_value(body, "hse_tts_stream_chunks_total", outcome=outcome) == 0
     assert _metric_value(body, "hse_tts_stream_bytes_total") == 0
     # Every histogram bucket is present even with no observations.
-    assert body.count("hse_tts_stream_first_frame_seconds_bucket{") == len(
-        STREAM_FIRST_FRAME_BUCKETS
-    ) + 1
+    assert body.count("hse_tts_stream_first_frame_seconds_bucket{") == len(STREAM_FIRST_FRAME_BUCKETS) + 1
 
 
 @pytest.mark.unit
@@ -163,12 +161,7 @@ async def test_binary_encoder_records_completed_first_frame_and_bytes():
     state = StreamState(source_rate=8000, target_rate=8000)
     segment = np.full(8, 0.25, dtype=np.float32)
 
-    frames = [
-        frame
-        async for frame in _encode_stream_frames(
-            _segments([segment]), audio_format="wav", state=state
-        )
-    ]
+    frames = [frame async for frame in _encode_stream_frames(_segments([segment]), audio_format="wav", state=state)]
 
     stats = get_stream_stats()
     assert state.first_frame_observed is True
@@ -183,9 +176,7 @@ async def test_binary_encoder_records_completed_first_frame_and_bytes():
 @pytest.mark.asyncio
 async def test_binary_encoder_records_aborted_when_closed_early():
     state = StreamState(source_rate=8000, target_rate=8000)
-    generator = _encode_stream_frames(
-        _one_then_block(), audio_format="pcm", state=state
-    )
+    generator = _encode_stream_frames(_one_then_block(), audio_format="pcm", state=state)
     first = await anext(generator)
     assert first
 
@@ -203,11 +194,12 @@ async def test_binary_encoder_records_a_polled_abort_as_aborted():
     state = StreamState(source_rate=8000, target_rate=8000)
     state.aborted = True
 
-    [_frame async for _frame in _encode_stream_frames(
-        _segments([np.full(8, 0.25, dtype=np.float32)]),
-        audio_format="pcm",
-        state=state,
-    )]
+    [
+        _frame
+        async for _frame in _encode_stream_frames(
+            _segments([np.full(8, 0.25, dtype=np.float32)]), audio_format="pcm", state=state
+        )
+    ]
 
     assert get_stream_stats()["chunks"] == {"completed": 0, "aborted": 1, "error": 0}
 
@@ -219,9 +211,7 @@ async def test_binary_encoder_records_error_after_the_first_frame():
 
     with pytest.raises(StreamSynthesisError):
         async for _frame in _encode_stream_frames(
-            _failing_after([np.full(8, 0.25, dtype=np.float32)]),
-            audio_format="pcm",
-            state=state,
+            _failing_after([np.full(8, 0.25, dtype=np.float32)]), audio_format="pcm", state=state
         ):
             pass
 
@@ -267,12 +257,7 @@ async def test_sse_keepalive_is_not_a_first_frame_observation():
     events = [
         frame
         async for frame in _encode_sse_frames(
-            _slow_first(),
-            state=state,
-            request_id="tts-k",
-            model="m",
-            created=0,
-            keepalive_timeout=0.01,
+            _slow_first(), state=state, request_id="tts-k", model="m", created=0, keepalive_timeout=0.01
         )
     ]
 
@@ -286,9 +271,7 @@ async def test_sse_keepalive_is_not_a_first_frame_observation():
 @pytest.mark.asyncio
 async def test_sse_encoder_records_aborted_when_closed_early():
     state = StreamState(source_rate=8000, target_rate=8000)
-    generator = _encode_sse_frames(
-        _one_then_block(), state=state, request_id="tts-a", model="m", created=0
-    )
+    generator = _encode_sse_frames(_one_then_block(), state=state, request_id="tts-a", model="m", created=0)
     first = await anext(generator)
     assert first.startswith("event: speech.audio.delta")
 
@@ -305,11 +288,7 @@ async def test_sse_encoder_records_error_after_a_delta():
     events = [
         frame
         async for frame in _encode_sse_frames(
-            _failing_after([np.full(4, 0.1, dtype=np.float32)]),
-            state=state,
-            request_id="tts-e",
-            model="m",
-            created=0,
+            _failing_after([np.full(4, 0.1, dtype=np.float32)]), state=state, request_id="tts-e", model="m", created=0
         )
     ]
 

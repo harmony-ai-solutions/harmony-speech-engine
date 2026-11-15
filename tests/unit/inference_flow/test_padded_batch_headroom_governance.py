@@ -90,12 +90,7 @@ def _runner(
 
 
 def _plan(runner, lengths, *, axis="mel_frame", max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET, max_batch_size=8):
-    return runner._plan_padded_batches(
-        lengths,
-        max_batch_size,
-        axis=axis,
-        max_budget=max_budget,
-    )
+    return runner._plan_padded_batches(lengths, max_batch_size, axis=axis, max_budget=max_budget)
 
 
 def _width(groups):
@@ -153,34 +148,19 @@ def test_mel_frame_shrink_arithmetic_and_chosen_width(free, allowed_area, shrunk
 @pytest.mark.unit
 def test_phone_axis_shrinks_only_when_headroom_tightens():
     shipped = _runner(model_type="MeloTTSSynthesizer", name="ov2-synthesizer-en", free=SHIPPED_FREE)
-    groups = _plan(
-        shipped,
-        [500] * 8,
-        axis="phone",
-        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
-    )
+    groups = _plan(shipped, [500] * 8, axis="phone", max_budget=DEFAULT_PHONE_BATCH_BUDGET)
     assert _width(groups) == 2
     assert shipped.padded_batch_stats()["axes"]["phone"]["shrinks_total"] == 0
 
     tight = _runner(model_type="MeloTTSSynthesizer", name="ov2-synthesizer-en", free=TIGHT_FREE)
-    groups = _plan(
-        tight,
-        [500] * 8,
-        axis="phone",
-        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
-    )
+    groups = _plan(tight, [500] * 8, axis="phone", max_budget=DEFAULT_PHONE_BATCH_BUDGET)
     assert _width(groups) == 1
     entry = tight.padded_batch_stats()["axes"]["phone"]
     assert entry["allowed_area"] == 512
     assert entry["shrinks_total"] == 1
 
     # Short chunked rows still keep width under the same headroom.
-    groups = _plan(
-        tight,
-        [128] * 8,
-        axis="phone",
-        max_budget=DEFAULT_PHONE_BATCH_BUDGET,
-    )
+    groups = _plan(tight, [128] * 8, axis="phone", max_budget=DEFAULT_PHONE_BATCH_BUDGET)
     assert _width(groups) == 4
 
 
@@ -190,9 +170,7 @@ def test_static_cap_remains_the_ceiling_even_with_huge_headroom():
 
     _plan(runner, [LONG_ROW_FRAMES] * 8)
 
-    assert runner.padded_batch_stats()["axes"]["mel_frame"]["allowed_area"] == (
-        DEFAULT_MEL_FRAME_BATCH_BUDGET
-    )
+    assert runner.padded_batch_stats()["axes"]["mel_frame"]["allowed_area"] == (DEFAULT_MEL_FRAME_BATCH_BUDGET)
 
     explicit = _runner(free=100 * GIB, batch_token_budget=1234)
     _plan(explicit, [LONG_ROW_FRAMES] * 8)
@@ -218,9 +196,7 @@ def test_zero_headroom_hits_the_width_one_floor(loguru_records):
 @pytest.mark.unit
 def test_ample_headroom_plan_is_identical_to_the_static_cap_plan():
     lengths = [120, 120, 300, 300, 3400, 3400, 3400, 3400]
-    expected_budget = default_token_budget(
-        lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
-    )
+    expected_budget = default_token_budget(lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET)
     expected = plan_batches(lengths, 8, expected_budget)
 
     runner = _runner(free=FIXTURE_FREE)
@@ -304,9 +280,7 @@ def test_recovery_reports_the_restored_width_and_clears_the_state(loguru_all):
 @pytest.mark.unit
 def test_cpu_runner_never_reads_headroom_and_plans_exactly_as_before(loguru_records):
     lengths = [120, 120, 300, 300, 3400, 3400]
-    expected_budget = default_token_budget(
-        lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
-    )
+    expected_budget = default_token_budget(lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET)
     expected = plan_batches(lengths, 8, expected_budget)
 
     runner = _runner(device="cpu")
@@ -328,9 +302,7 @@ def test_cpu_runner_never_reads_headroom_and_plans_exactly_as_before(loguru_reco
 @pytest.mark.unit
 def test_unavailable_device_memory_falls_back_to_the_static_cap(monkeypatch, loguru_records):
     lengths = [LONG_ROW_FRAMES] * 8
-    expected_budget = default_token_budget(
-        lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET
-    )
+    expected_budget = default_token_budget(lengths, 8, max_budget=DEFAULT_MEL_FRAME_BATCH_BUDGET)
     expected = plan_batches(lengths, 8, expected_budget)
 
     def _unavailable(*args, **kwargs):
@@ -398,10 +370,7 @@ def test_every_budget_consumer_goes_through_the_governed_planner():
 def _fake_hf_config():
     return types.SimpleNamespace(
         data=types.SimpleNamespace(
-            sampling_rate=SAMPLE_RATE,
-            filter_length=FILTER_LENGTH,
-            hop_length=HOP_LENGTH,
-            win_length=WIN_LENGTH,
+            sampling_rate=SAMPLE_RATE, filter_length=FILTER_LENGTH, hop_length=HOP_LENGTH, win_length=WIN_LENGTH
         )
     )
 
@@ -431,15 +400,11 @@ def _tiny_tone_converter() -> SynthesizerTrn:
 
 def _clip(samples: int, freq: float = 220.0) -> AudioArtifact:
     t = np.arange(samples) / SAMPLE_RATE
-    return AudioArtifact.from_numpy(
-        (0.1 * np.sin(2 * np.pi * freq * t)).astype(np.float32), SAMPLE_RATE
-    )
+    return AudioArtifact.from_numpy((0.1 * np.sin(2 * np.pi * freq * t)).astype(np.float32), SAMPLE_RATE)
 
 
 def _speaker(value: float) -> SpeakerArtifact:
-    return SpeakerArtifact(
-        embedding=torch.full((1, GIN_CHANNELS, 1), value), backend="openvoice"
-    )
+    return SpeakerArtifact(embedding=torch.full((1, GIN_CHANNELS, 1), value), backend="openvoice")
 
 
 def _tc_request(request_id: str) -> EngineRequest:
@@ -463,17 +428,11 @@ def _run_tone_converter(runner, samples, count=4):
         return original(padded, lengths, **kwargs)
 
     model.voice_conversion_batched = spy
-    inputs = [
-        (_clip(samples, 220.0 + 40.0 * index), _speaker(0.1), _speaker(0.2))
-        for index in range(count)
-    ]
+    inputs = [(_clip(samples, 220.0 + 40.0 * index), _speaker(0.1), _speaker(0.2)) for index in range(count)]
     requests = [_tc_request(f"tc-{index}") for index in range(count)]
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config",
-        return_value=_fake_hf_config(),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_flavour",
-        return_value="default",
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
     ):
         results = runner._execute_openvoice_tone_converter(inputs, requests)
     return results, forwarded
@@ -529,9 +488,7 @@ class StubOpenVoiceModel(torch.nn.Module):
     def infer_batched(self, x, x_lengths, sid=None, **kwargs):
         self.batched_calls.append({"batch": int(x.shape[0])})
         y_lengths = x_lengths * self.frames_per_token
-        output = torch.zeros(
-            int(x.shape[0]), 1, int(y_lengths.max()) * HOP_LENGTH
-        )
+        output = torch.zeros(int(x.shape[0]), 1, int(y_lengths.max()) * HOP_LENGTH)
         return output, y_lengths, None, None, None
 
 
@@ -545,9 +502,7 @@ class StubMeloModel(StubOpenVoiceModel):
     def infer_batched(self, x, x_lengths, sid, tone, language, bert, ja_bert, **kwargs):
         self.batched_calls.append({"batch": int(x.shape[0])})
         y_lengths = x_lengths * self.frames_per_token
-        output = torch.zeros(
-            int(x.shape[0]), 1, int(y_lengths.max()) * HOP_LENGTH
-        )
+        output = torch.zeros(int(x.shape[0]), 1, int(y_lengths.max()) * HOP_LENGTH)
         return output, y_lengths, None, None, None
 
 
@@ -567,17 +522,11 @@ def _synth_request(request_id: str) -> EngineRequest:
 
 def _run_openvoice_synth(runner, lengths):
     model = runner.model
-    inputs = [
-        ([torch.arange(1, length + 1, dtype=torch.long)], 0, 1.0, dict(SAMPLING))
-        for length in lengths
-    ]
+    inputs = [([torch.arange(1, length + 1, dtype=torch.long)], 0, 1.0, dict(SAMPLING)) for length in lengths]
     requests = [_synth_request(f"ov-{index}") for index in range(len(lengths))]
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config",
-        return_value=_fake_hf_config(),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_flavour",
-        return_value="default",
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
     ):
         runner._execute_openvoice_synthesizer(inputs, requests)
     return model.batched_calls
@@ -596,12 +545,9 @@ def _run_melo_synth(runner, lengths):
         )
         inputs.append(([item], 0, 1.0, dict(SAMPLING)))
     requests = [_synth_request(f"melo-{index}") for index in range(len(lengths))]
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config",
-        return_value=_fake_hf_config(),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_flavour",
-        return_value="default",
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
     ):
         runner._execute_melotts_synthesizer(inputs, requests)
     return model.batched_calls
@@ -609,23 +555,13 @@ def _run_melo_synth(runner, lengths):
 
 @pytest.mark.unit
 def test_openvoice_synthesizer_shrinks_on_the_phone_axis():
-    ample = _runner(
-        model_type="OpenVoiceV1Synthesizer",
-        name="ov1-synthesizer-en",
-        free=FIXTURE_FREE,
-        max_batch_size=4,
-    )
+    ample = _runner(model_type="OpenVoiceV1Synthesizer", name="ov1-synthesizer-en", free=FIXTURE_FREE, max_batch_size=4)
     ample.model = StubOpenVoiceModel()
     calls = _run_openvoice_synth(ample, [500] * 4)
     assert [call["batch"] for call in calls] == [2, 2]
     assert ample.padded_batch_stats()["axes"]["phone"]["shrinks_total"] == 0
 
-    tight = _runner(
-        model_type="OpenVoiceV1Synthesizer",
-        name="ov1-synthesizer-en",
-        free=TIGHT_FREE,
-        max_batch_size=4,
-    )
+    tight = _runner(model_type="OpenVoiceV1Synthesizer", name="ov1-synthesizer-en", free=TIGHT_FREE, max_batch_size=4)
     tight.model = StubOpenVoiceModel()
     calls = _run_openvoice_synth(tight, [500] * 4)
     assert [call["batch"] for call in calls] == [1, 1, 1, 1]
@@ -636,23 +572,13 @@ def test_openvoice_synthesizer_shrinks_on_the_phone_axis():
 
 @pytest.mark.unit
 def test_melotts_synthesizer_shrinks_on_the_phone_axis():
-    ample = _runner(
-        model_type="MeloTTSSynthesizer",
-        name="ov2-synthesizer-en",
-        free=FIXTURE_FREE,
-        max_batch_size=4,
-    )
+    ample = _runner(model_type="MeloTTSSynthesizer", name="ov2-synthesizer-en", free=FIXTURE_FREE, max_batch_size=4)
     ample.model = StubMeloModel()
     calls = _run_melo_synth(ample, [300] * 4)
     assert [call["batch"] for call in calls] == [3, 1]
     assert ample.padded_batch_stats()["axes"]["phone"]["shrinks_total"] == 0
 
-    tight = _runner(
-        model_type="MeloTTSSynthesizer",
-        name="ov2-synthesizer-en",
-        free=TIGHT_FREE,
-        max_batch_size=4,
-    )
+    tight = _runner(model_type="MeloTTSSynthesizer", name="ov2-synthesizer-en", free=TIGHT_FREE, max_batch_size=4)
     tight.model = StubMeloModel()
     calls = _run_melo_synth(tight, [300] * 4)
     assert [call["batch"] for call in calls] == [1, 1, 1, 1]

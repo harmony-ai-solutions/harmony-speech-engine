@@ -29,8 +29,7 @@ def _fake_hf_config():
     import types
 
     return types.SimpleNamespace(
-        data=types.SimpleNamespace(sampling_rate=SAMPLE_RATE, hop_length=HOP),
-        speakers={"default": 0},
+        data=types.SimpleNamespace(sampling_rate=SAMPLE_RATE, hop_length=HOP), speakers={"default": 0}
     )
 
 
@@ -116,20 +115,13 @@ def _runner(model, model_type: str, **config) -> ModelRunnerBase:
 
 def _request(request_id: str, text: str = "hello") -> EngineRequest:
     request_data = TextToSpeechRequestInput(
-        request_id=request_id,
-        requested_model="stub",
-        model="stub",
-        input_text=text,
-        mode="single_speaker_tts",
+        request_id=request_id, requested_model="stub", model="stub", input_text=text, mode="single_speaker_tts"
     )
     return EngineRequest(request_id=request_id, request_data=request_data, arrival_time=0.0)
 
 
 def _openvoice_inputs(lengths, speaker_id=0, speed=1.0):
-    return [
-        ([torch.arange(1, length + 1, dtype=torch.long)], speaker_id, speed, dict(SAMPLING))
-        for length in lengths
-    ]
+    return [([torch.arange(1, length + 1, dtype=torch.long)], speaker_id, speed, dict(SAMPLING)) for length in lengths]
 
 
 def _melo_inputs(lengths, speaker_id=0, speed=1.0):
@@ -148,17 +140,19 @@ def _melo_inputs(lengths, speaker_id=0, speed=1.0):
 
 def _run_openvoice(runner, lengths):
     requests = [_request(f"ov-{index}") for index in range(len(lengths))]
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         return runner._execute_openvoice_synthesizer(_openvoice_inputs(lengths), requests)
 
 
 def _run_melo(runner, lengths):
     requests = [_request(f"melo-{index}") for index in range(len(lengths))]
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         return runner._execute_melotts_synthesizer(_melo_inputs(lengths), requests)
 
 
@@ -266,9 +260,10 @@ def test_openvoice_multiple_sentences_per_request_are_flattened_and_reassembled(
     ]
     requests = [_request("ov-a"), _request("ov-b")]
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         results = runner._execute_openvoice_synthesizer(inputs, requests)
 
     assert sum(call["batch"] for call in model.batched_calls) == 3
@@ -286,9 +281,10 @@ def test_openvoice_speed_parameter_is_applied_per_sample():
     inputs[1] = (inputs[1][0], inputs[1][1], 2.0, inputs[1][3])
     requests = [_request("ov-slow"), _request("ov-fast")]
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         runner._execute_openvoice_synthesizer(inputs, requests)
 
     call = model.batched_calls[0]
@@ -395,12 +391,11 @@ def test_execute_model_resets_the_result_scope_between_steps():
 
     # The same request object executed in two separate steps must not trip the
     # duplicate guard (its scope is one step).
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs",
-        return_value=_openvoice_inputs([3]),
-    ), patch(
-        "harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()
-    ), patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"):
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", return_value=_openvoice_inputs([3])),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_config", return_value=_fake_hf_config()),
+        patch("harmonyspeech.task_handler.model_runner_base.get_model_flavour", return_value="default"),
+    ):
         first = runner.execute_model([request])
         second = runner.execute_model([request])
 
@@ -414,11 +409,9 @@ def test_execute_partition_converts_handler_batch_error_to_per_request_errors():
     runner = _runner(model, "OpenVoiceV1Synthesizer")
     requests = [_request("be-1"), _request("be-2")]
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs",
-        return_value=_openvoice_inputs([3, 3]),
-    ), patch.object(
-        runner, "_dispatch_handler", side_effect=EngineBatchError("pairing broke")
+    with (
+        patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", return_value=_openvoice_inputs([3, 3])),
+        patch.object(runner, "_dispatch_handler", side_effect=EngineBatchError("pairing broke")),
     ):
         results = runner.execute_model(requests)
 

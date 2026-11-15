@@ -118,9 +118,7 @@ def apply_model_dtype(model, dtype: torch.dtype | None, s3gen_precision: str = "
     # here — rather than each caller — covers every solo vocode path including
     # upstream `generate()` methods, while keeping the AR backbones out of scope.
     if s3gen is not None:
-        from harmonyspeech.modeling.models.chatterbox.s3gen_precision import (
-            install_inference_autocast,
-        )
+        from harmonyspeech.modeling.models.chatterbox.s3gen_precision import install_inference_autocast
 
         install_inference_autocast(s3gen, precision=s3gen_precision)
     logger.info(
@@ -129,25 +127,25 @@ def apply_model_dtype(model, dtype: torch.dtype | None, s3gen_precision: str = "
         f"s3gen_precision={s3gen_precision}): {_submodule_dtypes(model)}"
     )
 
+
 # ---------------------------------------------------------------------------
 # Monkey-patch for ChatterboxMultilingualTTS to support CPU loading
 # ---------------------------------------------------------------------------
 # The upstream ChatterboxMultilingualTTS.from_local doesn't pass map_location
 # to torch.load, causing failures on CPU when the checkpoint was saved on CUDA.
 # This patch adds proper CPU mapping when device="cpu" is specified.
-import chatterbox.mtl_tts as _mtl_module
+import chatterbox.mtl_tts as _mtl_module  # noqa: E402 - imported here for the patch below
 
 _original_torch_load = _mtl_module.torch.load
 
 
 def _patched_torch_load(*args, map_location=None, **kwargs):
     """Patched torch.load that defaults to CPU map_location when device is cpu."""
-    if map_location is None:
-        # Check if we're being called from the multilingual model loading path
-        # by inspecting the first argument (the file path)
-        if args and isinstance(args[0], (str, object)) and hasattr(args[0], "__str__"):
-            # Default to CPU if no map_location specified
-            map_location = torch.device("cpu")
+    # Check if we're being called from the multilingual model loading path
+    # by inspecting the first argument (the file path); default to CPU if no
+    # map_location is specified.
+    if map_location is None and args and isinstance(args[0], (str, object)) and hasattr(args[0], "__str__"):
+        map_location = torch.device("cpu")
     kwargs["map_location"] = map_location
     return _original_torch_load(*args, **kwargs)
 
@@ -162,7 +160,7 @@ _mtl_module.torch.load = _patched_torch_load
 # (e.g., missing optional dependencies), causing it to be None. When chatterbox
 # tries to instantiate it, we get "TypeError: 'NoneType' object is not callable".
 # This patch provides a fallback that uses DummyWatermarker when the real one is unavailable.
-import perth as _perth_module
+import perth as _perth_module  # noqa: E402 - imported here for the fallback patch below
 
 if _perth_module.PerthImplicitWatermarker is None:
 

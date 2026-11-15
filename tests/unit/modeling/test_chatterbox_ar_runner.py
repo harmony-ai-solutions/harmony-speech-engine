@@ -27,10 +27,7 @@ from chatterbox.models.t3.modules.t3_config import T3Config
 from chatterbox.tts import Conditionals
 
 from harmonyspeech.engine.ar_cache import ARCachePool
-from harmonyspeech.modeling.models.chatterbox.t3_ar import (
-    ChatterboxT3AR,
-    _SafeAlignmentStreamAnalyzer,
-)
+from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR, _SafeAlignmentStreamAnalyzer
 from harmonyspeech.task_handler.ar_runner import (
     ARBatchRunner,
     EnglishContract,
@@ -79,12 +76,7 @@ _TINY_GPT2 = {
     "initializer_range": 0.02,
 }
 
-_DECODE = {
-    "temperature": 0.8,
-    "top_p": 0.95,
-    "min_p": 0.05,
-    "repetition_penalty": 1.2,
-}
+_DECODE = {"temperature": 0.8, "top_p": 0.95, "min_p": 0.05, "repetition_penalty": 1.2}
 
 
 def _tiny_english_hp():
@@ -199,12 +191,7 @@ def test_english_b1_bit_identical_to_cleaned_loop(english_model, monkeypatch, at
     text = _text(hp)
 
     torch.manual_seed(7)
-    expected = model.inference(
-        t3_cond=conds,
-        text_tokens=torch.cat([text, text], dim=0),
-        max_new_tokens=10,
-        **_DECODE,
-    )
+    expected = model.inference(t3_cond=conds, text_tokens=torch.cat([text, text], dim=0), max_new_tokens=10, **_DECODE)
 
     runner = _runner(model, "ChatterboxTTS")
     runner.begin("solo", seed=7, max_new_tokens=10, **_english_params(text, conds))
@@ -259,20 +246,13 @@ def test_turbo_b1_bit_identical_to_inference_turbo(turbo_model):
 @pytest.mark.unit
 def test_english_multi_row_matches_solo_runs(english_model):
     model, hp = english_model
-    specs = [
-        ("a", _text(hp, words=2), 21),
-        ("b", _text(hp, words=5), 22),
-        ("c", _text(hp, words=3), 23),
-    ]
+    specs = [("a", _text(hp, words=2), 21), ("b", _text(hp, words=5), 22), ("c", _text(hp, words=3), 23)]
 
     solo = {}
     for request_id, text, seed in specs:
         runner = _runner(model, "ChatterboxTTS", key=f"solo-{request_id}")
         runner.begin(
-            request_id,
-            seed=seed,
-            max_new_tokens=8,
-            **_english_params(text, _english_conds(hp, seed=1000 + seed)),
+            request_id, seed=seed, max_new_tokens=8, **_english_params(text, _english_conds(hp, seed=1000 + seed))
         )
         _run_to_end(runner, request_id)
         solo[request_id] = runner.raw_tokens(request_id)
@@ -280,10 +260,7 @@ def test_english_multi_row_matches_solo_runs(english_model):
     batched = _runner(model, "ChatterboxTTS")
     for request_id, text, seed in specs:
         batched.begin(
-            request_id,
-            seed=seed,
-            max_new_tokens=8,
-            **_english_params(text, _english_conds(hp, seed=1000 + seed)),
+            request_id, seed=seed, max_new_tokens=8, **_english_params(text, _english_conds(hp, seed=1000 + seed))
         )
     # Advance all rows together, one token per engine step.
     for _ in range(8):
@@ -411,9 +388,7 @@ def test_finished_row_is_not_resampled_on_later_steps(english_model):
     """
     model, hp = english_model
     runner = _runner(model, "ChatterboxTTS")
-    runner.contract = _ScriptedContract(
-        {"a": [5, int(hp.stop_speech_token)], "b": [6, 7, 8, 9]}
-    )
+    runner.contract = _ScriptedContract({"a": [5, int(hp.stop_speech_token)], "b": [6, 7, 8, 9]})
     runner.begin("a", seed=1, max_new_tokens=10, **_english_params(_text(hp), _english_conds(hp)))
     runner.begin("b", seed=2, max_new_tokens=10, **_english_params(_text(hp), _english_conds(hp)))
 
@@ -467,10 +442,7 @@ def test_pool_refusal_returns_none_for_sequential_fallback(english_model):
     slab_bytes = 2 * 2 * 64 * 4 * 8 * 4
     pool = ARCachePool(budget_bytes=slab_bytes, device="cpu", default_cap_tokens=64)
     runner = ARBatchRunner(
-        t3=model,
-        pool=pool,
-        model_key="cb",
-        model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0),
+        t3=model, pool=pool, model_key="cb", model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0)
     )
     assert runner.register()
     assert pool.capacity("cb")["slots"] == 1
@@ -533,9 +505,7 @@ def test_production_pool_keeps_turbo_at_the_full_slot_cap(turbo_model):
         t3=model,
         pool=pool,
         model_key="cb-turbo",
-        model_config=SimpleNamespace(
-            model_type="ChatterboxTurboTTS", seed=0, max_batch_size=4
-        ),
+        model_config=SimpleNamespace(model_type="ChatterboxTurboTTS", seed=0, max_batch_size=4),
     )
 
     assert runner.register()
@@ -562,10 +532,7 @@ def test_explicit_test_pool_cap_is_never_clamped(english_model):
 def test_disabled_pool_keeps_the_sequential_path(english_model):
     model, _hp = english_model
     runner = ARBatchRunner(
-        t3=model,
-        pool=None,
-        model_key="cb",
-        model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0),
+        t3=model, pool=None, model_key="cb", model_config=SimpleNamespace(model_type="ChatterboxTTS", seed=0)
     )
     assert runner.register() is False
     assert runner.enabled is False
@@ -627,9 +594,7 @@ def _forward_hook_count(t3) -> int:
 
 
 @pytest.mark.unit
-def test_multilingual_ar_runner_attaches_per_row_analyzer_and_leaks_no_hooks(
-    multilingual_model, monkeypatch
-):
+def test_multilingual_ar_runner_attaches_per_row_analyzer_and_leaks_no_hooks(multilingual_model, monkeypatch):
     """Phase 12-7: per-row analyzer on the shared ``tfmr``, zero leaked hooks.
 
     Also proves the per-row analyzer is deterministic across batch composition:
@@ -721,8 +686,7 @@ def test_cast_conditionals_second_request_leaves_cached_object_byte_identical(en
 
     def snapshot():
         return {
-            key: value.detach().clone() if torch.is_tensor(value) else value
-            for key, value in vars(conds.t3).items()
+            key: value.detach().clone() if torch.is_tensor(value) else value for key, value in vars(conds.t3).items()
         }
 
     before = snapshot()

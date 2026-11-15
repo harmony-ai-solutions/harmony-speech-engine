@@ -108,12 +108,9 @@ def test_matrix_documents_the_phase_8_5_skip_evidence():
     # Silero: sequential verdict with lane numbers.
     assert "0.95×" in text
     # Chatterbox: Phase 9-3's AR decode + Phase 12-7's multilingual join.
-    normalized = " ".join(text.replace(">", " ").split())
     assert "Chatterbox AR decode (Phase 9-3)" in text
     assert "Multilingual uses the same contract" in text
-    multilingual_row = next(
-        row for row in _matrix_rows() if _mentions(row, "ChatterboxMultilingualTTS")
-    )
+    multilingual_row = next(row for row in _matrix_rows() if _mentions(row, "ChatterboxMultilingualTTS"))
     assert "AR decode" in multilingual_row
     assert _matrix_sizes()["ChatterboxMultilingualTTS"] == 4
 
@@ -123,14 +120,7 @@ def test_matrix_documents_the_six_execution_classes_and_the_whisper_final_row():
     """Phase 11-0: the class table and Whisper's final row are the operator contract."""
     text = DOCS.read_text(encoding="utf-8")
     assert "## Execution-model classes" in text
-    for class_name in (
-        "padded_batch",
-        "loop",
-        "loop_admission",
-        "queue_depth",
-        "lanes_windows",
-        "ar_decode",
-    ):
+    for class_name in ("padded_batch", "loop", "loop_admission", "queue_depth", "lanes_windows", "ar_decode"):
         assert f"`{class_name}`" in text, f"docs/batching.md is missing the {class_name} class"
     # Whisper's final mechanism wording (lanes M × windows B, intra-audio 16).
     whisper_row = next(row for row in _matrix_rows() if _mentions(row, "FasterWhisper"))

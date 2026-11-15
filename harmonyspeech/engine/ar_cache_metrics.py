@@ -32,10 +32,7 @@ _GAUGES = (
     ("hse_ar_cache_slots_free", "slots_free"),
 )
 
-_COUNTERS = (
-    ("hse_ar_cache_grants_total", "grants_total"),
-    ("hse_ar_cache_refusals_total", "refusals_total"),
-)
+_COUNTERS = (("hse_ar_cache_grants_total", "grants_total"), ("hse_ar_cache_refusals_total", "refusals_total"))
 
 
 def _as_int(value) -> int:

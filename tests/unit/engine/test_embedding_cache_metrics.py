@@ -16,10 +16,7 @@ import pytest
 import torch
 
 from harmonyspeech.common.artifacts import SpeakerArtifact
-from harmonyspeech.engine.embedding_cache_metrics import (
-    embedding_cache_hit_ratio,
-    render_embedding_cache_metrics,
-)
+from harmonyspeech.engine.embedding_cache_metrics import embedding_cache_hit_ratio, render_embedding_cache_metrics
 from harmonyspeech.engine.harmonyspeech_engine import HarmonySpeechEngine
 from harmonyspeech.processing.embedding_cache import EmbeddingCache
 

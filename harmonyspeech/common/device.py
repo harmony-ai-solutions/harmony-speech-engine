@@ -26,12 +26,7 @@ from __future__ import annotations
 
 import torch
 
-__all__ = [
-    "cuda_index",
-    "device_key",
-    "devices_match",
-    "resolve_device",
-]
+__all__ = ["cuda_index", "device_key", "devices_match", "resolve_device"]
 
 
 def _cuda_available() -> bool:

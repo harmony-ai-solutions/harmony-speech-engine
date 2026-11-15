@@ -60,8 +60,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             enabled=self._standard_voice_pack_enabled(),
             model_exists=self.get_model_by_id(model) is not None,
             has_explicit_reference=bool(
-                getattr(request, "target_audio", None)
-                or getattr(request, "target_embedding", None)
+                getattr(request, "target_audio", None) or getattr(request, "target_embedding", None)
             ),
         )
 
@@ -99,8 +98,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             payload = standard_voice_wire_payload(voice_lookup.resolution.name)
             if payload is None:  # pragma: no cover - resolution validated the path
                 return self.create_error_response(
-                    f"Standard voice '{voice_lookup.resolution.name}' is missing from the "
-                    "voice pack installation."
+                    f"Standard voice '{voice_lookup.resolution.name}' is missing from the voice pack installation."
                 )
             request_data.target_audio = payload
             request_data.target_embedding = None
@@ -116,11 +114,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             artifacts["target_embedding"] = embedding
             request_data.target_audio = None
             request_data.target_embedding = None
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.voice_conversion_full_generator(request, raw_request, result_generator, request_id)
@@ -140,9 +134,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
         performs zero encoder forwards.
         """
         model = getattr(request, "model", "") or ""
-        route = resolve_target_embedding_route(
-            self._engine_model_configs(), model, model
-        )
+        route = resolve_target_embedding_route(self._engine_model_configs(), model, model)
         if route is None:
             return None, (
                 f"Target voice '{voice_name}' cannot be embedded for model '{model}': "
@@ -151,9 +143,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             )
         payload = standard_voice_wire_payload(voice_name)
         if payload is None:  # pragma: no cover - resolution validated the path
-            return None, (
-                f"Standard voice '{voice_name}' is missing from the voice pack installation."
-            )
+            return None, (f"Standard voice '{voice_name}' is missing from the voice pack installation.")
         embed_id = f"{request_id}-target-embed"
         embed_request = SpeechEmbeddingRequestInput(
             request_id=embed_id,
@@ -165,17 +155,13 @@ class OpenAIServingVoiceConversion(OpenAIServing):
             generation_options=getattr(request, "generation_options", None),
         )
         final_output = None
-        stream = await self.engine.add_request(
-            request_id=embed_id, request_data=embed_request
-        )
+        stream = await self.engine.add_request(request_id=embed_id, request_data=embed_request)
         async for output in stream:
             final_output = output
         if final_output is None:
             return None, "Target voice embedding step produced no output"
         if getattr(final_output, "finish_reason", None) == "error":
-            return None, (
-                getattr(final_output, "error", None) or "Target voice embedding step failed"
-            )
+            return None, (getattr(final_output, "error", None) or "Target voice embedding step failed")
         embedding = getattr(final_output, "embedding_artifact", None)
         if embedding is None:
             return None, "Target voice embedding step produced no embedding"
@@ -208,11 +194,7 @@ class OpenAIServingVoiceConversion(OpenAIServing):
 
         encoded = to_wire_audio(final_res, request.output_options)
         response = VoiceConversionResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            data=encoded.data,
-            sample_rate=encoded.sample_rate,
+            id=request_id, created=created_time, model=model_name, data=encoded.data, sample_rate=encoded.sample_rate
         )
 
         return response

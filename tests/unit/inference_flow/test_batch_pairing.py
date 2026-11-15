@@ -48,8 +48,7 @@ class PairingModel:
         audio, _ = audio_codec.decode_audio(audio_buf.read())
         self.prepared_audio.append(audio)
         self.conds = Conditionals(
-            t3=T3Cond(speaker_emb=torch.zeros(1, 4)),
-            gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)},
+            t3=T3Cond(speaker_emb=torch.zeros(1, 4)), gen={"prompt_token": torch.zeros(1, 2, dtype=torch.long)}
         )
 
     def generate(self, text=None, audio=None, **kwargs):
@@ -91,10 +90,7 @@ def _tts_request(request_id: str, text: str, audio: bytes) -> EngineRequest:
 
 def _embed_request(request_id: str, audio: bytes) -> EngineRequest:
     request_data = SpeechEmbeddingRequestInput(
-        request_id=request_id,
-        requested_model="chatterbox",
-        model="cb",
-        input_audio=_b64(audio),
+        request_id=request_id, requested_model="chatterbox", model="cb", input_audio=_b64(audio)
     )
     return EngineRequest(request_id=request_id, request_data=request_data, arrival_time=0.0)
 
@@ -118,10 +114,7 @@ def _expected(audio: bytes) -> np.ndarray:
 @pytest.mark.unit
 def test_pairs_each_request_with_its_own_audio():
     runner = _make_runner()
-    requests = [
-        _tts_request("pair-1", "text-A", AUDIO_A),
-        _tts_request("pair-2", "text-B", AUDIO_B),
-    ]
+    requests = [_tts_request("pair-1", "text-A", AUDIO_A), _tts_request("pair-2", "text-B", AUDIO_B)]
     inputs = [_tts_params(request) for request in requests]
 
     results = runner._execute_chatterbox_tts(inputs, requests)
@@ -138,10 +131,7 @@ def test_pairs_each_request_with_its_own_audio():
 @pytest.mark.unit
 def test_pairs_each_request_with_its_own_audio_in_shuffled_order():
     runner = _make_runner()
-    requests = [
-        _tts_request("pair-2", "text-B", AUDIO_B),
-        _tts_request("pair-1", "text-A", AUDIO_A),
-    ]
+    requests = [_tts_request("pair-2", "text-B", AUDIO_B), _tts_request("pair-1", "text-A", AUDIO_A)]
     inputs = [_tts_params(request) for request in requests]
 
     results = runner._execute_chatterbox_tts(inputs, requests)
@@ -206,15 +196,9 @@ def test_handler_rejects_misaligned_inputs():
 def test_execute_model_converts_misalignment_to_typed_errors():
     """A prepare stage that returns the wrong number of inputs fails closed."""
     runner = _make_runner()
-    requests = [
-        _tts_request("align-2", "text-A", AUDIO_A),
-        _tts_request("align-3", "text-B", AUDIO_B),
-    ]
+    requests = [_tts_request("align-2", "text-A", AUDIO_A), _tts_request("align-3", "text-B", AUDIO_B)]
 
-    with patch(
-        "harmonyspeech.task_handler.model_runner_base.prepare_inputs",
-        return_value=[_tts_params(requests[0])],
-    ):
+    with patch("harmonyspeech.task_handler.model_runner_base.prepare_inputs", return_value=[_tts_params(requests[0])]):
         results = runner.execute_model(requests)
 
     assert len(results) == 2

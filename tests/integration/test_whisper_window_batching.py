@@ -136,8 +136,9 @@ def _engine_request(request_id, seconds, *, vad=False):
 
 def _run_handler(runner, requests):
     inputs = [request.artifacts["input_audio"] for request in requests]
-    with patch.object(whisper_batching, "get_speech_timestamps", _clips_for(65.0)), patch.object(
-        whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1, 2, 3)
+    with (
+        patch.object(whisper_batching, "get_speech_timestamps", _clips_for(65.0)),
+        patch.object(whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1, 2, 3)),
     ):
         return runner._execute_faster_whisper(inputs, requests)
 
@@ -208,11 +209,7 @@ class _AbortingCT2(_FakeCT2):
 @pytest.mark.integration
 def test_abort_mid_batch_errors_only_the_aborted_request():
     model = _FakeWhisperModel()
-    requests = [
-        _handler_request("short-a", 0.2),
-        _handler_request("aborted", 0.3),
-        _handler_request("long", 65.0),
-    ]
+    requests = [_handler_request("short-a", 0.2), _handler_request("aborted", 0.3), _handler_request("long", 65.0)]
     ct2 = _AbortingCT2(abort_request=requests[1], abort_marker=300)
     ct2.is_multilingual = True
     model.ct2 = ct2
@@ -252,15 +249,12 @@ def test_engine_routes_four_mixed_requests_and_pairs_outputs_by_id():
     runner = _runner(model, config)
     engine = _engine(config, runner)
 
-    specs = [
-        ("short-a", 0.20, False),
-        ("short-b", 0.30, False),
-        ("long", 65.0, False),
-        ("vad", 0.25, True),
-    ]
-    with patch.object(whisper_batching, "get_speech_timestamps", _clips_for(65.0)), patch.object(
-        whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1, 2, 3)
-    ), patch.object(model_runner_base, "BatchedInferencePipeline", _SequentialPipeline):
+    specs = [("short-a", 0.20, False), ("short-b", 0.30, False), ("long", 65.0, False), ("vad", 0.25, True)]
+    with (
+        patch.object(whisper_batching, "get_speech_timestamps", _clips_for(65.0)),
+        patch.object(whisper_batching, "get_suppressed_tokens", lambda tokenizer, values: (1, 2, 3)),
+        patch.object(model_runner_base, "BatchedInferencePipeline", _SequentialPipeline),
+    ):
         for request_id, seconds, vad in specs:
             request = _engine_request(request_id, seconds, vad=vad)
             engine.add_request(request_id, request.request_data)

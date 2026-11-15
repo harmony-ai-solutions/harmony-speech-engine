@@ -130,10 +130,7 @@ def _copy_artifact(value: SpeakerArtifact) -> SpeakerArtifact:
         conditionals=_clone_conditionals_cpu(value.conditionals),
         backend=value.backend,
         reference_audio=(
-            AudioArtifact(
-                waveform=_clone_value_cpu(reference.waveform),
-                sample_rate=reference.sample_rate,
-            )
+            AudioArtifact(waveform=_clone_value_cpu(reference.waveform), sample_rate=reference.sample_rate)
             if reference is not None
             else None
         ),

@@ -296,9 +296,7 @@ def _build_chatterbox(model_config: ModelConfig, device: str, weight_registry, w
         if shared_model is not None:
             return shared_model
     return wrapper.from_pretrained(
-        device=device,
-        dtype=model_config.dtype,
-        s3gen_precision=getattr(model_config, "s3gen_precision", "float32"),
+        device=device, dtype=model_config.dtype, s3gen_precision=getattr(model_config, "s3gen_precision", "float32")
     )
 
 
@@ -378,25 +376,19 @@ def get_model(model_config: ModelConfig, device_config: DeviceConfig, weight_reg
                     return model
                 elif model_config.model_type == "ChatterboxTTS":
                     device = str(resolved_device)
-                    model = _build_chatterbox(
-                        model_config, device, weight_registry, ChatterboxTTSModel
-                    )
+                    model = _build_chatterbox(model_config, device, weight_registry, ChatterboxTTSModel)
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxTurboTTS":
                     device = str(resolved_device)
-                    model = _build_chatterbox(
-                        model_config, device, weight_registry, ChatterboxTurboTTSModel
-                    )
+                    model = _build_chatterbox(model_config, device, weight_registry, ChatterboxTurboTTSModel)
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model
                 elif model_config.model_type == "ChatterboxMultilingualTTS":
                     device = str(resolved_device)
-                    model = _build_chatterbox(
-                        model_config, device, weight_registry, ChatterboxMultilingualTTSModel
-                    )
+                    model = _build_chatterbox(model_config, device, weight_registry, ChatterboxMultilingualTTSModel)
                     if not getattr(model_config, "watermark", True):
                         model.watermarker = perth.DummyWatermarker()
                     return model

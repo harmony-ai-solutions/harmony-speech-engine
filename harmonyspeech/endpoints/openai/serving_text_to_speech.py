@@ -66,11 +66,7 @@ from harmonyspeech.common.audio_utils import (
 )
 from harmonyspeech.common.config import ModelConfig
 from harmonyspeech.common.inputs import SpeechEmbeddingRequestInput, TextToSpeechRequestInput
-from harmonyspeech.common.outputs import (
-    RequestOutput,
-    SpeechSynthesisRequestOutput,
-    TextToSpeechRequestOutput,
-)
+from harmonyspeech.common.outputs import RequestOutput, SpeechSynthesisRequestOutput, TextToSpeechRequestOutput
 from harmonyspeech.common.utils import random_uuid
 from harmonyspeech.endpoints.openai.output_encoding import normalize_format, validate_output_options
 from harmonyspeech.endpoints.openai.protocol import ErrorResponse, ModelCard, TextToSpeechRequest, TextToSpeechResponse
@@ -101,10 +97,7 @@ from harmonyspeech.endpoints.openai.streaming_metrics import (
 )
 from harmonyspeech.endpoints.openai.wire import from_wire_audio, to_wire_audio
 from harmonyspeech.engine.async_harmonyspeech import AsyncHarmonySpeech
-from harmonyspeech.modeling.voice_catalog import (
-    lookup_standard_voice,
-    request_model_types,
-)
+from harmonyspeech.modeling.voice_catalog import lookup_standard_voice, request_model_types
 from harmonyspeech.processing.pipeline_registry import get_spec
 
 #: Default character budget per chunk when a client enables ``split_text``
@@ -144,12 +137,14 @@ SINGLE_SHOT_MAX_INPUT_CHARS: dict[str, int] = {
     "ChatterboxMultilingualTTS": 400,
 }
 
+
 #: Escape hatch for the truncation benchmark (``bench_throughput.py
 #: --longform-split both`` scores the OFF baseline on the long fixture, which
 #: the guard would reject). Any value other than "0"/"" enables the legacy
 #: truncating behaviour; read per request so tests can ``monkeypatch.setenv``.
 def _allow_truncating_single_shot() -> bool:
     return os.environ.get("HSE_ALLOW_TRUNCATING_SINGLE_SHOT", "0") not in ("", "0")
+
 
 #: Model types that consume ``generation_options.speed`` natively today (each
 #: maps ``speed`` onto a duration predictor / ``length_scale`` / ``alpha``).
@@ -161,12 +156,7 @@ def _allow_truncating_single_shot() -> bool:
 #: * ``MeloTTSSynthesizer`` -> ``length_scale=1/speed`` (``infer``);
 #: * ``KittenTTSSynthesizer`` -> ``speed`` argument of the ONNX model.
 NATIVE_SPEED_MODEL_TYPES: frozenset[str] = frozenset(
-    {
-        "HarmonySpeechSynthesizer",
-        "OpenVoiceV1Synthesizer",
-        "MeloTTSSynthesizer",
-        "KittenTTSSynthesizer",
-    }
+    {"HarmonySpeechSynthesizer", "OpenVoiceV1Synthesizer", "MeloTTSSynthesizer", "KittenTTSSynthesizer"}
 )
 
 #: Serializes serving-side watermark application. The engine's model threads
@@ -206,12 +196,7 @@ SSE_KEEPALIVE_TIMEOUT_S = 15.0
 #: never applies and (b) be rejected with the 2026-11-09 benchmark error
 #: (``ov2-synthesizer-en`` + ``voice_cloning`` → ``-embed`` rejected by MeloTTS).
 STANDALONE_EMBED_MODEL_TYPES: frozenset[str] = frozenset(
-    {
-        "ChatterboxEmbedding",
-        "ChatterboxTTS",
-        "ChatterboxTurboTTS",
-        "ChatterboxMultilingualTTS",
-    }
+    {"ChatterboxEmbedding", "ChatterboxTTS", "ChatterboxTurboTTS", "ChatterboxMultilingualTTS"}
 )
 
 
@@ -400,6 +385,7 @@ class StreamingAudioResponse:
 #: machine-readable value; this is the conventional Content-Type).
 _STREAM_MEDIA_TYPES: dict[str, str] = {"wav": "audio/wav", "pcm": "audio/pcm"}
 
+
 async def _prepend_frames[FrameT](first: FrameT, rest: AsyncIterator[FrameT]) -> AsyncGenerator[FrameT, None]:
     """Re-yield an already-awaited first frame, then the rest of the body.
 
@@ -412,10 +398,7 @@ async def _prepend_frames[FrameT](first: FrameT, rest: AsyncIterator[FrameT]) ->
 
 
 async def _encode_stream_frames(
-    segments: AsyncIterator[np.ndarray],
-    *,
-    audio_format: str,
-    state: StreamState,
+    segments: AsyncIterator[np.ndarray], *, audio_format: str, state: StreamState
 ) -> AsyncGenerator[bytes, None]:
     """Turn float32 segments into the binary envelope's byte frames.
 
@@ -658,15 +641,10 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             payload = standard_voice_wire_payload(voice_lookup.resolution.name)
             if payload is None:  # pragma: no cover - resolution validated the path
                 return self.create_error_response(
-                    f"Standard voice '{voice_lookup.resolution.name}' is missing from the "
-                    "voice pack installation."
+                    f"Standard voice '{voice_lookup.resolution.name}' is missing from the voice pack installation."
                 )
             validation_request = request.model_copy(
-                update={
-                    "input_audio": payload,
-                    "mode": "voice_cloning",
-                    "voice": voice_lookup.native_default,
-                }
+                update={"input_audio": payload, "mode": "voice_cloning", "voice": voice_lookup.native_default}
             )
 
         error_check_model = await self._check_model(validation_request)
@@ -700,9 +678,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
         request_data = TextToSpeechRequestInput.from_openai(request_id=request_id, request=request)
         if voice_lookup.resolution is not None:
-            apply_error = self._apply_standard_voice(
-                request_data, voice_lookup.resolution, voice_lookup.native_default
-            )
+            apply_error = self._apply_standard_voice(request_data, voice_lookup.resolution, voice_lookup.native_default)
             if apply_error is not None:
                 return self.create_error_response(apply_error)
         # Boundary decode-once: the reference audio becomes an artifact now, so
@@ -778,11 +754,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         artifacts: dict,
     ) -> ErrorResponse | TextToSpeechResponse:
         """The pre-12 single-shot path, unchanged (byte-identity gate)."""
-        result_generator = self.engine.generate(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=artifacts,
-        )
+        result_generator = self.engine.generate(request_id=request_id, request_data=request_data, artifacts=artifacts)
 
         try:
             return await self.text_to_speech_full_generator(
@@ -807,12 +779,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         """
         requested = getattr(request_data, "requested_model", None)
         model_name = getattr(request_data, "model", None) or requested
-        return request_model_types(
-            self._engine_model_configs(),
-            requested,
-            model_name,
-            only_configured=True,
-        )
+        return request_model_types(self._engine_model_configs(), requested, model_name, only_configured=True)
 
     def _engine_model_configs(self) -> list[ModelConfig]:
         """Return the engine's configured models (empty for test doubles)."""
@@ -859,10 +826,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         """
         payload = standard_voice_wire_payload(resolution.name)
         if payload is None:  # pragma: no cover - resolution validated the path
-            return (
-                f"Standard voice '{resolution.name}' is missing from the voice pack "
-                "installation."
-            )
+            return f"Standard voice '{resolution.name}' is missing from the voice pack installation."
         request_data.input_audio = payload
         request_data.input_embedding = None
         request_data.mode = "voice_cloning"
@@ -982,9 +946,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         chunk_artifacts = dict(artifacts or {})
         clear_clone_fields = False
 
-        has_audio = chunk_artifacts.get("input_audio") is not None or getattr(
-            request_data, "input_audio", None
-        )
+        has_audio = chunk_artifacts.get("input_audio") is not None or getattr(request_data, "input_audio", None)
         has_embedding = chunk_artifacts.get("input_embedding") is not None or getattr(
             request_data, "input_embedding", None
         )
@@ -1001,10 +963,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             conditioning_mode = self._reference_conditioning_mode(request_data)
         if conditioning_mode == "embed":
             embedding, error = await self._resolve_reference_embedding(
-                request_id,
-                request_data,
-                chunk_artifacts,
-                request_timeout_s=chunk_timeout_s,
+                request_id, request_data, chunk_artifacts, request_timeout_s=chunk_timeout_s
             )
             if error is not None:
                 return self.create_error_response(error)
@@ -1054,8 +1013,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             for index, chunk_id, chunk_data in chunk_requests
         ]
         results = await asyncio.gather(
-            *[self._consume_stream(index, stream) for index, stream in streams],
-            return_exceptions=True,
+            *[self._consume_stream(index, stream) for index, stream in streams], return_exceptions=True
         )
 
         if await raw_request.is_disconnected():
@@ -1081,9 +1039,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             # All-or-nothing: never return partial audio with a 200.
             return self.create_error_response("Long-form synthesis failed: " + "; ".join(errors))
         if len(ordered) != len(chunks):
-            return self.create_error_response(
-                f"Long-form synthesis produced {len(ordered)} of {len(chunks)} chunks"
-            )
+            return self.create_error_response(f"Long-form synthesis produced {len(ordered)} of {len(chunks)} chunks")
 
         outputs = [ordered[index] for index in range(len(chunks))]
         sample_rate = int(outputs[0].audio_artifact.sample_rate)
@@ -1096,10 +1052,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             waveforms = [remove_dc_offset(waveform) for waveform in waveforms]
 
         stitched = crossfade_stitch(
-            waveforms,
-            crossfade_ms=crossfade_ms,
-            sentence_pause_ms=pause_ms,
-            sample_rate=sample_rate,
+            waveforms, crossfade_ms=crossfade_ms, sentence_pause_ms=pause_ms, sample_rate=sample_rate
         )
 
         # Trim / internal-silence run on the *final* stitched buffer (Phase
@@ -1289,9 +1242,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
     async def _submit_chunk(self, request_id: str, request_data, artifacts: dict):
         """Add one chunk request to the engine and return its output stream."""
         return await self.engine.add_request(
-            request_id=request_id,
-            request_data=request_data,
-            artifacts=dict(artifacts),
+            request_id=request_id, request_data=request_data, artifacts=dict(artifacts)
         )
 
     async def _consume_stream(self, index: int, stream) -> tuple[int, RequestOutput | None]:
@@ -1423,12 +1374,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         )
         usage = {"input_characters": len(getattr(request_data, "input_text", "") or "")}
         body = _encode_sse_frames(
-            segments,
-            state=state,
-            request_id=request_id,
-            model=request.model,
-            created=int(time.time()),
-            usage=usage,
+            segments, state=state, request_id=request_id, model=request.model, created=int(time.time()), usage=usage
         )
 
         try:
@@ -1448,10 +1394,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
             request_id=request_id,
         )
         return StreamingAudioResponse(
-            body=_prepend_frames(first, body),
-            media_type=SSE_MEDIA_TYPE,
-            headers=headers,
-            state=state,
+            body=_prepend_frames(first, body), media_type=SSE_MEDIA_TYPE, headers=headers, state=state
         )
 
     async def _stream_audio_segments(
@@ -1578,9 +1521,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
                 if final is None:
                     raise StreamSynthesisError(f"chunk {index} produced no output")
                 if getattr(final, "finish_reason", None) == "error":
-                    raise StreamSynthesisError(
-                        getattr(final, "error", None) or f"chunk {index} failed"
-                    )
+                    raise StreamSynthesisError(getattr(final, "error", None) or f"chunk {index} failed")
 
                 waveform, source_rate = await run_in_threadpool(self._result_waveform, final)
                 if waveform.size == 0:
@@ -1588,14 +1529,10 @@ class OpenAIServingTextToSpeech(OpenAIServing):
 
                 if state.source_rate is None:
                     state.source_rate = int(source_rate)
-                    state.target_rate = (
-                        int(requested_rate) if requested_rate else state.source_rate
-                    )
+                    state.target_rate = int(requested_rate) if requested_rate else state.source_rate
                     if len(chunk_texts) > 1:
                         stitcher = CrossfadeStitcher(
-                            crossfade_ms=crossfade_ms,
-                            sentence_pause_ms=pause_ms,
-                            sample_rate=state.source_rate,
+                            crossfade_ms=crossfade_ms, sentence_pause_ms=pause_ms, sample_rate=state.source_rate
                         )
                     if state.target_rate != state.source_rate:
                         resampler = StreamResampler(state.source_rate, state.target_rate)
@@ -1682,23 +1619,14 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         where the single-shot path never reads the reference. Returns
         ``(clear_clone_fields, error)``.
         """
-        has_audio = chunk_artifacts.get("input_audio") is not None or getattr(
-            request_data, "input_audio", None
-        )
+        has_audio = chunk_artifacts.get("input_audio") is not None or getattr(request_data, "input_audio", None)
         has_embedding = chunk_artifacts.get("input_embedding") is not None or getattr(
             request_data, "input_embedding", None
         )
 
-        if (
-            has_audio
-            and not has_embedding
-            and self._reference_conditioning_mode(request_data) == "embed"
-        ):
+        if has_audio and not has_embedding and self._reference_conditioning_mode(request_data) == "embed":
             embedding, error = await self._resolve_reference_embedding(
-                request_id,
-                request_data,
-                chunk_artifacts,
-                request_timeout_s=request_timeout_s,
+                request_id, request_data, chunk_artifacts, request_timeout_s=request_timeout_s
             )
             if error is not None:
                 return False, error
@@ -1728,9 +1656,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         if artifact is not None:
             waveform = getattr(artifact, "numpy", None)
             if waveform is not None:
-                return np.asarray(waveform, dtype=np.float32).reshape(-1), int(
-                    artifact.sample_rate
-                )
+                return np.asarray(waveform, dtype=np.float32).reshape(-1), int(artifact.sample_rate)
         legacy = getattr(final, "output", "") or ""
         if not legacy:
             return np.empty(0, dtype=np.float32), 0
@@ -1756,25 +1682,11 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         if remove_dc:
             waveform = remove_dc_offset(waveform)
         # 0/1-chunk request (stitcher None): crossfade_stitch's byte-identity rule.
-        piece = (
-            stitcher.feed(waveform)
-            if stitcher is not None
-            else np.ascontiguousarray(waveform, dtype=np.float32)
-        )
-        return self._finish_stream_segment(
-            piece,
-            resampler=resampler,
-            model_name=model_name,
-            sample_rate=sample_rate,
-        )
+        piece = stitcher.feed(waveform) if stitcher is not None else np.ascontiguousarray(waveform, dtype=np.float32)
+        return self._finish_stream_segment(piece, resampler=resampler, model_name=model_name, sample_rate=sample_rate)
 
     def _finish_stream_segment(
-        self,
-        piece: np.ndarray,
-        *,
-        resampler: StreamResampler | None,
-        model_name: str | None,
-        sample_rate: int,
+        self, piece: np.ndarray, *, resampler: StreamResampler | None, model_name: str | None, sample_rate: int
     ) -> tuple[np.ndarray, int]:
         """Watermark one emittable segment, then resample it (worker thread)."""
         piece = np.ascontiguousarray(piece, dtype=np.float32)
@@ -1785,7 +1697,6 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         if resampler is not None:
             piece = resampler.feed(piece)
         return np.ascontiguousarray(piece, dtype=np.float32), source_samples
-
 
     def _validate_streaming_admission(self, request: TextToSpeechRequest) -> str | None:
         """Phase 14-1 streaming admission; returns a 400 message or ``None``.
@@ -1798,10 +1709,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         if resolve_stream_format(getattr(request, "output_options", None)) is None:
             return None
         model_name = getattr(request, "model", "") or ""
-        return streaming_admission_error(
-            request,
-            uses_native_speed=self._uses_native_speed(model_name, model_name),
-        )
+        return streaming_admission_error(request, uses_native_speed=self._uses_native_speed(model_name, model_name))
 
     def _uses_native_speed(self, requested_model: str | None, model_name: str | None) -> bool:
         """True when this synthesis family consumes ``speed`` itself.
@@ -1912,11 +1820,7 @@ class OpenAIServingTextToSpeech(OpenAIServing):
         # fall back to the legacy payload for pre-artifact producers.
         encoded = to_wire_audio(final_res, request.output_options)
         response = TextToSpeechResponse(
-            id=request_id,
-            created=created_time,
-            model=model_name,
-            data=encoded.data,
-            sample_rate=encoded.sample_rate,
+            id=request_id, created=created_time, model=model_name, data=encoded.data, sample_rate=encoded.sample_rate
         )
 
         return response

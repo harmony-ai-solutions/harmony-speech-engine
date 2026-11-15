@@ -236,8 +236,7 @@ def test_partition_optional_cases_skips_only_missing_optional_fixture():
     optional_missing = {"name": "optional_missing", "reference": "missing", "optional": True}
 
     runnable, skipped = ar.partition_optional_cases(
-        [required, optional_present, optional_missing],
-        available=lambda name: name == "present",
+        [required, optional_present, optional_missing], available=lambda name: name == "present"
     )
 
     assert [case["name"] for case in runnable] == ["required", "optional_present"]
@@ -283,14 +282,9 @@ def test_multilingual_cases_label_accent_transfer_and_optional_native():
 
 def test_score_vc_intelligibility_reports_both_sides_and_soft_gate():
     case = {"name": "vc", "kind": "vc", "transcript": "en_wanda4", "language": "en"}
-    transcripts = {
-        "a.wav": "It's time to go home.",
-        "b.wav": "At time to go home.",
-    }
+    transcripts = {"a.wav": "It's time to go home.", "b.wav": "At time to go home."}
 
-    scores = ar.score_vc_intelligibility(
-        case, "a.wav", "b.wav", transcribe=lambda path, language: transcripts[path]
-    )
+    scores = ar.score_vc_intelligibility(case, "a.wav", "b.wav", transcribe=lambda path, language: transcripts[path])
 
     assert scores["wer_a"] == 0.0
     assert scores["wer_b"] == pytest.approx(0.2)
@@ -337,13 +331,7 @@ def test_markdown_table_shows_wer_and_expectation_label():
                             "corr": 0.1,
                             "identical": False,
                         },
-                        "wer": {
-                            "wer": 0.2,
-                            "wer_a": 0.2,
-                            "wer_b": 0.2,
-                            "warn": False,
-                            "failed": False,
-                        },
+                        "wer": {"wer": 0.2, "wer_a": 0.2, "wer_b": 0.2, "warn": False, "failed": False},
                         "passed": True,
                         "failures": [],
                         "label": "real speech -> real speech timbre: content must stay intelligible",
@@ -371,12 +359,7 @@ def test_markdown_table_lists_skipped_optional_cases():
             "chatterbox_multilingual": {
                 "kind": "stochastic",
                 "cases": {},
-                "skipped_cases": [
-                    {
-                        "name": "tts_de_native",
-                        "reason": "provide tests/audio_fixtures/ref_voice_de.wav",
-                    }
-                ],
+                "skipped_cases": [{"name": "tts_de_native", "reason": "provide tests/audio_fixtures/ref_voice_de.wav"}],
             }
         },
     }
@@ -430,19 +413,12 @@ def test_batching_axis_covers_every_family_with_a_batched_handler():
         assert cases is ar.FAMILY_SPECS[family]["batching_cases"]
     # AR decode's audio gate is distributional (vocode noise differs by
     # construction); the seeded token gate lives in the e2e parity harness.
-    assert ar.BATCHING_AXIS_STOCHASTIC == {"chatterbox", "chatterbox_turbo"}
+    assert {"chatterbox", "chatterbox_turbo"} == ar.BATCHING_AXIS_STOCHASTIC
 
 
 def test_ar_batching_verdict_is_distributional_not_sample_wise():
     axis = ar.parse_axis("batching:1-vs-4")
-    metrics = {
-        "passed": True,
-        "failures": [],
-        "max_abs_diff": 0.5,
-        "duration_pct": 0.0,
-        "logmel_mse": 0.5,
-        "corr": 0.5,
-    }
+    metrics = {"passed": True, "failures": [], "max_abs_diff": 0.5, "duration_pct": 0.0, "logmel_mse": 0.5, "corr": 0.5}
     passed, failures = ar.verdict_for_axis(axis, metrics, family="chatterbox")
     assert passed is True and failures == []
     # The same metrics on a padded-batch family would fail the sample-wise gate.
@@ -494,16 +470,9 @@ def test_batching_worker_builds_a_restore_request_input():
     """The voicefixer gate runs `restore` cases through the same worker."""
     from harmonyspeech.common.inputs import AudioConversionRequestInput
 
-    case = {
-        "name": "restore_voice_a",
-        "kind": "restore",
-        "model": "voicefixer",
-        "reference": "voice_a",
-    }
+    case = {"name": "restore_voice_a", "kind": "restore", "model": "voicefixer", "reference": "voice_a"}
 
-    request_input = ar._build_batching_request_input(
-        case, "batch-gate-restore_voice_a", {}, deterministic=True
-    )
+    request_input = ar._build_batching_request_input(case, "batch-gate-restore_voice_a", {}, deterministic=True)
 
     assert isinstance(request_input, AudioConversionRequestInput)
     assert request_input.request_id == "batch-gate-restore_voice_a"
@@ -523,9 +492,7 @@ def test_batching_worker_builds_a_deterministic_tts_request_input():
         "reference": "repo_voice_a",
     }
 
-    request_input = ar._build_batching_request_input(
-        case, "batch-gate-batch_short", TEXTS, deterministic=True
-    )
+    request_input = ar._build_batching_request_input(case, "batch-gate-batch_short", TEXTS, deterministic=True)
 
     assert isinstance(request_input, TextToSpeechRequestInput)
     assert request_input.input_text == TEXTS["batch_1"]
@@ -626,4 +593,3 @@ def test_autocast_axis_covers_the_four_families_with_seeded_cases():
     # (VC is a model inside the family, exactly as in the batching gate).
     kinds = {case["kind"] for case in ar._cases_for_axis(axis, "chatterbox")}
     assert {"tts", "vc"} <= kinds
-

@@ -52,10 +52,7 @@ from harmonyspeech.endpoints.openai.request_envelope import (
 )
 from harmonyspeech.endpoints.openai.serving_audio_conversion import OpenAIServingAudioConversion
 from harmonyspeech.endpoints.openai.serving_speech_to_text import OpenAIServingSpeechToText
-from harmonyspeech.endpoints.openai.serving_text_to_speech import (
-    OpenAIServingTextToSpeech,
-    StreamingAudioResponse,
-)
+from harmonyspeech.endpoints.openai.serving_text_to_speech import OpenAIServingTextToSpeech, StreamingAudioResponse
 from harmonyspeech.endpoints.openai.serving_voice_activity_detection import OpenAIServingVoiceActivityDetection
 from harmonyspeech.endpoints.openai.serving_voice_conversion import OpenAIServingVoiceConversion
 from harmonyspeech.endpoints.openai.serving_voice_embed import OpenAIServingVoiceEmbedding
@@ -84,24 +81,29 @@ router = APIRouter()
 # `curl -F file=@audio.mp3` clients working without a second route.
 _TTS_UPLOAD_FIELDS = {"input_audio": ("input_audio", "file", "audio")}
 _AUDIO_UPLOAD_FIELDS = {"input_audio": ("file", "audio", "input_audio")}
-_VC_UPLOAD_FIELDS = {
-    "source_audio": ("source_audio", "file", "audio"),
-    "target_audio": ("target_audio",),
-}
+_VC_UPLOAD_FIELDS = {"source_audio": ("source_audio", "file", "audio"), "target_audio": ("target_audio",)}
 _AC_UPLOAD_FIELDS = {"source_audio": ("source_audio", "file", "audio")}
 
 _REFERENCE_AUDIO_DOC = "Reference audio file (wav/flac/ogg/mp3/aac…), sent as a file part"
 _SOURCE_AUDIO_DOC = "Source audio file (wav/flac/ogg/mp3/aac…), sent as a file part"
 
 _TTS_UPLOAD_DOCS = {"input_audio": _REFERENCE_AUDIO_DOC, "file": "Alias for `input_audio`"}
-_AUDIO_UPLOAD_DOCS = {"input_audio": _SOURCE_AUDIO_DOC, "file": "Alias for `input_audio`", "audio": "Alias for `input_audio`"}
+_AUDIO_UPLOAD_DOCS = {
+    "input_audio": _SOURCE_AUDIO_DOC,
+    "file": "Alias for `input_audio`",
+    "audio": "Alias for `input_audio`",
+}
 _VC_UPLOAD_DOCS = {
     "source_audio": _SOURCE_AUDIO_DOC,
     "file": "Alias for `source_audio`",
     "audio": "Alias for `source_audio`",
     "target_audio": _REFERENCE_AUDIO_DOC,
 }
-_AC_UPLOAD_DOCS = {"source_audio": _SOURCE_AUDIO_DOC, "file": "Alias for `source_audio`", "audio": "Alias for `source_audio`"}
+_AC_UPLOAD_DOCS = {
+    "source_audio": _SOURCE_AUDIO_DOC,
+    "file": "Alias for `source_audio`",
+    "audio": "Alias for `source_audio`",
+}
 
 
 @asynccontextmanager
@@ -128,10 +130,7 @@ async def lifespan(app: fastapi.FastAPI):
     description="Prometheus metrics (default registry + VRAM + embedding cache + Whisper lanes + AR cache + AR decode + padded-batch governance + streaming TTS).",
 )
 async def metrics() -> Response:
-    from harmonyspeech.endpoints.openai.streaming_metrics import (
-        get_stream_stats,
-        render_stream_metrics,
-    )
+    from harmonyspeech.endpoints.openai.streaming_metrics import get_stream_stats, render_stream_metrics
     from harmonyspeech.engine.ar_cache_metrics import render_ar_cache_metrics
     from harmonyspeech.engine.ar_decode_metrics import render_ar_decode_metrics
     from harmonyspeech.engine.embedding_cache_metrics import render_embedding_cache_metrics
@@ -333,11 +332,7 @@ async def create_speech(raw_request: Request, x_api_key: str | None = Header(Non
     if isinstance(generator, ErrorResponse):
         return JSONResponse(content=generator.model_dump(), status_code=generator.code)
     if isinstance(generator, StreamingAudioResponse):
-        return StreamingResponse(
-            content=generator.body,
-            media_type=generator.media_type,
-            headers=generator.headers,
-        )
+        return StreamingResponse(content=generator.body, media_type=generator.media_type, headers=generator.headers)
     return JSONResponse(content=generator.model_dump())
 
 
@@ -362,9 +357,7 @@ def _voice_catalog_source() -> tuple[list, bool]:
     inner = getattr(engine_ref, "engine", None)
     if inner is None:
         inner = engine_ref
-    return list(getattr(inner, "model_configs", None) or []), bool(
-        getattr(inner, "standard_voice_pack", True)
-    )
+    return list(getattr(inner, "model_configs", None) or []), bool(getattr(inner, "standard_voice_pack", True))
 
 
 @router.get("/v1/audio/voices", response_model=VoiceCatalogList)
@@ -405,11 +398,7 @@ async def show_available_voices(model: str | None = None, x_api_key: str | None 
                 cloning_capable=entry.cloning_capable,
                 vc_target_kind=entry.vc_target_kind,
                 voices=[
-                    VoiceDescriptor(
-                        name=voice.name,
-                        source=voice.source,
-                        languages=list(voice.languages) or None,
-                    )
+                    VoiceDescriptor(name=voice.name, source=voice.source, languages=list(voice.languages) or None)
                     for voice in entry.voices
                 ],
             )
@@ -638,9 +627,7 @@ def build_app(args):
     @app.exception_handler(UploadTooLargeError)
     async def upload_too_large_handler(_, exc):
         err = ErrorResponse(
-            message=str(exc),
-            type="PayloadTooLargeError",
-            code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE.value,
+            message=str(exc), type="PayloadTooLargeError", code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE.value
         )
         return JSONResponse(err.model_dump(), status_code=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
 
@@ -739,10 +726,7 @@ def run_server(args):
     global openai_serving_ac
     # TODO: Add other Endpoint serving classes here
 
-    if args.config_file_path is not None:
-        config_file_path = args.config_file_path
-    else:
-        config_file_path = "config.yml"
+    config_file_path = args.config_file_path if args.config_file_path is not None else "config.yml"
 
     # Load Args from Config file if there is one
     engine_args = AsyncEngineArgs.from_cli_args(args)

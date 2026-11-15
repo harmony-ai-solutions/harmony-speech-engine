@@ -16,7 +16,6 @@ Pinned here:
 * a poisoned row errors alone while its neighbour keeps decoding.
 """
 
-
 from types import SimpleNamespace
 
 import pytest
@@ -315,9 +314,7 @@ def test_len_one_uses_the_sequential_loop(tiny):
     runner = _make_runner(model)
     conditionals = _conditionals(hp)
 
-    outputs = runner._execute_chatterbox_tts(
-        [_params(conditionals)], [_request("solo")]
-    )
+    outputs = runner._execute_chatterbox_tts([_params(conditionals)], [_request("solo")])
 
     assert outputs[0].result_data.finish_reason == "stop"
     assert model.generate_calls == ["hello world"], "the single-request fast path is the loop"
@@ -331,9 +328,7 @@ def test_batched_inference_false_uses_the_sequential_loop(tiny):
     conditionals = _conditionals(hp)
     requests = [_request("a"), _request("b")]
 
-    outputs = runner._execute_chatterbox_tts(
-        [_params(conditionals), _params(conditionals)], requests
-    )
+    outputs = runner._execute_chatterbox_tts([_params(conditionals), _params(conditionals)], requests)
 
     assert all(output.result_data.finish_reason == "stop" for output in outputs)
     assert model.generate_calls == ["hello world", "hello world"]
@@ -346,9 +341,7 @@ def test_pool_refusal_falls_back_to_the_sequential_loop(tiny):
     conditionals = _conditionals(hp)
     requests = [_request("a"), _request("b")]
 
-    outputs = runner._execute_chatterbox_tts(
-        [_params(conditionals), _params(conditionals)], requests
-    )
+    outputs = runner._execute_chatterbox_tts([_params(conditionals), _params(conditionals)], requests)
 
     assert all(output.result_data.finish_reason == "stop" for output in outputs)
     assert model.generate_calls == ["hello world", "hello world"]
@@ -364,9 +357,7 @@ def test_release_request_frees_row_and_slots(tiny):
     for request in requests:
         request._test_conditionals = conditionals
 
-    runner._execute_chatterbox_tts(
-        [_params(conditionals), _params(conditionals)], requests
-    )
+    runner._execute_chatterbox_tts([_params(conditionals), _params(conditionals)], requests)
     assert runner.ar_cache_pool.capacity("cb")["slots_active"] == 4
 
     runner.release_request("abort-me")
@@ -721,9 +712,7 @@ def test_staggered_eos_rows_vocode_together_in_one_batched_call(batched_tiny, mo
     ar = runner._get_ar_runner()
     stop = int(hp.stop_speech_token)
     # "a" EOSes on step 3, "b" on step 5: never the same token step.
-    ar.contract = _ScriptedEnglishContract(
-        {"a": [5, 6, stop], "b": [7, 8, 9, 10, stop]}, hp
-    )
+    ar.contract = _ScriptedEnglishContract({"a": [5, 6, stop], "b": [7, 8, 9, 10, stop]}, hp)
 
     requests = [_request("a", seed=3), _request("b", seed=4)]
     conditionals = _real_conditionals(hp)
@@ -791,10 +780,7 @@ def test_continuation_step_burst_stops_immediately_on_eos(batched_tiny):
     stop = int(hp.stop_speech_token)
     # "a" EOSes on its third sampled token — the second token of the first
     # continuation burst. "b" has plenty left and must not keep decoding.
-    script = {
-        "a": [5, 6, stop],
-        "b": [7 + (index % 20) for index in range(40)] + [stop],
-    }
+    script = {"a": [5, 6, stop], "b": [7 + (index % 20) for index in range(40)] + [stop]}
     ar.contract = _ScriptedEnglishContract(script, hp)
     requests, inputs = _scripted_requests(hp)
 
@@ -881,4 +867,3 @@ def test_multilingual_handler_dispatches_multi_request_batches_to_the_ar_runner(
 
     assert outputs == []
     assert calls == [(2, False, True)]
-

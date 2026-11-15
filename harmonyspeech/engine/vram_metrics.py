@@ -73,11 +73,7 @@ def render_vram_metrics(stats: dict) -> str:
         header("hse_model_peak_activation_bytes")
         for name, detail in models.items():
             lines.append(
-                _sample(
-                    "hse_model_peak_activation_bytes",
-                    detail.get("peak_activation_bytes", 0),
-                    {"model": name},
-                )
+                _sample("hse_model_peak_activation_bytes", detail.get("peak_activation_bytes", 0), {"model": name})
             )
 
     for metric_name, key in (

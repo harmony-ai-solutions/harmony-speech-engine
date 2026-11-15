@@ -36,9 +36,7 @@ def _bytes(test_data_dir, name: str) -> bytes:
 
 
 def _transcribe(payload: str) -> SpeechTranscribeRequestInput:
-    return SpeechTranscribeRequestInput(
-        request_id="stt-1", requested_model="stt", model="stt", input_audio=payload
-    )
+    return SpeechTranscribeRequestInput(request_id="stt-1", requested_model="stt", model="stt", input_audio=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +119,7 @@ def test_silero_vad_prepare_returns_artifact_and_params(test_data_dir):
         model="vad",
         input_audio=_b64(_bytes(test_data_dir, "codec_tone.wav")),
     )
-    (artifact, params), = prepare_silero_vad_inputs([request])
+    ((artifact, params),) = prepare_silero_vad_inputs([request])
     assert isinstance(artifact, AudioArtifact)
     assert artifact.sample_rate == 16000
     assert artifact.waveform.dtype == torch.float32
@@ -133,10 +131,7 @@ def test_voicefixer_prepare_returns_artifact(test_data_dir):
     from harmonyspeech.common.artifacts import AudioArtifact
 
     request = AudioConversionRequestInput(
-        request_id="ac-1",
-        requested_model="ac",
-        model="ac",
-        source_audio=_b64(_bytes(test_data_dir, "codec_tone.ogg")),
+        request_id="ac-1", requested_model="ac", model="ac", source_audio=_b64(_bytes(test_data_dir, "codec_tone.ogg"))
     )
     inputs = prepare_voicefixer_restorer_inputs([request])
     artifact = inputs[0]
@@ -170,9 +165,7 @@ def test_encoder_prepare_returns_audio_artifact(test_data_dir):
 
 def test_chatterbox_embedding_passes_known_container_through(test_data_dir):
     wav = _bytes(test_data_dir, "codec_tone.wav")
-    request = SpeechEmbeddingRequestInput(
-        request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(wav)
-    )
+    request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(wav))
     (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
     # Decoded exactly once at admission; re-encoding as WAV keeps the samples.
     assert audio_artifact.to_wav_bytes()[:4] == b"RIFF"
@@ -181,9 +174,7 @@ def test_chatterbox_embedding_passes_known_container_through(test_data_dir):
 
 def test_chatterbox_embedding_accepts_mp3(test_data_dir):
     mp3 = _bytes(test_data_dir, "codec_tone.mp3")
-    request = SpeechEmbeddingRequestInput(
-        request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(mp3)
-    )
+    request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(mp3))
     (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
     # The decoded artifact is re-wrapped as a WAV buffer for the upstream loader.
     import io
@@ -198,9 +189,7 @@ def test_chatterbox_embedding_accepts_mp3(test_data_dir):
 @FFMPEG_ONLY
 def test_chatterbox_embedding_accepts_aac(test_data_dir):
     aac = _bytes(test_data_dir, "codec_tone.aac")
-    request = SpeechEmbeddingRequestInput(
-        request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(aac)
-    )
+    request = SpeechEmbeddingRequestInput(request_id="emb-1", requested_model="emb", model="emb", input_audio=_b64(aac))
     (audio_artifact,) = prepare_chatterbox_embedding_inputs([request])
     assert audio_artifact.to_wav_bytes()[:4] == b"RIFF"
     assert audio_artifact.num_samples > 0

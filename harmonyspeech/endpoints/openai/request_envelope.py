@@ -126,10 +126,7 @@ async def _read_uploads(raw_request: Request, upload_fields: Mapping[str, Sequen
 
 
 async def parse_dual_request(
-    raw_request: Request,
-    model_cls: type[BaseModel],
-    *,
-    upload_fields: Mapping[str, Sequence[str]] | None = None,
+    raw_request: Request, model_cls: type[BaseModel], *, upload_fields: Mapping[str, Sequence[str]] | None = None
 ) -> BaseModel:
     """Parse a JSON or multipart body into ``model_cls``.
 
@@ -146,10 +143,7 @@ async def parse_dual_request(
             return model_cls.model_validate(data)
 
         raw = await raw_request.body()
-        if not raw:
-            data = {}
-        else:
-            data = json.loads(raw)
+        data = {} if not raw else json.loads(raw)
         return model_cls.model_validate(data)
     except UploadTooLargeError:
         raise
@@ -198,10 +192,11 @@ def dual_body_openapi(model_cls: type[BaseModel], upload_fields: Mapping[str, st
     properties: dict[str, Any] = {}
     for name, field in model_cls.model_fields.items():
         schema: dict[str, Any] = {"title": name.replace("_", " ").title()}
-        if isinstance(field.annotation, type) and issubclass(field.annotation, BaseModel):
-            schema.update({"type": "object"})
-        elif get_origin(field.annotation) in (Union, types.UnionType) and any(
-            isinstance(arg, type) and issubclass(arg, BaseModel) for arg in get_args(field.annotation)
+        if (
+            isinstance(field.annotation, type)
+            and issubclass(field.annotation, BaseModel)
+            or get_origin(field.annotation) in (Union, types.UnionType)
+            and any(isinstance(arg, type) and issubclass(arg, BaseModel) for arg in get_args(field.annotation))
         ):
             schema.update({"type": "object"})
         else:
@@ -212,22 +207,14 @@ def dual_body_openapi(model_cls: type[BaseModel], upload_fields: Mapping[str, st
 
     multipart_properties = dict(properties)
     for field_name, description in upload_fields.items():
-        multipart_properties[field_name] = {
-            "type": "string",
-            "format": "binary",
-            "description": description,
-        }
+        multipart_properties[field_name] = {"type": "string", "format": "binary", "description": description}
 
     return {
         "requestBody": {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "title": model_cls.__name__,
-                        "properties": properties,
-                    }
+                    "schema": {"type": "object", "title": model_cls.__name__, "properties": properties}
                 },
                 "multipart/form-data": {
                     "schema": {
