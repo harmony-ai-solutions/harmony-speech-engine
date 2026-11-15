@@ -413,8 +413,21 @@ def _tiny_multilingual_text(hp):
     return torch.tensor([[hp.start_text_token, *range(5, 13), hp.stop_text_token]] * 2)
 
 
+#: Forward hooks this repo installs belong to ``harmonyspeech.*`` modules. transformers 5 also installs its own
+#: persistent ``output_capturing_hook`` on every ``LlamaAttention`` (and decoder layer) the first time a forward
+#: requests ``output_hidden_states``/``output_attentions``, and keeps it for the model's lifetime by design
+#: (``transformers.utils.output_capturing``). Counting those would report a leak HSE never created.
+_HSE_HOOK_MODULE_PREFIX = "harmonyspeech."
+
+
 def _forward_hook_count(t3) -> int:
-    return sum(len(layer.self_attn._forward_hooks) for layer in t3.tfmr.layers)
+    """Count the forward hooks *this repo* left on the Llama attention modules."""
+    return sum(
+        1
+        for layer in t3.tfmr.layers
+        for hook in layer.self_attn._forward_hooks.values()
+        if getattr(hook, "__module__", "").startswith(_HSE_HOOK_MODULE_PREFIX)
+    )
 
 
 @pytest.mark.unit

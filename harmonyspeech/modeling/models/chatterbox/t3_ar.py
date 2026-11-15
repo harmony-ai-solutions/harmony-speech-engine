@@ -105,6 +105,30 @@ _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
 
 
+def _remove_hook_handle(handle) -> None:
+    """Remove a forward-hook handle without ever raising — but never silently.
+
+    ``torch.utils.hooks.RemovableHandle.remove()`` deletes its id from the
+    module's hooks dict through a weak reference and is a plain no-op when that
+    dict is gone; other torch versions/foreign handles may raise instead. Either
+    way a hook that survives teardown silently changes every later forward on
+    the shared ``tfmr``, so a failure is logged and, when the hooks dict is
+    still reachable, the registration is cleared directly.
+
+    Teardown must never mask the decode result, so this cannot raise.
+    """
+    hooks_dict_ref = getattr(handle, "hooks_dict_ref", None)
+    try:
+        handle.remove()
+    except Exception as error:  # noqa: BLE001 - teardown must not break the decode
+        logger.warning(f"Could not remove attention hook {handle.id}: {error}")
+
+    hooks_dict = hooks_dict_ref() if callable(hooks_dict_ref) else None
+    if hooks_dict is not None and handle.id in hooks_dict:
+        hooks_dict.pop(handle.id, None)
+        logger.warning(f"Attention hook {handle.id} survived remove(); cleared it directly")
+
+
 def _ensure_bot_eot(text_tokens: Tensor, hp) -> None:
     """Mirror of upstream ``t3._ensure_BOT_EOT`` (same assertions, same order).
 
@@ -275,9 +299,7 @@ class _SafeAlignmentStreamAnalyzer(AlignmentStreamAnalyzer):
         handles = getattr(self, "_hook_handles", None) or []
         self._hook_handles = []
         for handle in handles:
-            # Removal must never mask the decode result.
-            with contextlib.suppress(Exception):
-                handle.remove()
+            _remove_hook_handle(handle)
 
         config = getattr(self, "_tfmr_config", None)
         if config is not None:

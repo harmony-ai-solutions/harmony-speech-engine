@@ -246,14 +246,24 @@ SPLIT_SPECS = {
 
 class TestStreamResampler:
     def test_installed_soxr_exposes_the_pinned_resample_stream_api(self):
-        """Pins the environment assumption recorded in 14-2's verification log."""
+        """Pins the environment assumption recorded in 14-2's verification log.
+
+        soxr 1.1.0 (2026-11-15) appended the optional ``vr`` (variable-rate)
+        parameter after ``quality``; positional/keyword callers of the pinned
+        prefix are unaffected. The engine passes only the pinned prefix, so
+        new parameters may only be appended, never inserted or renamed.
+        """
         import soxr
 
         assert isinstance(soxr.__version__, str) and soxr.__version__
         assert hasattr(soxr, "ResampleStream")
 
         init_params = inspect.signature(soxr.ResampleStream.__init__).parameters
-        assert list(init_params) == ["self", "in_rate", "out_rate", "num_channels", "dtype", "quality"]
+        pinned = ["self", "in_rate", "out_rate", "num_channels", "dtype", "quality"]
+        assert list(init_params)[: len(pinned)] == pinned, (
+            "the ResampleStream prefix the engine calls must stay stable; only "
+            f"trailing additions are allowed, got {list(init_params)}"
+        )
         assert init_params["dtype"].default == "float32"
         assert init_params["quality"].default == "HQ"
 

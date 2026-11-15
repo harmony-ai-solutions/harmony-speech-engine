@@ -19,13 +19,7 @@ hf_xet
 cached_path
 safetensors
 scipy
-# Pinned <1.0: librosa 1.0 removed the `audioread` dependency, which
-# `harmonyspeech/modeling/models/harmonyspeech/common.py` imports directly
-# (NoBackendError). audioread is also listed explicitly below because of that
-# direct import. Broke CI collection on 2026-11-14 when the unpinned resolve
-# picked librosa 1.0.1.
-librosa>=0.11,<1.0
-audioread
+librosa
 h5py
 inflect
 gruut[de,es,fr]

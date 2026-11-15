@@ -55,6 +55,13 @@ addopts = [
     # Coverage is disabled by default for speed (collection + run takes 4+ minutes).
     # To run with coverage: pytest --cov=harmonyspeech --cov-report=term-missing --cov-report=xml
 ]
+filterwarnings = [
+    # resemble-perth 1.0.1 imports pkg_resources (deprecated API) at import
+    # time; no fixed release exists (2026-11-15). The production import sites
+    # (modeling/loader.py, chatterbox.py) suppress it already — this covers
+    # direct perth imports in tests.
+    "ignore:pkg_resources is deprecated as an API:UserWarning",
+]
 markers = [
     "unit: marks tests as unit tests (fast, fully mocked)",
     "integration: marks tests as integration tests (component interaction, partially mocked)",

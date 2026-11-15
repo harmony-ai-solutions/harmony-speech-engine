@@ -1613,6 +1613,28 @@ single 3.6 s row leaves the GPU under-filled). The HiFT vocoder is fp32 by
 design in the surgical shape, so it is untouched — and it is 20 % of the
 8-row vocode. Decode/tokenize/perth are CPU or IO hops and do not move.
 
+### Dependency-upgrade re-run (torch 2.9.1 → 2.15.0+cu132, 2026-11-15)
+
+Same script, weights and GPU (RTX 5060 Ti), after the 2026-11-15 dependency
+bump (torch 2.15.0+cu132, transformers 5.23, librosa 1.0.1, soxr 1.1.0,
+numpy 2.5.4; median of 5):
+
+| Batch | Hop | fp32 (2.9.1 → 2.15) | fp16 (2.9.1 → 2.15) | fp16 speed-up 2.9.1 → 2.15 |
+|---|---|---|---|---|
+| 1 | flow | 322.5 → 349.7 (+8 %) | 275.3 → 343.6 (+25 %) | 1.17× → **1.02×** |
+| 1 | end-to-end vocode | 344.6 → 364.3 (+6 %) | 306.2 → 379.5 (+24 %) | 1.13× → 0.96× |
+| 8 | flow | 1581.2 → 1644.0 (+4 %) | 646.4 → 713.7 (+10 %) | 2.45× → **2.30×** |
+| 8 | end-to-end vocode | 1747.6 → 1798.2 (+3 %) | 808.3 → 868.1 (+7 %) | 2.16× → 2.07× |
+| 8 | mel2wav (HiFT, fp32) | 165.3 → 156.7 (−5 %) | — | — |
+
+Tokenize/perth/decode are flat. Net: a modest fp32 flow regression (+4–8 %),
+and the autocast advantage **narrows** — at batch it still pays (2.3×) but a
+single row's fp16 flow benefit has essentially disappeared on torch 2.15.
+The Phase 11-2 surgical-autocast decision (flow-only autocast, HiFT fp32)
+still holds; single-row vocode-dominated workloads see no autocast win on
+this stack. Single-session numbers, median of 5 — treat ±5 % as noise; the
+B=1 fp16 collapse (25 %) is well outside it.
+
 ### Server A/B — batched VC (the vocode-dominated case)
 
 Two runs of the same build and config (`out/bench/config-11-2-vc.yml`,

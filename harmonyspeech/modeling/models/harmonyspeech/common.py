@@ -5,9 +5,8 @@ import struct
 import librosa
 import numpy as np
 import webrtcvad
-from audioread import NoBackendError
 from librosa.feature import melspectrogram
-from scipy.ndimage.morphology import binary_dilation
+from scipy.ndimage import binary_dilation
 
 int16_max = (2**15) - 1
 
@@ -99,8 +98,9 @@ def preprocess_wav(
     if isinstance(wav, (bytes, bytearray)):
         try:
             wav, source_sr = librosa.load(io.BytesIO(wav), sr=None)
-        except (ValueError, RuntimeError, NoBackendError) as err:
-            # Unable to load.
+        except (ValueError, RuntimeError) as err:
+            # Unable to load. (librosa >= 1.0 routes everything through
+            # soundfile and no longer raises audioread.NoBackendError.)
             logging.error(f"Unable to load audio: {err}")
             return []
 

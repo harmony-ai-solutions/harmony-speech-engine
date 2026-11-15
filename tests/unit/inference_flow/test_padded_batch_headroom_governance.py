@@ -39,6 +39,18 @@ SHIPPED_FREE = int(2.5 * GIB)
 TIGHT_FREE = int(0.9 * GIB)
 LONG_ROW_FRAMES = 3400
 
+#: The handler-wiring tests below drive real padded batches through
+#: ``runner.device = "cuda:0"``; on a cpu-only torch build the move fails and
+#: the handler falls back to the per-request loop before these asserts can
+#: hold. They pass unchanged on any CUDA-capable build (CI included, once the
+#: runner has a GPU).
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="drives the batched handler path on device cuda:0; cpu-only builds "
+    "fall back to the per-request loop (the runner-level planning tests above "
+    "cover the arithmetic without a GPU)",
+)
+
 #: Model geometry copied from the Phase 8-3 handler tests (hop 4 => 4 samples
 #: per frame; 14640 samples render as 3660 mel frames).
 SAMPLE_RATE = 16000
@@ -439,6 +451,7 @@ def _run_tone_converter(runner, samples, count=4):
 
 
 @pytest.mark.unit
+@requires_cuda
 def test_tone_converter_batches_at_width_two_on_fixture_headroom():
     runner = _runner(free=FIXTURE_FREE)
     runner.model = _tiny_tone_converter()
@@ -452,6 +465,7 @@ def test_tone_converter_batches_at_width_two_on_fixture_headroom():
 
 
 @pytest.mark.unit
+@requires_cuda
 def test_tone_converter_shrinks_under_the_shipped_headroom(loguru_records):
     runner = _runner(free=SHIPPED_FREE)
     runner.model = _tiny_tone_converter()
@@ -554,6 +568,7 @@ def _run_melo_synth(runner, lengths):
 
 
 @pytest.mark.unit
+@requires_cuda
 def test_openvoice_synthesizer_shrinks_on_the_phone_axis():
     ample = _runner(model_type="OpenVoiceV1Synthesizer", name="ov1-synthesizer-en", free=FIXTURE_FREE, max_batch_size=4)
     ample.model = StubOpenVoiceModel()
@@ -571,6 +586,7 @@ def test_openvoice_synthesizer_shrinks_on_the_phone_axis():
 
 
 @pytest.mark.unit
+@requires_cuda
 def test_melotts_synthesizer_shrinks_on_the_phone_axis():
     ample = _runner(model_type="MeloTTSSynthesizer", name="ov2-synthesizer-en", free=FIXTURE_FREE, max_batch_size=4)
     ample.model = StubMeloModel()

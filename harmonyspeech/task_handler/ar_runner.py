@@ -88,7 +88,12 @@ from harmonyspeech.engine.ar_cache import (
     ARCachePool,
     ARCacheSlot,
 )
-from harmonyspeech.modeling.models.chatterbox.t3_ar import ChatterboxT3AR, T3ARSampler, _SafeAlignmentStreamAnalyzer
+from harmonyspeech.modeling.models.chatterbox.t3_ar import (
+    ChatterboxT3AR,
+    T3ARSampler,
+    _remove_hook_handle,
+    _SafeAlignmentStreamAnalyzer,
+)
 
 __all__ = [
     "ARBatchRunner",
@@ -898,8 +903,7 @@ class ARBatchRunner:
             return result
         finally:
             for handle in handles:
-                with contextlib.suppress(Exception):
-                    handle.remove()
+                _remove_hook_handle(handle)
             self.t3.tfmr._hse_capture_attentions = prev_capture
             if config is not None:
                 config._attn_implementation = prev_attn
