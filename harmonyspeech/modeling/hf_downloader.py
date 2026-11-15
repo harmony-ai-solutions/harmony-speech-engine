@@ -1,9 +1,11 @@
 """Utilities for downloading and initializing model weights."""
 
+import importlib
 import json
 import os
 
 import huggingface_hub.constants
+import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import LocalEntryNotFoundError
@@ -28,6 +30,43 @@ ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV = "HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD"
 
 def _unsafe_checkpoint_load_enabled() -> bool:
     return os.environ.get(ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _register_numpy_safe_globals() -> None:
+    """Allowlist the numpy globals that first-party checkpoints embed.
+
+    torch >= 2.15 ships its ``weights_only`` unpickler with an allowlist that
+    contains no numpy globals, but first-party checkpoints (e.g.
+    harmony-ai/harmony-speech-v1's ``synthesizer/synthesizer.pt``) carry plain
+    numpy float scalars in their state dicts, pickled under numpy 1.x module
+    paths (``numpy.core.multiarray.scalar``; numpy >= 2 pickles the same
+    constructor as ``numpy._core.multiarray.scalar``). Constructing a numpy
+    scalar or dtype is data-only — it executes no code — so allowlisting
+    exactly these globals keeps the hardened loader intact: custom classes and
+    everything else still require ``HSE_ALLOW_UNSAFE_CHECKPOINT_LOAD=1``.
+    """
+    for module_path in ("numpy.core.multiarray", "numpy._core.multiarray"):
+        try:
+            scalar_fn = importlib.import_module(module_path).scalar
+        except (ImportError, AttributeError):
+            continue
+        # The (callable, full_path) tuple form registers the *real* callable
+        # under the exact path the checkpoint references — the same object
+        # exists under both the legacy and the numpy >= 2 module paths.
+        torch.serialization.add_safe_globals([(scalar_fn, f"{module_path}.scalar")])
+    torch.serialization.add_safe_globals([np.dtype])
+    dtype_module = getattr(np, "dtypes", None)
+    if dtype_module is not None:
+        dtype_classes = [
+            value
+            for value in vars(dtype_module).values()
+            if isinstance(value, type) and issubclass(value, np.dtype) and value is not np.dtype
+        ]
+        if dtype_classes:
+            torch.serialization.add_safe_globals(dtype_classes)
+
+
+_register_numpy_safe_globals()
 
 
 def _resolve_file_path(base_path: str, filename: str, revision: str | None = None) -> str:

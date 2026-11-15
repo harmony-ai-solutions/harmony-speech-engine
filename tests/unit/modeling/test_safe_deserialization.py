@@ -302,6 +302,25 @@ def test_checkpoint_loads_with_weights_only(tmp_path):
 
 
 @pytest.mark.unit
+def test_checkpoint_with_numpy_scalars_loads_safely(tmp_path):
+    """Numpy scalars embedded in a state dict stay loadable with weights_only.
+
+    torch >= 2.15 allowlists no numpy globals by default, but first-party HS1
+    checkpoints embed numpy float scalars (pickled under the numpy 1.x
+    ``numpy.core.multiarray`` paths). The loader registers exactly those
+    data-only globals; arbitrary classes must still be rejected.
+    """
+    checkpoint = {"model": {"weight": torch.zeros(2, 3)}, "gain": np.float64(0.5), "temperature": np.float32(1.25)}
+    torch.save(checkpoint, tmp_path / "checkpoint.pth")
+
+    loaded = load_or_download_model(str(tmp_path), "cpu")
+
+    assert loaded["gain"] == np.float64(0.5)
+    assert loaded["temperature"] == np.float32(1.25)
+    assert torch.equal(loaded["model"]["weight"], torch.zeros(2, 3))
+
+
+@pytest.mark.unit
 def test_hostile_checkpoint_rejected_by_default(tmp_path, monkeypatch):
     """A checkpoint that needs full unpickling is rejected unless explicitly allowed."""
     monkeypatch.delenv(ALLOW_UNSAFE_CHECKPOINT_LOAD_ENV, raising=False)
