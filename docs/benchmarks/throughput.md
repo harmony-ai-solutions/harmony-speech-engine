@@ -1617,23 +1617,34 @@ design in the surgical shape, so it is untouched — and it is 20 % of the
 
 Same script, weights and GPU (RTX 5060 Ti), after the 2026-11-15 dependency
 bump (torch 2.15.0+cu132, transformers 5.23, librosa 1.0.1, soxr 1.1.0,
-numpy 2.5.4; median of 5):
+numpy 2.5.4). Medians across 3 back-to-back sessions of median-of-5;
+measured pass-to-pass noise: **±0.1 % at B=8, ±3 % at B=1** (fp16 B=1 is
+the noisiest cell at ±6 %) — every delta below is outside the noise floor:
 
 | Batch | Hop | fp32 (2.9.1 → 2.15) | fp16 (2.9.1 → 2.15) | fp16 speed-up 2.9.1 → 2.15 |
 |---|---|---|---|---|
-| 1 | flow | 322.5 → 349.7 (+8 %) | 275.3 → 343.6 (+25 %) | 1.17× → **1.02×** |
-| 1 | end-to-end vocode | 344.6 → 364.3 (+6 %) | 306.2 → 379.5 (+24 %) | 1.13× → 0.96× |
-| 8 | flow | 1581.2 → 1644.0 (+4 %) | 646.4 → 713.7 (+10 %) | 2.45× → **2.30×** |
-| 8 | end-to-end vocode | 1747.6 → 1798.2 (+3 %) | 808.3 → 868.1 (+7 %) | 2.16× → 2.07× |
-| 8 | mel2wav (HiFT, fp32) | 165.3 → 156.7 (−5 %) | — | — |
+| 1 | flow | 322.5 → 341.9 (+6 %) | 275.3 → 370.3 (+34 %) | 1.17× → **0.92×** |
+| 1 | end-to-end vocode | 344.6 → 361.6 (+5 %) | 306.2 → 376.3 (+23 %) | 1.13× → 0.96× |
+| 8 | flow | 1581.2 → 1641.1 (+4 %) | 646.4 → 715.6 (+11 %) | 2.45× → **2.29×** |
+| 8 | end-to-end vocode | 1747.6 → 1798.2 (+3 %) | 808.3 → 871.1 (+8 %) | 2.16× → 2.06× |
+| 8 | mel2wav (HiFT, fp32) | 165.3 → 157.2 (−5 %) | — | — |
 
-Tokenize/perth/decode are flat. Net: a modest fp32 flow regression (+4–8 %),
-and the autocast advantage **narrows** — at batch it still pays (2.3×) but a
-single row's fp16 flow benefit has essentially disappeared on torch 2.15.
-The Phase 11-2 surgical-autocast decision (flow-only autocast, HiFT fp32)
-still holds; single-row vocode-dominated workloads see no autocast win on
-this stack. Single-session numbers, median of 5 — treat ±5 % as noise; the
-B=1 fp16 collapse (25 %) is well outside it.
+Tokenize/perth/decode are flat. These are real stack regressions, not run
+variance (B=8 repeats to ±0.1 % within a session). The pattern — bf16
+landing exactly on fp32 (339 vs 342 ms) where fp16 used to beat both, and
+fp16 becoming the *slowest and least stable* B=1 cell (344–381 ms across
+sessions) — points at changed small-GEMM
+kernel selection on cu132/Blackwell, not thermals. Practical read:
+
+* **Batched traffic (B=8):** keep the Phase 11-2 surgical autocast — it
+  still buys 2.29× and the fp32 cost is under 4 %.
+* **Single-row fp16 autocast is now a pessimization** (0.92×). The gate
+  defaults to `off`, so only deployments that opted into `float16` are
+  affected; those should prefer `bfloat16` (neutral) or `off` for
+  single-row vocode-dominated traffic.
+* The byte-identical `off` contract rules out chasing the fp32 delta with
+  TF32/matmul-precision knobs. Revisit when a later torch/cuBLAS refreshes
+  small-GEMM heuristics.
 
 ### Server A/B — batched VC (the vocode-dominated case)
 
